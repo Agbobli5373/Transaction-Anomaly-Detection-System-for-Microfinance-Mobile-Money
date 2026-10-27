@@ -53,3 +53,18 @@ def test_scores_keep_the_transactions_they_belong_to():
     later = _ordinary(5, seed=2)
 
     assert model.score(later).index.equals(later.index)
+
+
+def test_lof_judges_distance_regardless_of_the_units_a_feature_is_measured_in():
+    training, later = _ordinary(800), _ordinary(50, seed=5)
+    in_seconds = training.assign(
+        seconds_since_last_transaction=training["seconds_since_last_transaction"] * 1e6
+    )
+    later_in_seconds = later.assign(
+        seconds_since_last_transaction=later["seconds_since_last_transaction"] * 1e6
+    )
+
+    scores = AnomalyModel.fit_lof(training, seed=1).score(later)
+    rescaled = AnomalyModel.fit_lof(in_seconds, seed=1).score(later_in_seconds)
+
+    pd.testing.assert_series_equal(scores, rescaled)

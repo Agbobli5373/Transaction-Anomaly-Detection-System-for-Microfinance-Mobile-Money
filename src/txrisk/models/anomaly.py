@@ -12,6 +12,8 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import IsolationForest
 from sklearn.neighbors import LocalOutlierFactor
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import RobustScaler
 
 from txrisk.models.inputs import INPUT_COLUMNS
 
@@ -50,11 +52,14 @@ class AnomalyModel:
         """Local Outlier Factor on a sample of the training Transactions.
 
         Offline comparison only: it compares every scored Transaction against its neighbours, so
-        scoring is too slow and memory-hungry to serve.
+        scoring is too slow and memory-hungry to serve. Being distance-based, it needs every input
+        on a comparable scale, so each is centred on its median and divided by its spread first.
         """
         rows = inputs.sample(min(sample, len(inputs)), random_state=seed)
         matrix = _matrix(rows)
-        lof = LocalOutlierFactor(n_neighbors=neighbours, novelty=True)
+        lof = make_pipeline(
+            RobustScaler(), LocalOutlierFactor(n_neighbors=neighbours, novelty=True)
+        )
         lof.fit(matrix)
         return cls("local_outlier_factor", lof, np.sort(-lof.score_samples(matrix)))
 
