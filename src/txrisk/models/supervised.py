@@ -45,8 +45,12 @@ class SupervisedModel:
 def _labelled(
     inputs: pd.DataFrame, labels: pd.Series, split: pd.Series, name: Split
 ) -> tuple[pd.DataFrame, pd.Series]:
-    """The inputs and labels of the Transactions in one split that have a label."""
-    ids = inputs.index[(split == name).to_numpy() & inputs.index.isin(labels.index)]
+    """The inputs and labels of the Transactions in one split that have a label.
+
+    Transactions outside every split have no split and are never in one.
+    """
+    in_split = (split == name).fillna(False).to_numpy(dtype=bool)
+    ids = inputs.index[in_split & inputs.index.isin(labels.index)]
     return inputs.loc[ids], labels.loc[ids]
 
 

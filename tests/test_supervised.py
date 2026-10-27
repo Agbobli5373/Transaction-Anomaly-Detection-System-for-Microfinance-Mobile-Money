@@ -12,6 +12,7 @@ from txrisk.evaluation import EvaluationConfig
 from txrisk.features import FeatureConfig, feature_table, replay_history, transactions_from_frame
 from txrisk.generator import GeneratorConfig, generate
 from txrisk.models import model_inputs
+from txrisk.models.anomaly import AnomalyModel
 from txrisk.models.supervised import train_supervised
 from txrisk.scoring import FixedClock, ScoringService, load_rules_config
 
@@ -170,7 +171,30 @@ def test_nothing_after_the_calibration_split_shapes_the_model(market: Market):
     pd.testing.assert_series_equal(cut_short.score(market.inputs), model.score(market.inputs))
 
 
-def _assess(market: Market, transaction_id: str, model=None):
+def test_transactions_outside_every_split_change_nothing(market: Market):
+    # The splits stop at day 20 while the data runs to day 21, as when a Fraud scenario that
+    # starts near the end of the period runs past it.
+    short = CONFIG.model_copy(
+        update={
+            "splits": CONFIG.splits.model_copy(
+                update={"evaluation": CONFIG.splits.evaluation.model_copy(update={"end": 20})}
+            )
+        }
+    )
+
+    model = train_supervised(
+        market.transactions,
+        market.features,
+        market.discoveries,
+        period_start=START,
+        config=short,
+        seed=7,
+    )
+
+    pd.testing.assert_series_equal(model.score(market.inputs), _train(market).score(market.inputs))
+
+
+def _assess(market: Market, transaction_id: str, model=None, anomaly=None):
     """Assess one Transaction with every earlier Transaction already in the history."""
     limits = {tier.name: tier.single_transaction_limit for tier in market.config.market.kyc_tiers}
     history = replay_history(market.wallets, market.sim_swaps)
@@ -182,6 +206,7 @@ def _assess(market: Market, transaction_id: str, model=None):
                 FixedClock(transaction.occurred_at),
                 features=FeatureConfig(kyc_limits=limits),
                 rules=load_rules_config(RULES_CONFIG),
+                anomaly=anomaly,
                 supervised=model,
             )
             return service.assess(transaction)
@@ -208,4 +233,20 @@ def test_the_scoring_service_reports_the_fraud_probability_as_a_component(market
         rules_only.risk_score,
         rules_only.risk_band,
         rules_only.reasons,
+    )
+
+
+def test_the_fraud_probability_and_the_anomaly_score_are_reported_side_by_side(market: Market):
+    model = _train(market)
+    anomaly = AnomalyModel.fit(market.inputs, seed=7)
+    tx = market.transactions
+    scored = tx.loc[tx["occurred_at"] >= _at(14), "transaction_id"].iloc[-1]
+
+    both = _assess(market, scored, model, anomaly)
+
+    assert both.component_scores["supervised"] == pytest.approx(
+        model.score(market.inputs.loc[[scored]]).iloc[0]
+    )
+    assert both.component_scores["anomaly"] == pytest.approx(
+        anomaly.score(market.inputs.loc[[scored]]).iloc[0]
     )
