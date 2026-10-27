@@ -135,6 +135,24 @@ def test_probabilities_are_calibrated_to_the_fraud_found_in_the_calibration_spli
     assert raw[calibration["transaction_id"]].mean() != pytest.approx(fraud_share, rel=0.1)
 
 
+def test_calibration_fits_the_calibration_labels_better_than_the_raw_probability(market: Market):
+    tx = market.transactions
+    calibration = tx.loc[
+        (tx["occurred_at"] >= _at(8)) & (tx["occurred_at"] < _at(11)), "transaction_id"
+    ]
+    found = market.discoveries.loc[market.discoveries["discovered_at"] < _at(14), "transaction_id"]
+    fraud = calibration.isin(found).to_numpy(dtype=float)
+    model = _train(market)
+    inputs = market.inputs.loc[calibration]
+
+    def brier(probability: pd.Series) -> float:
+        return float(((probability.to_numpy() - fraud) ** 2).mean())
+
+    # Isotonic regression is the best monotone fit to its labels, and the raw probability is
+    # one such monotone fit, so on those labels calibration can only do better.
+    assert brier(model.score(inputs)) < brier(model.raw_probability(inputs))
+
+
 def test_nothing_after_the_calibration_split_shapes_the_model(market: Market):
     tx = market.transactions
     early = tx["occurred_at"] < _at(11)

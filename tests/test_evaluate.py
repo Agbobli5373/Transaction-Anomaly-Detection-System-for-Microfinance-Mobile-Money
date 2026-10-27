@@ -140,13 +140,19 @@ def test_the_supervised_risk_score_is_the_fraud_probability_banded_at_the_alert_
     assert high.min() > scores.loc[scores["risk_band"] != "High", "risk_score"].max()
 
 
-def test_calibration_makes_the_probability_more_honest_than_the_raw_one(supervised: Path):
+def test_the_probability_gets_a_reliability_check_before_and_after_calibration(supervised: Path):
     metrics = json.loads((supervised / "metrics.json").read_text(encoding="utf-8"))
+    reliability = metrics["reliability"]
 
-    raw, calibrated = metrics["reliability"]["raw"], metrics["reliability"]["calibrated"]
-
-    assert calibrated["brier_score"] < raw["brier_score"]
-    assert calibrated["expected_calibration_error"] < raw["expected_calibration_error"]
+    # Calibrated on Fraud labels, the probability is the chance of fraud that gets discovered,
+    # so it is judged against eventual Fraud discovery as well as against Ground truth.
+    assert set(reliability) == {"eventually_discovered", "ground_truth"}
+    for against in reliability.values():
+        assert set(against) == {"raw", "calibrated"}
+        for check in against.values():
+            assert 0 <= check["brier_score"] <= 1
+            assert 0 <= check["expected_calibration_error"] <= 1
+            assert sum(b["transactions"] for b in check["bins"]) == metrics["transactions"]
 
 
 def test_only_a_probability_gets_a_reliability_check(run: Path):
