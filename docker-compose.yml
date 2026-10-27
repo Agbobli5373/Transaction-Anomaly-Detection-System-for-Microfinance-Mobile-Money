@@ -2,6 +2,7 @@
 # Every service reads .env (copy .env.example and fill it in); no credential is written here.
 #   docker compose up --build             # Postgres, migrations, then the API on :8000
 #   docker compose run --rm seed          # load data/generated as history (after `make generate`)
+#   docker compose run --rm backup        # one Postgres backup into the `backups` volume (docs/runbooks/restore.md)
 # Set TXRISK_MODEL_BUNDLE=/models/<version> in .env to score with a bundle from `make train`;
 # without it the rules alone score.
 
@@ -50,6 +51,18 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # One-off: `docker compose run --rm backup` writes a timestamped pg_dump into the `backups` volume
+  # and prunes it to the retention count in config/backup.toml. A scheduler or host cron calls it.
+  backup:
+    <<: *txrisk
+    profiles: ["backup"]
+    command: ["txrisk", "backup", "--out", "/backups"]
+    volumes:
+      - backups:/backups
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   api:
     <<: *txrisk
     command: ["txrisk", "serve", "--host", "0.0.0.0", "--port", "8000"]
@@ -72,3 +85,4 @@ services:
 
 volumes:
   pgdata:
+  backups:

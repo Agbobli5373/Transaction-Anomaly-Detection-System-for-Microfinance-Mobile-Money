@@ -1,4 +1,4 @@
-# The txrisk image: the API, the migration job and the seed command, each a `txrisk` command.
+# The txrisk image: the API, the migration job, the seed and the backup, each a `txrisk` command.
 
 FROM python:3.12-slim AS build
 RUN pip install --no-cache-dir uv==0.11.32
@@ -11,11 +11,13 @@ COPY src ./src
 RUN uv sync --locked --no-dev --no-editable
 
 FROM python:3.12-slim
-# LightGBM needs OpenMP at runtime.
+# LightGBM needs OpenMP at runtime; `txrisk backup` and `txrisk restore` run pg_dump and pg_restore.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libgomp1 \
+    && apt-get install -y --no-install-recommends libgomp1 postgresql-client \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --uid 10001 --no-create-home txrisk
+    && useradd --system --uid 10001 --no-create-home txrisk \
+    && mkdir /backups \
+    && chown txrisk /backups
 WORKDIR /app
 COPY --from=build /app/.venv /app/.venv
 COPY config ./config
