@@ -197,5 +197,7 @@ def stacked_scores(
             "critical": rule_scores["critical"].to_numpy(),
             "anomaly_score": components["anomaly"].to_numpy(),
             "supervised_probability": components["fraud_probability"].to_numpy(),
+            # The bundle `txrisk train` gives for the same data and seed has this version too.
+            "model_version": bundle.version,
         }
-    ).astype({"transaction_id": "string", "risk_band": "string"})
+    ).astype({"transaction_id": "string", "risk_band": "string", "model_version": "string"})

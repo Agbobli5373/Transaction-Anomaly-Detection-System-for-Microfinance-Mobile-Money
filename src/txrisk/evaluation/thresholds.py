@@ -1,5 +1,6 @@
 """Risk band thresholds set from the Alert budget: an operational limit, not a round number."""
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -29,8 +30,16 @@ def budget_thresholds(
     rule hits) and are not among `scores`, so they use up budget first. Scores need no labels,
     so any recent days will do.
     """
+    if scores.empty:
+        raise ValueError("no scores to set Risk band thresholds from")
     descending = np.sort(scores.to_numpy(dtype=np.float64))[::-1]
-    alerts = max(budget_per_day * days - already_high, 1)
+    budget = budget_per_day * days
+    alerts = budget - already_high
+    if alerts <= 0:
+        # Critical rule hits alone fill the budget: no scored Transaction is High.
+        return BandThresholds(
+            medium=_score_at_rank(descending, budget * MEDIUM_MULTIPLE), high=math.inf
+        )
     return BandThresholds(
         medium=_score_at_rank(descending, alerts * (1 + MEDIUM_MULTIPLE)),
         high=_score_at_rank(descending, alerts),

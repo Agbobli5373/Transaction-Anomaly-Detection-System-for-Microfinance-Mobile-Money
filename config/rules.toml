@@ -3,7 +3,9 @@
 
 # At most this many Reasons are returned per Risk score.
 max_reasons = 3
-# A Critical rule hit puts the Risk score at least this high, inside the High band.
+# Rules-only scoring: a Critical rule hit puts the Risk score at least this high, inside the High
+# band. A model bundle floors a Critical rule hit at its own High threshold instead, since its
+# Risk score is a probability x 100 on a different scale.
 critical_floor = 90
 
 # How much one hit of each severity adds; hits combine as 1 - product(1 - weight).
