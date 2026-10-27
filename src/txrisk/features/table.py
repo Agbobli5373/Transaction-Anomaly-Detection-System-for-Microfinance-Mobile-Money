@@ -33,6 +33,7 @@ def _transactions(frame: pd.DataFrame) -> list[Transaction]:
             counterparty.tolist(),
             frame["region"].tolist(),
             frame["subject_balance_before"].tolist(),
+            frame["device_id"].tolist(),
             strict=True,
         )
     ]

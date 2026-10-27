@@ -245,6 +245,8 @@ def test_worked_example_of_every_subject_wallet_feature():
         new_counterparty=True,
         unusual_hour=False,
         new_region_30d=True,
+        # The four Profile Transactions (07:30, 18:00, 13:00, 11:15) are all daytime.
+        night_share_30d=0.0,
     )
 
 

@@ -18,6 +18,7 @@ class Transaction:
     counterparty_id: str
     region: str
     subject_balance_before: float
+    device_id: str = ""
 
 
 @dataclass(frozen=True)

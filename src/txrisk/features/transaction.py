@@ -1,5 +1,6 @@
 """Every feature of one Transaction: the one feature function training and serving share."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -8,6 +9,7 @@ from txrisk.features.history import HistoryProvider, Transaction
 from txrisk.features.subject_wallet import SubjectWalletFeatures, subject_wallet_features
 
 _DAY = timedelta(days=1)
+_HOUR = timedelta(hours=1)
 
 
 @dataclass(frozen=True)
@@ -25,11 +27,36 @@ class TransactionFeatures:
     # Amount over the Subject wallet's balance before, for outgoing Transactions; empty for
     # incoming ones and when the balance was zero.
     share_of_balance_moved: float | None = None
+    # Seconds since this device was first used by the Subject wallet; 0 when it never was.
+    device_age_seconds: float = 0.0
+    # Transfers by the Subject wallet in the last hour to Counterparties new to it at the time.
+    new_counterparty_transfers_1h: int = 0
+    # Amount over the Subject wallet's KYC tier single-transaction limit.
+    amount_to_kyc_limit: float = 0.0
 
 
 def _fan_in(wallet_id: str, history: HistoryProvider, now: datetime) -> int:
     transfers = history.incoming_transfers(wallet_id, since=now - _DAY, before=now)
     return len({t.subject_wallet_id for t in transfers})
+
+
+def _device_age(transaction: Transaction, past: Sequence[Transaction], now: datetime) -> float:
+    first_use = next((t.occurred_at for t in past if t.device_id == transaction.device_id), None)
+    return 0.0 if first_use is None else (now - first_use).total_seconds()
+
+
+def _new_counterparty_transfers(past: Sequence[Transaction], now: datetime) -> int:
+    """Transfers in the last hour whose Counterparty the Wallet had never dealt with before."""
+    window_start = now - _HOUR
+    known = {t.counterparty_id for t in past if t.occurred_at < window_start}
+    count = 0
+    for t in past:
+        if t.occurred_at < window_start:
+            continue
+        if t.transaction_type == "transfer" and t.counterparty_id not in known:
+            count += 1
+        known.add(t.counterparty_id)
+    return count
 
 
 def _is_near_limit(cash_out: Transaction, history: HistoryProvider, config: FeatureConfig) -> bool:
@@ -62,6 +89,8 @@ def transaction_features(
     if transaction.direction == "out" and transaction.subject_balance_before > 0:
         share_of_balance_moved = transaction.amount / transaction.subject_balance_before
     sim_swap = history.last_sim_swap(transaction.subject_wallet_id, before=now)
+    past = history.subject_history(transaction.subject_wallet_id, before=now).transactions
+    limit = config.kyc_limits[history.wallet(transaction.subject_wallet_id).kyc_tier]
     return TransactionFeatures(
         subject_wallet=subject_wallet_features(
             transaction, history, now, min_history=config.min_history
@@ -72,4 +101,7 @@ def transaction_features(
         agent_near_limit_cash_out_count_24h=agent_near_limit,
         seconds_since_sim_swap=None if sim_swap is None else (now - sim_swap).total_seconds(),
         share_of_balance_moved=share_of_balance_moved,
+        device_age_seconds=_device_age(transaction, past, now),
+        new_counterparty_transfers_1h=_new_counterparty_transfers(past, now),
+        amount_to_kyc_limit=transaction.amount / limit,
     )
