@@ -1,0 +1,3 @@
+# Redis recent-history cache instead of precomputed aggregates
+
+At serving time, features are computed by the same feature function used in training, over each Wallet's and Agent's last 30 days of Transactions held in Redis sorted sets (written by the scoring worker, trimmed by event time, Postgres as source of truth and fallback on a cache miss). We rejected precomputed running aggregates even though they read faster, because they need a second implementation of every feature, which reintroduces train/serve skew. A CI parity test checks that online features equal offline replay features on a sample.
