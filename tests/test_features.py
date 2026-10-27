@@ -4,6 +4,7 @@ from txrisk.features import (
     ReplayHistory,
     SubjectWalletFeatures,
     Transaction,
+    Wallet,
     subject_wallet_features,
 )
 
@@ -32,11 +33,12 @@ def tx(
         direction="in" if transaction_type == "cash_in" else "out",
         counterparty_id=counterparty,
         region=region,
+        subject_balance_before=1000.0,
     )
 
 
 def history_of(*transactions: Transaction) -> ReplayHistory:
-    history = ReplayHistory({WALLET: REGISTERED})
+    history = ReplayHistory({WALLET: Wallet(registered_at=REGISTERED, kyc_tier="minimum")})
     for t in transactions:
         history.record(t)
     return history
