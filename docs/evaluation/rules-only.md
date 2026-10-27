@@ -22,7 +22,7 @@ Full numbers are in [rules-only/metrics.json](rules-only/metrics.json).
 | Medium or High | 18,789 (626 a day): precision 0.035, recall 0.68 |
 | Precision at the Alert budget (top 100 a day) | 0.197 |
 | Recall at High, against Ground truth | 0.28 |
-| Recall at High, against discovered labels | 0.43 (of the 317 frauds the operation would have found by day 120) |
+| Recall at High, against discovered labels | 0.43 (of the 302 frauds the operation would have found by day 120) |
 
 ![Precision-recall curve](rules-only/pr_curve.png) ![ROC curve](rules-only/roc_curve.png)
 

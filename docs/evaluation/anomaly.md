@@ -22,7 +22,7 @@ Full numbers are in [anomaly/metrics.json](anomaly/metrics.json) and [lof/metric
 | High a day | 10.3 | 213 | 373 |
 | Precision / recall at High | **0.89** / 0.28 | 0.08 / **0.54** | 0.01 / 0.09 |
 | Precision at the Alert budget (top 100 a day) | **0.197** | 0.152 | 0.019 |
-| Recall at High, against discovered labels | 0.43 | **0.57** | — |
+| Recall at High, against discovered labels | 0.43 | **0.61** | — |
 
 ![Precision-recall curve](anomaly/pr_curve.png) ![ROC curve](anomaly/roc_curve.png)
 
