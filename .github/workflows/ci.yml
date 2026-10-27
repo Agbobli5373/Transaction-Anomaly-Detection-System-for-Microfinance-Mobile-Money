@@ -23,7 +23,8 @@ jobs:
       - run: uv run mypy
       - run: uv run pytest
 
-  # The compose stack starts: Postgres, the migration job, then an API that reports ready.
+  # The compose stack starts: Postgres, Keycloak, the migration job, then an API that reports
+  # ready and accepts a demo user's token and an API key.
   compose:
     runs-on: ubuntu-latest
     steps:
@@ -31,11 +32,23 @@ jobs:
       # Throwaway credentials for this run only, in the .env compose reads; none is committed.
       - run: |
           generated=$(openssl rand -hex 16)
-          grep -v -E '^(POSTGRES_|PG)PASSWORD=' .env.example > .env
+          grep -v -E '^((POSTGRES_|PG|KC_BOOTSTRAP_ADMIN_)PASSWORD|TXRISK_DEMO_SIGNIN_[A-Z]+)=' .env.example > .env
           for key in POSTGRES_PASSWORD PGPASSWORD; do echo "$key=$generated" >> .env; done
-      - run: docker compose up --build --detach --wait api
+          for key in KC_BOOTSTRAP_ADMIN_PASSWORD TXRISK_DEMO_SIGNIN_ANALYST TXRISK_DEMO_SIGNIN_SUPERVISOR TXRISK_DEMO_SIGNIN_ADMIN; do
+            echo "$key=$(openssl rand -hex 16)" >> .env
+          done
+      - run: docker compose up --build --detach --wait api keycloak
       - run: curl --fail --silent http://127.0.0.1:8000/v1/ready
       - run: curl --fail --silent http://127.0.0.1:8000/v1/openapi.json > /dev/null
+      # /v1 refuses a caller without a credential, and accepts the demo Analyst signed in through
+      # Keycloak and a service with an API key issued by the operator command.
+      - run: test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8000/v1/alerts)" = 401
+      - run: |
+          bearer=$(docker compose exec -T api txrisk demo-sign-in analyst --realm-url http://keycloak:8080/realms/txrisk)
+          curl --fail --silent --header "Authorization: Bearer $bearer" http://127.0.0.1:8000/v1/alerts
+      - run: |
+          issued=$(docker compose exec -T api txrisk api-key --name ci-smoke --scope models:read)
+          curl --fail --silent --header "X-API-Key: $issued" http://127.0.0.1:8000/v1/models/active
       - if: failure()
         run: docker compose logs
       - if: always()

@@ -50,10 +50,10 @@ train:
 paysim:
 	uv run txrisk paysim --csv $(PAYSIM_CSV) --features data/features/paysim.parquet
 
-# The serving stack in Docker: Postgres, the migration job, then the API on :8000.
-# Reads its settings and credentials from .env (see .env.example).
+# The serving stack in Docker: Postgres, Keycloak on :8080, the migration job, then the API on
+# :8000. Reads its settings and credentials from .env (see .env.example).
 up:
-	docker compose up --build --detach --wait api
+	docker compose up --build --detach --wait api keycloak
 
 down:
 	docker compose down

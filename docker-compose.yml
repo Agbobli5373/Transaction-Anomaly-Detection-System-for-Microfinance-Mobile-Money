@@ -1,6 +1,6 @@
-# The development stack: Postgres, the migration job and the scoring API.
+# The development stack: Postgres, Keycloak, the migration job and the scoring API.
 # Every service reads .env (copy .env.example and fill it in); no credential is written here.
-#   docker compose up --build             # Postgres, migrations, then the API on :8000
+#   docker compose up --build             # Postgres, Keycloak on :8080, migrations, the API on :8000
 #   docker compose run --rm seed          # load data/generated as history (after `make generate`)
 # Set TXRISK_MODEL_BUNDLE=/models/<version> in .env to score with a bundle from `make train`;
 # without it the rules alone score.
@@ -12,6 +12,9 @@ x-txrisk: &txrisk
   environment:
     # No credential in the URL: libpq reads the database password from PGPASSWORD in .env.
     TXRISK_DATABASE_URL: postgresql://txrisk@postgres:5432/txrisk
+    # Tokens name the realm as browsers reach it; the API fetches its signing keys in-network.
+    TXRISK_OIDC_ISSUER: http://localhost:8080/realms/txrisk
+    TXRISK_OIDC_JWKS_URL: http://keycloak:8080/realms/txrisk/protocol/openid-connect/certs
 
 services:
   postgres:
@@ -30,6 +33,35 @@ services:
       interval: 2s
       timeout: 5s
       retries: 30
+
+  # Sign-in for people: the txrisk realm, its roles (analyst, supervisor, admin), clients and
+  # demo users, imported from config/keycloak/ at startup. Keycloak substitutes each demo user's
+  # sign-in value from TXRISK_DEMO_SIGNIN_<ROLE> in .env, and its bootstrap admin (for the
+  # console at http://localhost:8080/admin) comes from .env too. Dev mode keeps no state between
+  # runs: each start imports the realm afresh.
+  keycloak:
+    image: keycloak/keycloak:26.4.2
+    command: ["start-dev", "--import-realm"]
+    env_file: .env
+    environment:
+      KC_HOSTNAME: http://localhost:8080
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config/keycloak:/opt/keycloak/data/import:ro
+    healthcheck:
+      # The image has no curl; bash asks the management port's readiness endpoint itself.
+      test:
+        - CMD
+        - bash
+        - -c
+        - exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.0\r\n\r\n' >&3 && grep -q UP <&3
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
 
   # Applies the schema migrations, then exits. Nothing else changes the schema.
   migrate:
@@ -60,6 +92,10 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      # Services can score with API keys before Keycloak is up; people's tokens are checked once
+      # it is.
+      keycloak:
+        condition: service_started
     healthcheck:
       test:
         - CMD

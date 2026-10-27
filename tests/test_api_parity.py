@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from api_helpers import as_json, body, settings
+from api_helpers import as_json, body, issue_key, settings, with_key
 from conftest import create_database
 from fastapi.testclient import TestClient
 from market_helpers import CONFIG, RULES, START, Market, build_market, replay_assessments, train
@@ -64,7 +64,8 @@ def whole_market(data: Path, postgres: str, migrated_template: str) -> str:
 
 @pytest.fixture(scope="module")
 def client(whole_market: str, bundle_folder: Path) -> Iterator[TestClient]:
-    with TestClient(create_app(settings(whole_market, bundle_folder))) as client:
+    app = create_app(settings(whole_market, bundle_folder))
+    with TestClient(app, headers=with_key(issue_key(whole_market))) as client:
         yield client
 
 
@@ -153,7 +154,8 @@ def test_scored_transactions_become_the_history_of_later_ones(
     ids = first["transaction_id"].tolist()
     expected = replay_assessments(market, bundle, set(ids))
 
-    with TestClient(create_app(settings(url, bundle_folder))) as client:
+    app = create_app(settings(url, bundle_folder))
+    with TestClient(app, headers=with_key(issue_key(url))) as client:
         served = [client.post("/v1/score", json=body(t)).json() for t in _transactions(market, ids)]
 
     assert served == [as_json(expected[i]) for i in ids]

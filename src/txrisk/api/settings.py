@@ -4,7 +4,7 @@ import os
 from collections.abc import Mapping
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from txrisk.features import FeatureConfig, load_feature_config
 from txrisk.generator import load_config
@@ -24,6 +24,47 @@ class ApiSettings(BaseModel):
     generator_config: Path = Path("config/generator.toml")
     feature_config: Path = Path("config/features.toml")
     rules_config: Path = Path("config/rules.toml")
+
+    # Sign-in for people, through Keycloak. The issuer is the realm URL as tokens name it
+    # (http://localhost:8080/realms/txrisk in compose); without one only API keys are accepted.
+    oidc_issuer: str | None = None
+    # The audience the realm's clients put in their access tokens for this API.
+    oidc_audience: str = "txrisk-api"
+    # Where to fetch the realm's signing keys, when the API reaches Keycloak by another address
+    # than the issuer's (in compose, http://keycloak:8080/...). Defaults to the issuer's.
+    oidc_jwks_url: str | None = None
+
+    # Browser origins allowed to call the API, comma-separated in TXRISK_CORS_ORIGINS; none by
+    # default. A wildcard is refused: the allow-list is strict.
+    cors_origins: tuple[str, ...] = ()
+    # Larger request bodies are refused with 413. A Transaction is well under 1 KiB.
+    max_request_bytes: int = Field(default=64 * 1024, gt=0)
+    # Requests a minute for an API key issued without its own limit.
+    api_key_rate_limit: int = Field(default=600, gt=0)
+    # How long a rotated API key stays valid alongside its replacement, unless the rotation says.
+    api_key_rotation_overlap_minutes: int = Field(default=24 * 60, ge=0)
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _comma_separated(cls, value: object) -> object:
+        if isinstance(value, str):
+            return tuple(origin.strip() for origin in value.split(",") if origin.strip())
+        return value
+
+    @field_validator("cors_origins")
+    @classmethod
+    def _no_wildcard(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if "*" in value:
+            raise ValueError("list each allowed origin; a wildcard is not allowed")
+        return value
+
+    @property
+    def jwks_url(self) -> str | None:
+        if self.oidc_jwks_url is not None:
+            return self.oidc_jwks_url
+        if self.oidc_issuer is None:
+            return None
+        return self.oidc_issuer.rstrip("/") + "/protocol/openid-connect/certs"
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] = os.environ) -> "ApiSettings":

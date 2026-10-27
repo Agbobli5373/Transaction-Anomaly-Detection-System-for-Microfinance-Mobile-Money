@@ -14,6 +14,7 @@ dependencies = [
     "psycopg[binary]>=3.3.6",
     "pyarrow>=17",
     "pydantic>=2.9",
+    "pyjwt[crypto]>=2.10",
     "scikit-learn>=1.9.1",
     "shap>=0.54.1",
     "sqlalchemy>=2.1.6",
