@@ -35,6 +35,7 @@ def transactions_from_frame(frame: pd.DataFrame) -> list[Transaction]:
             frame["region"].tolist(),
             frame["subject_balance_before"].tolist(),
             frame["device_id"].tolist(),
+            frame["channel"].tolist(),
             strict=True,
         )
     ]
@@ -58,6 +59,22 @@ def _columns(results: list[TransactionFeatures]) -> dict[str, tuple[list[object]
         if f.name != "subject_wallet":
             columns[f.name] = ([getattr(r, f.name) for r in results], _dtype(f.type))
     return columns
+
+
+# Every feature column, in the order the feature table and the models use.
+FEATURE_COLUMNS = [f.name for f in fields(SubjectWalletFeatures)] + [
+    f.name for f in fields(TransactionFeatures) if f.name != "subject_wallet"
+]
+
+
+def features_frame(transaction_ids: list[str], results: list[TransactionFeatures]) -> pd.DataFrame:
+    """Feature table rows for these Transactions: transaction_id, then every feature column."""
+    columns = _columns(results)
+    table = pd.DataFrame({name: values for name, (values, _) in columns.items()}).astype(
+        {name: dtype for name, (_, dtype) in columns.items()}
+    )
+    table.insert(0, "transaction_id", pd.Series(transaction_ids, dtype="string"))
+    return table
 
 
 def replay_history(wallets: pd.DataFrame, sim_swaps: pd.DataFrame) -> ReplayHistory:
@@ -108,9 +125,6 @@ def feature_table(
         )
         history.record(transaction)
 
-    columns = _columns(results)
-    table = pd.DataFrame(
-        {name: values for name, (values, _) in columns.items()}, index=chronological.index
-    ).astype({name: dtype for name, (_, dtype) in columns.items()})
-    table.insert(0, "transaction_id", chronological["transaction_id"])
+    table = features_frame(chronological["transaction_id"].tolist(), results)
+    table.index = chronological.index
     return table.loc[transactions.index].reset_index(drop=True)
