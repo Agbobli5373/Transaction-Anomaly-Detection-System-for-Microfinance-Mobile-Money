@@ -8,6 +8,7 @@ __pycache__/
 dist/
 build/
 
-# Generated data and local secrets
+# Generated data, reports and local secrets
 data/
+reports/
 .env

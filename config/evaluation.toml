@@ -1,0 +1,16 @@
+# How models are trained and judged over the 120-day period.
+
+# An unlabelled Transaction counts as legitimate only once it is this old (ADR 0007).
+label_maturity_days = 30
+# Alerts reviewers can handle per day; precision is also reported at this volume.
+alert_budget_per_day = 100
+# Wallet age bands for segment metrics, in days: under 30, 30-180, over 180.
+wallet_age_band_edges = [30, 180]
+
+# Days count from the period start (day 0 is its first day); each split includes its first day
+# and excludes its last.
+[splits]
+train = [0, 60]
+calibration = [60, 75]
+thresholds = [75, 90]
+evaluation = [90, 120]

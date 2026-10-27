@@ -5,10 +5,12 @@ description = "Transaction risk scoring for mobile money wallets"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "matplotlib>=3.11.2",
     "numpy>=2.1",
     "pandas>=2.2",
     "pyarrow>=17",
     "pydantic>=2.9",
+    "scikit-learn>=1.9.1",
 ]
 
 [project.scripts]
@@ -42,7 +44,7 @@ strict = true
 files = ["src"]
 
 [[tool.mypy.overrides]]
-module = ["pyarrow.*"]
+module = ["pyarrow.*", "sklearn.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

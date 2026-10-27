@@ -9,7 +9,7 @@ from txrisk.features.history import (
     Wallet,
 )
 from txrisk.features.subject_wallet import SubjectWalletFeatures, subject_wallet_features
-from txrisk.features.table import feature_table
+from txrisk.features.table import feature_table, replay_history, transactions_from_frame
 from txrisk.features.transaction import TransactionFeatures, transaction_features
 
 __all__ = [
@@ -23,6 +23,8 @@ __all__ = [
     "Wallet",
     "feature_table",
     "load_feature_config",
+    "replay_history",
     "subject_wallet_features",
     "transaction_features",
+    "transactions_from_frame",
 ]

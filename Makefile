@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test check generate features
+.PHONY: install lint format typecheck test check generate features evaluate
 
 install:
 	uv sync
@@ -25,3 +25,7 @@ generate:
 
 features:
 	uv run txrisk features --data data/generated --out data/features/features.parquet
+
+# Scores the evaluation days with the rules and writes reports/rules-only/.
+evaluate:
+	uv run txrisk evaluate --data data/generated --out reports/rules-only
