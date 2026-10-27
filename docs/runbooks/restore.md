@@ -65,7 +65,12 @@ Restore always targets an **empty** database; `txrisk restore` refuses one that 
 5. Start the API again and check `GET /v1/ready`.
 
 Outside Docker the same commands work with `txrisk restore <file-or-folder> --database-url ...`, given
-`PGPASSWORD` and `pg_restore` 16 or newer on the path.
+`PGPASSWORD` and `pg_dump`/`pg_restore` on the path.
+
+**Client and server major versions must match.** Postgres 17's tools write settings Postgres 16 rejects
+(`SET transaction_timeout`), and older tools refuse newer servers. The compose `postgres` service, the
+Testcontainers image in `tests/conftest.py` and the `postgresql-client-17` package in the `Dockerfile` are
+all 17; move them together when upgrading.
 
 ## What a restore does not bring back
 

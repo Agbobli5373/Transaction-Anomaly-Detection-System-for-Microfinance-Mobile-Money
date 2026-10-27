@@ -13,7 +13,7 @@ RUN uv sync --locked --no-dev --no-editable
 FROM python:3.12-slim
 # LightGBM needs OpenMP at runtime; `txrisk backup` and `txrisk restore` run pg_dump and pg_restore.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libgomp1 postgresql-client \
+    && apt-get install -y --no-install-recommends libgomp1 postgresql-client-17 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --no-create-home txrisk \
     && mkdir /backups \

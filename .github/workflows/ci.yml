@@ -17,6 +17,12 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+      # The backup tests run the host's pg_dump and pg_restore against the Postgres 17 container,
+      # and the client's major version must match the server's (the runner ships 16).
+      - run: |
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y --no-install-recommends postgresql-client-17
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
       - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run ruff format --check .
