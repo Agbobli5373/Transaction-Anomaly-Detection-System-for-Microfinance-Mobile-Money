@@ -93,7 +93,10 @@ def features_from_frame(table: pd.DataFrame) -> list[TransactionFeatures]:
         values = dict(zip(subject_fields + other_fields, map(_plain, row), strict=True))
         subject = SubjectWalletFeatures(**{name: values[name] for name in subject_fields})  # type: ignore[arg-type]
         results.append(
-            TransactionFeatures(subject_wallet=subject, **{name: values[name] for name in other_fields})  # type: ignore[arg-type]
+            TransactionFeatures(
+                subject_wallet=subject,
+                **{name: values[name] for name in other_fields},  # type: ignore[arg-type]
+            )
         )
     return results
 

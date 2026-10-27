@@ -17,10 +17,7 @@ def rule_scores_table(
     The features already hold everything the rules read, so this gives the scoring service's
     answer without replaying history again.
     """
-    aligned = (
-        transactions[["transaction_id"]]
-        .merge(feature_rows, on="transaction_id", how="left")
-    )
+    aligned = transactions[["transaction_id"]].merge(feature_rows, on="transaction_id", how="left")
     scores, critical, codes = [], [], []
     for transaction, features in zip(
         transactions_from_frame(transactions), features_from_frame(aligned), strict=True

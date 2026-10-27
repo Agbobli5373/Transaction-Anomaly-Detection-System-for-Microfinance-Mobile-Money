@@ -60,6 +60,18 @@ class ModelBundle:
     def components(self, inputs: pd.DataFrame, rules: pd.DataFrame) -> pd.DataFrame:
         return model_components(self.anomaly, self.supervised, inputs, rules)
 
+    def contributions(self, inputs: pd.DataFrame) -> pd.DataFrame:
+        """How much each input pushed each row's Risk score, in the stacker's log-odds.
+
+        Each model's contributions are weighted as the stacker weighs that model. Together they
+        add up to the models' part of the Risk score's log-odds, less a constant; the rules' part
+        is explained by the Rule hits themselves.
+        """
+        weights = self.stacker.weights
+        supervised = self.supervised.contributions(inputs)[self.input_columns]
+        anomaly = self.anomaly.contributions(inputs)[self.input_columns]
+        return weights["supervised_log_odds"] * supervised + weights["anomaly"] * anomaly
+
     def risk_scores(
         self, inputs: pd.DataFrame, rules: pd.DataFrame, components: pd.DataFrame | None = None
     ) -> pd.Series:
@@ -81,12 +93,14 @@ class ModelBundle:
             "input_columns": self.input_columns,
             "metrics": self.metrics,
         }
-        (folder / _MANIFEST_FILE).write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        (folder / _MANIFEST_FILE).write_text(
+            json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+        )
 
     @classmethod
     def load(cls, folder: Path) -> "ModelBundle":
         """A bundle saved by `save`. Only load bundles this system wrote: they are pickles."""
-        bundle = pickle.loads((folder / _MODEL_FILE).read_bytes())  # noqa: S301
+        bundle = pickle.loads((folder / _MODEL_FILE).read_bytes())
         if not isinstance(bundle, cls):
             raise TypeError(f"{folder} does not hold a model bundle")
         return bundle

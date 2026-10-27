@@ -68,3 +68,27 @@ def test_lof_judges_distance_regardless_of_the_units_a_feature_is_measured_in():
     rescaled = AnomalyModel.fit_lof(in_seconds, seed=1).score(later_in_seconds)
 
     pd.testing.assert_series_equal(scores, rescaled)
+
+
+def test_input_contributions_add_up_to_the_rise_above_a_typical_transaction():
+    model = AnomalyModel.fit(_ordinary(2000), seed=1)
+    later = _ordinary(30, seed=4)
+
+    contributions = model.contributions(later)
+
+    assert list(contributions.columns) == INPUT_COLUMNS
+    assert contributions.index.equals(later.index)
+    # What the contributions leave unexplained is the score of a typical Transaction: one level.
+    typical = model.score(later) - contributions.sum(axis=1)
+    assert np.ptp(typical.to_numpy()) < 1e-9
+
+
+def test_the_input_that_makes_a_transaction_unusual_contributes_most():
+    model = AnomalyModel.fit(_ordinary(2000), seed=1)
+    # Typical in every other way: a one-row frame would otherwise have no SIM swap, rare here.
+    odd = _ordinary(1, seed=9).assign(share_of_balance_moved=9.0, seconds_since_sim_swap=1.0)
+
+    contributions = model.contributions(odd).iloc[0]
+
+    assert contributions.idxmax() == "share_of_balance_moved"
+    assert contributions.max() > 0

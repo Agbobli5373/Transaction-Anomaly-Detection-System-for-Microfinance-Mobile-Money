@@ -4,14 +4,26 @@ import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
-from txrisk.features import FeatureConfig, HistoryProvider, Transaction, transaction_features
+import pandas as pd
+
+from txrisk.features import (
+    FeatureConfig,
+    HistoryProvider,
+    Transaction,
+    TransactionFeatures,
+    transaction_features,
+)
 from txrisk.models import inputs_for
 from txrisk.models.anomaly import AnomalyModel
 from txrisk.models.supervised import SupervisedModel
 from txrisk.scoring.config import RulesConfig, Severity
+from txrisk.scoring.reasons import Reason, rule_reasons, stacked_reasons
 from txrisk.scoring.rules import RuleHit, rule_hits
+
+if TYPE_CHECKING:  # the bundle module itself scores rules, so importing it here would cycle
+    from txrisk.models.bundle import ModelBundle
 
 RULES_ONLY = "rules-only"
 
@@ -20,13 +32,6 @@ class RiskBand(StrEnum):
     LOW = "Low"
     MEDIUM = "Medium"
     HIGH = "High"
-
-
-@dataclass(frozen=True)
-class Reason:
-    code: str
-    message: str
-    value: float | str
 
 
 @dataclass(frozen=True)
@@ -55,22 +60,12 @@ class FixedClock:
         return self.at
 
 
-def _band(score: float, config: RulesConfig) -> RiskBand:
-    if score >= config.bands.high:
+def _band(score: float, *, medium: float, high: float) -> RiskBand:
+    if score >= high:
         return RiskBand.HIGH
-    if score >= config.bands.medium:
+    if score >= medium:
         return RiskBand.MEDIUM
     return RiskBand.LOW
-
-
-def _reasons(hits: list[RuleHit], config: RulesConfig) -> tuple[Reason, ...]:
-    """Critical hits first, then the heaviest; rule-set order breaks ties."""
-    weight = config.severity_weights
-    ranked = sorted(
-        enumerate(hits),
-        key=lambda h: (h[1].severity != Severity.CRITICAL, -weight[h[1].severity], h[0]),
-    )
-    return tuple(Reason(h.code, h.message, h.value) for _, h in ranked[: config.max_reasons])
 
 
 def combine_hits(hits: list[RuleHit], config: RulesConfig) -> tuple[float, bool]:
@@ -90,13 +85,18 @@ class ScoringService:
         rules: RulesConfig,
         anomaly: AnomalyModel | None = None,
         supervised: SupervisedModel | None = None,
+        bundle: "ModelBundle | None" = None,
     ) -> None:
+        """Without a `bundle` the rules alone set the Risk score, and `anomaly` and `supervised`
+        are only reported as components. With one, its stacked Risk score, Risk bands and
+        Reasons are used, and it reports every component itself."""
         self._history = history
         self._clock = clock
         self._features = features
         self._rules = rules
         self._anomaly = anomaly
         self._supervised = supervised
+        self._bundle = bundle
 
     def assess(self, transaction: Transaction) -> RiskAssessment:
         features = transaction_features(
@@ -104,6 +104,8 @@ class ScoringService:
         )
         hits = rule_hits(transaction, features, self._rules.rules)
         rules_score, critical = combine_hits(hits, self._rules)
+        if self._bundle is not None:
+            return self._stacked(self._bundle, transaction, features, hits, rules_score, critical)
         score = 100 * rules_score
         if critical:
             score = max(score, self._rules.critical_floor)
@@ -120,7 +122,44 @@ class ScoringService:
         return RiskAssessment(
             transaction_id=transaction.transaction_id,
             risk_score=risk_score,
-            risk_band=_band(risk_score, self._rules),
-            reasons=_reasons(hits, self._rules),
+            risk_band=_band(
+                risk_score, medium=self._rules.bands.medium, high=self._rules.bands.high
+            ),
+            reasons=rule_reasons(hits, self._rules),
             component_scores={"rules": rules_score, "anomaly": anomaly, "supervised": supervised},
+        )
+
+    def _stacked(
+        self,
+        bundle: "ModelBundle",
+        transaction: Transaction,
+        features: TransactionFeatures,
+        hits: list[RuleHit],
+        rules_score: float,
+        critical: bool,
+    ) -> RiskAssessment:
+        inputs = inputs_for(transaction, features)
+        rules = pd.DataFrame({"rules_score": [rules_score], "critical": [critical]}, inputs.index)
+        components = bundle.components(inputs, rules)
+        score = float(bundle.risk_scores(inputs, rules, components).iloc[0])
+        reasons = stacked_reasons(
+            hits,
+            rules_contribution=bundle.stacker.weights["rules"] * rules_score,
+            inputs=inputs.iloc[0],
+            contributions=bundle.contributions(inputs).iloc[0],
+            config=self._rules,
+        )
+        thresholds = bundle.thresholds
+        return RiskAssessment(
+            transaction_id=transaction.transaction_id,
+            risk_score=round(score),
+            # Banded before rounding, as the thresholds were set on unrounded scores.
+            risk_band=_band(score, medium=thresholds.medium, high=thresholds.high),
+            reasons=reasons,
+            component_scores={
+                "rules": rules_score,
+                "anomaly": float(components["anomaly"].iloc[0]),
+                "supervised": float(components["fraud_probability"].iloc[0]),
+            },
+            model_version=bundle.version,
         )

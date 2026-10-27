@@ -6,10 +6,12 @@ unusual than 99% of them. It measures unusualness, not guilt.
 """
 
 from dataclasses import dataclass
-from typing import Protocol
+from functools import cached_property
+from typing import Any, Protocol
 
 import numpy as np
 import pandas as pd
+import shap
 from sklearn.ensemble import IsolationForest
 from sklearn.neighbors import LocalOutlierFactor
 from sklearn.pipeline import make_pipeline
@@ -63,10 +65,43 @@ class AnomalyModel:
         lof.fit(matrix)
         return cls("local_outlier_factor", lof, np.sort(-lof.score_samples(matrix)))
 
+    def _percentile(self, unusualness: np.ndarray) -> np.ndarray:
+        rank = np.searchsorted(self.training_unusualness, unusualness, side="right")
+        return np.asarray(rank / len(self.training_unusualness), dtype=np.float64)
+
     def score(self, inputs: pd.DataFrame) -> pd.Series:
         """The Anomaly score of each Transaction, in [0, 1], indexed like `inputs`."""
         unusualness = -self.estimator.score_samples(_matrix(inputs))
-        rank = np.searchsorted(self.training_unusualness, unusualness, side="right")
-        return pd.Series(
-            rank / len(self.training_unusualness), index=inputs.index, name="anomaly_score"
-        )
+        return pd.Series(self._percentile(unusualness), index=inputs.index, name="anomaly_score")
+
+    @cached_property
+    def _explainer(self) -> Any:
+        if self.method != "isolation_forest":
+            raise ValueError(f"only an Isolation Forest can be explained, not {self.method}")
+        return shap.TreeExplainer(self.estimator)
+
+    def __getstate__(self) -> dict[str, Any]:
+        # The explainer is rebuilt on first use (under a second) rather than shipped.
+        return {k: v for k, v in self.__dict__.items() if k != "_explainer"}
+
+    def contributions(self, inputs: pd.DataFrame) -> pd.DataFrame:
+        """How much each input moved each Transaction's Anomaly score, indexed like `inputs`.
+
+        SHAP explains an Isolation Forest's average path length: a negative contribution means
+        the input isolated the Transaction sooner, so made it more unusual. Unusualness is
+        2^(-path length / c) for one constant c, so the path length SHAP starts from has an
+        Anomaly score too; each Transaction's rise from that score is shared out in proportion
+        to its path length contributions. They add up to the rise exactly.
+        """
+        matrix = _matrix(inputs)
+        explainer = self._explainer
+        shares = np.asarray(explainer.shap_values(matrix), dtype=np.float64)
+        expected = float(np.ravel(explainer.expected_value)[0])
+        path = expected + shares.sum(axis=1)
+        unusualness = -self.estimator.score_samples(matrix)
+        typical = unusualness ** (expected / path)
+        rise = self._percentile(unusualness) - self._percentile(typical)
+        moved = path - expected
+        safe = np.where(moved == 0, 1.0, moved)
+        per_step = np.where(moved == 0, 0.0, rise / safe)
+        return pd.DataFrame(shares * per_step[:, None], index=inputs.index, columns=INPUT_COLUMNS)

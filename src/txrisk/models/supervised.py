@@ -72,6 +72,16 @@ class SupervisedModel:
         fraud = _raw_probability(self.classifier, inputs)
         return pd.Series(fraud, index=inputs.index, name="raw_probability")
 
+    def contributions(self, inputs: pd.DataFrame) -> pd.DataFrame:
+        """How much each input moved each row's raw log-odds (TreeSHAP), indexed like `inputs`.
+
+        They add up to the raw probability's log-odds less the model's base rate.
+        """
+        columns = self.classifier.feature_name_
+        rows = inputs[columns].to_numpy(dtype=np.float64)
+        shares = np.asarray(self.classifier.booster_.predict(rows, pred_contrib=True))
+        return pd.DataFrame(shares[:, :-1], index=inputs.index, columns=columns)
+
     def score(self, inputs: pd.DataFrame) -> pd.Series:
         """The calibrated fraud probability of each row of model inputs, indexed like them."""
         raw = self.raw_probability(inputs)
