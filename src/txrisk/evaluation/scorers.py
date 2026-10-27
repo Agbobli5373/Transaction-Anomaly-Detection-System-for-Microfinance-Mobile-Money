@@ -46,15 +46,26 @@ def anomaly_scores(
     evaluation: EvaluationConfig,
     period_start: date,
     method: str = "isolation_forest",
+    feature_rows: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """The Anomaly score alone: fitted on the training days with no labels, banded at the Alert
     budget on the threshold days, and scored on the evaluation days. The Risk score is the
-    Anomaly score x 100."""
-    inputs = model_inputs(
-        transactions, feature_table(transactions, wallets, sim_swaps, config=features)
-    )
-    split = split_of(transactions["occurred_at"], period_start, evaluation).to_numpy()
-    training = inputs[split == Split.TRAIN]
+    Anomaly score x 100.
+
+    `feature_rows` is a feature table already built for these Transactions (`txrisk features`);
+    without one it is built here, which is the slow part of the run.
+    """
+    if feature_rows is None:
+        feature_rows = feature_table(transactions, wallets, sim_swaps, config=features)
+    inputs = model_inputs(transactions, feature_rows)
+    split = split_of(transactions["occurred_at"], period_start, evaluation)
+
+    def rows_in(name: Split) -> pd.DataFrame:
+        # Transactions outside every split have no split and are never in one.
+        in_split: pd.DataFrame = inputs[(split == name).fillna(False).to_numpy(dtype=bool)]
+        return in_split
+
+    training = rows_in(Split.TRAIN)
     if method == "isolation_forest":
         model = AnomalyModel.fit(training, seed=ANOMALY_SEED)
     else:
@@ -62,11 +73,11 @@ def anomaly_scores(
 
     window = evaluation.splits.thresholds
     thresholds = budget_thresholds(
-        model.score(inputs[split == Split.THRESHOLDS]) * 100,
+        model.score(rows_in(Split.THRESHOLDS)) * 100,
         days=window.end - window.start,
         budget_per_day=evaluation.alert_budget_per_day,
     )
-    anomaly = model.score(inputs[split == Split.EVALUATION])
+    anomaly = model.score(rows_in(Split.EVALUATION))
     risk_score = anomaly * 100
     return pd.DataFrame(
         {

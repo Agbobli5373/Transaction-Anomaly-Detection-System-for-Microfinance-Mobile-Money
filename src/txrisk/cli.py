@@ -83,6 +83,7 @@ def _evaluate(args: argparse.Namespace) -> int:
             evaluation=evaluation,
             period_start=period_start,
             method="isolation_forest" if args.scorer == "anomaly" else "local_outlier_factor",
+            feature_rows=pd.read_parquet(args.features) if args.features else None,
         )
     out = args.out or Path("reports") / args.scorer
     metrics = evaluate(
@@ -125,6 +126,11 @@ def main(argv: list[str] | None = None) -> int:
     ev.add_argument("--rules-config", type=Path, default=Path("config/rules.toml"))
     ev.add_argument("--evaluation-config", type=Path, default=Path("config/evaluation.toml"))
     ev.add_argument("--scorer", choices=SCORERS, default=RULES_ONLY)
+    ev.add_argument(
+        "--features",
+        type=Path,
+        help="a feature table from `txrisk features` to reuse instead of rebuilding it",
+    )
     ev.add_argument("--out", type=Path, help="report folder (default: reports/<scorer>)")
     ev.set_defaults(handler=_evaluate)
 

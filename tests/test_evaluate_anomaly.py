@@ -8,9 +8,13 @@ import pytest
 from conftest import DEFAULT_CONFIG, KEY
 
 from txrisk.cli import main
+from txrisk.evaluation import load_evaluation_config
+from txrisk.evaluation.scorers import anomaly_scores
+from txrisk.features import load_feature_config
 from txrisk.generator import GeneratorConfig, generate, write_dataset
 
 REPO = Path(__file__).resolve().parents[1]
+KYC_LIMITS = {"minimum": 1000.0, "medium": 5000.0, "enhanced": 15000.0}
 
 
 @pytest.fixture(scope="module")
@@ -38,11 +42,12 @@ def market(small_config: GeneratorConfig, tmp_path_factory: pytest.TempPathFacto
     return root
 
 
-def _evaluate(market: Path, scorer: str) -> dict:
+def _evaluate(market: Path, scorer: str, *extra: str) -> dict:
     out = market / scorer
     exit_code = main(
         [
             "evaluate",
+            *extra,
             "--scorer", scorer,
             "--data", str(market / "data"),
             "--config", str(market / "generator.toml"),
@@ -73,3 +78,54 @@ def test_high_is_set_to_the_alert_budget_on_the_threshold_days(market: Path):
 
     # Set to 20 a day on days 11-14; the evaluation days land near it, not exactly on it.
     assert 10 <= metrics["at_high"]["per_day"] <= 40
+
+
+def test_transactions_outside_every_split_are_left_out(market: Path):
+    # The splits stop at day 20, but the data runs to day 21, as when a Fraud scenario that
+    # starts near the end of the period runs past it.
+    short = market / "short.toml"
+    short.write_text(
+        (market / "evaluation.toml").read_text(encoding="utf-8").replace("[14, 21]", "[14, 20]"),
+        encoding="utf-8",
+    )
+    transactions = pd.read_parquet(market / "data" / "transactions.parquet")
+
+    scores = anomaly_scores(
+        transactions,
+        pd.read_parquet(market / "data" / "wallets.parquet"),
+        pd.read_parquet(market / "data" / "sim_swaps.parquet"),
+        features=load_feature_config(REPO / "config" / "features.toml", KYC_LIMITS),
+        evaluation=load_evaluation_config(short),
+        period_start=pd.Timestamp("2026-01-01").date(),
+    )
+
+    last_day = pd.Timestamp("2026-01-21", tz="UTC")
+    evaluated = transactions.set_index("transaction_id").loc[
+        scores["transaction_id"], "occurred_at"
+    ]
+    assert (evaluated < last_day).all()
+    assert (
+        len(scores)
+        == (
+            (transactions["occurred_at"] >= pd.Timestamp("2026-01-15", tz="UTC"))
+            & (transactions["occurred_at"] < last_day)
+        ).sum()
+    )
+
+
+def test_a_saved_feature_table_gives_the_same_report(market: Path):
+    built = _evaluate(market, "anomaly")
+    table = market / "features.parquet"
+    assert main(
+        [
+            "features",
+            "--data", str(market / "data"),
+            "--config", str(market / "generator.toml"),
+            "--feature-config", str(REPO / "config" / "features.toml"),
+            "--out", str(table),
+        ]
+    ) == 0  # fmt: skip
+
+    reused = _evaluate(market, "anomaly", "--features", str(table))
+
+    assert reused == built
