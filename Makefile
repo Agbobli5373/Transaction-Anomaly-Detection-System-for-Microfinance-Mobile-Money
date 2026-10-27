@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed
+.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed produce schemas
 
 install:
 	uv sync
@@ -50,10 +50,10 @@ train:
 paysim:
 	uv run txrisk paysim --csv $(PAYSIM_CSV) --features data/features/paysim.parquet
 
-# The serving stack in Docker: Postgres, the migration job, then the API on :8000.
-# Reads its settings and credentials from .env (see .env.example).
+# The serving stack in Docker: Postgres, Redpanda, the migration job, then the API on :8000 and a
+# scoring worker. Reads its settings and credentials from .env (see .env.example).
 up:
-	docker compose up --build --detach --wait api
+	docker compose up --build --detach --wait api worker
 
 down:
 	docker compose down
@@ -61,3 +61,12 @@ down:
 # Loads the parties and days 0-90 of data/generated into the compose Postgres as history.
 seed:
 	docker compose run --rm seed
+
+# Publishes days 90-120 of data/generated to transaction.created and sim_swap.recorded in
+# event-time order, standing in for the ledger; the workers score them (after `make seed`).
+produce:
+	docker compose run --rm produce
+
+# Rewrites the event topics' JSON Schemas in schemas/ from their models.
+schemas:
+	uv run txrisk schemas

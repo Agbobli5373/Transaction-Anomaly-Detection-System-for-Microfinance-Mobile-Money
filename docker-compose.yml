@@ -1,7 +1,9 @@
-# The development stack: Postgres, the migration job and the scoring API.
-# Every service reads .env (copy .env.example and fill it in); no credential is written here.
-#   docker compose up --build             # Postgres, migrations, then the API on :8000
+# The development stack: Postgres, Redpanda, the migration job, the scoring API and the scoring
+# workers. Every service reads .env (copy .env.example and fill it in); no credential is written here.
+#   docker compose up --build             # Postgres, Redpanda, migrations, the API on :8000, a worker
 #   docker compose run --rm seed          # load data/generated as history (after `make generate`)
+#   docker compose run --rm produce       # publish the live days of data/generated as events
+#   docker compose up --scale worker=3    # more workers share transaction.created's partitions
 # Set TXRISK_MODEL_BUNDLE=/models/<version> in .env to score with a bundle from `make train`;
 # without it the rules alone score.
 
@@ -12,6 +14,7 @@ x-txrisk: &txrisk
   environment:
     # No credential in the URL: libpq reads the database password from PGPASSWORD in .env.
     TXRISK_DATABASE_URL: postgresql://txrisk@postgres:5432/txrisk
+    TXRISK_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
 
 services:
   postgres:
@@ -27,6 +30,28 @@ services:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "txrisk", "-d", "txrisk"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # The event stream (ADR 0004): one broker, reachable as redpanda:9092 inside compose and as
+  # localhost:19092 from the host.
+  redpanda:
+    image: redpandadata/redpanda:v24.2.18
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --memory=1G
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+    ports:
+      - "19092:19092"
+    volumes:
+      - redpanda:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true'"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -50,6 +75,18 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # One-off: `docker compose run --rm produce`, standing in for the ledger. Publishes the
+  # Transactions and SIM swaps from the day `seed` stops at, in event-time order.
+  produce:
+    <<: *txrisk
+    profiles: ["produce"]
+    command: ["txrisk", "produce", "--data", "/data/generated"]
+    volumes:
+      - ./data:/data:ro
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
   api:
     <<: *txrisk
     command: ["txrisk", "serve", "--host", "0.0.0.0", "--port", "8000"]
@@ -70,5 +107,20 @@ services:
       timeout: 5s
       retries: 30
 
+  # Scores transaction.created into score.produced. A worker that stops for any reason leaves
+  # its uncommitted batch to be redelivered, so it is simply restarted.
+  worker:
+    <<: *txrisk
+    command: ["txrisk", "worker"]
+    restart: unless-stopped
+    volumes:
+      - ./models:/models:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redpanda:
+        condition: service_healthy
+
 volumes:
   pgdata:
+  redpanda:

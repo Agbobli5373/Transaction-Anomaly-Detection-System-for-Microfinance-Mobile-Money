@@ -23,7 +23,8 @@ jobs:
       - run: uv run mypy
       - run: uv run pytest
 
-  # The compose stack starts: Postgres, the migration job, then an API that reports ready.
+  # The compose stack starts: Postgres, Redpanda, the migration job, an API that reports ready,
+  # and a scoring worker that creates the event topics.
   compose:
     runs-on: ubuntu-latest
     steps:
@@ -33,9 +34,19 @@ jobs:
           generated=$(openssl rand -hex 16)
           grep -v -E '^(POSTGRES_|PG)PASSWORD=' .env.example > .env
           for key in POSTGRES_PASSWORD PGPASSWORD; do echo "$key=$generated" >> .env; done
-      - run: docker compose up --build --detach --wait api
+      - run: docker compose up --build --detach --wait api worker
       - run: curl --fail --silent http://127.0.0.1:8000/v1/ready
       - run: curl --fail --silent http://127.0.0.1:8000/v1/openapi.json > /dev/null
+      # The worker is consuming once its topics exist and it has joined its consumer group.
+      - run: |
+          for _ in $(seq 30); do
+            if docker compose exec -T redpanda rpk group describe txrisk-scoring 2>/dev/null \
+                | grep -q 'transaction.created'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
       - if: failure()
         run: docker compose logs
       - if: always()

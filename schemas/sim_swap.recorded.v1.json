@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://txrisk.example/schemas/sim_swap.recorded.v1.json",
+  "additionalProperties": false,
+  "description": "A SIM swap on a Wallet's phone number, published to `sim_swap.recorded` by the operator\nwhen it happens. Scoring sees it only for Transactions after `occurred_at`.",
+  "properties": {
+    "wallet_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Wallet Id",
+      "type": "string"
+    },
+    "occurred_at": {
+      "description": "When the SIM swap happened, with a UTC offset.",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$",
+      "title": "Occurred At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "wallet_id",
+    "occurred_at"
+  ],
+  "title": "sim_swap.recorded",
+  "type": "object"
+}

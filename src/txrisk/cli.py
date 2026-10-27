@@ -1,8 +1,12 @@
 """Command-line entry point: `txrisk <command>`."""
 
 import argparse
+import json
+import logging
 import os
+import signal
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -18,15 +22,28 @@ from txrisk.evaluation.scorers import (
     stacked_scores,
     supervised_scores,
 )
+from txrisk.events import (
+    EVENTS,
+    Publisher,
+    ScoringWorker,
+    Topics,
+    WorkerSettings,
+    ensure_topics,
+    json_schema,
+    ledger_events,
+    publish_ledger,
+    schema_file,
+)
 from txrisk.features import FeatureConfig, feature_table, load_feature_config
 from txrisk.generator import generate, load_config, write_dataset
-from txrisk.models.bundle import train_bundle
+from txrisk.models.bundle import ModelBundle, train_bundle
 from txrisk.models.registry import MODEL_NAME, log_bundle
 from txrisk.scoring import RULES_ONLY, load_rules_config
-from txrisk.store import create_engine, migrate, pending_migrations, seed
+from txrisk.store import StoredScoring, create_engine, migrate, pending_migrations, seed
 
 PSEUDONYM_KEY_ENV = "TXRISK_PSEUDONYM_KEY"
 DATABASE_URL_ENV = "TXRISK_DATABASE_URL"
+KAFKA_ENV = "TXRISK_KAFKA_BOOTSTRAP_SERVERS"
 
 
 def _generate(args: argparse.Namespace) -> int:
@@ -211,25 +228,100 @@ def _migrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _day_start(args: argparse.Namespace, day: int) -> datetime:
+    """The start of a day of the generated period, in UTC."""
+    start = pd.Timestamp(load_config(args.config).period.start, tz="UTC")
+    return (start + pd.Timedelta(days=day)).to_pydatetime()
+
+
+def _evaluation_start(args: argparse.Namespace) -> int:
+    """The first day of the live period, up to which `seed` loads history by default."""
+    return load_evaluation_config(args.evaluation_config).splits.evaluation.start
+
+
 def _seed(args: argparse.Namespace) -> int:
     url = _database_url(args)
     if url is None:
         return 2
     until_day = args.until_day
     if until_day is None:
-        until_day = load_evaluation_config(args.evaluation_config).splits.evaluation.start
-    until = pd.Timestamp(load_config(args.config).period.start, tz="UTC") + pd.Timedelta(
-        days=until_day
-    )
+        until_day = _evaluation_start(args)
+    until = _day_start(args, until_day)
     engine = create_engine(url)
     with engine.connect() as connection:
         pending = pending_migrations(connection)
     if pending:
         print(f"error: run `txrisk migrate` first; pending: {', '.join(pending)}", file=sys.stderr)
         return 1
-    counts = seed(engine, args.data, until=until.to_pydatetime())
+    counts = seed(engine, args.data, until=until)
     stored = ", ".join(f"{n:,} {table}" for table, n in counts.items())
     print(f"seeded history before day {until_day} ({until:%Y-%m-%d}): {stored}")
+    return 0
+
+
+def _produce(args: argparse.Namespace) -> int:
+    servers = args.bootstrap_servers or os.environ.get(KAFKA_ENV)
+    if not servers:
+        print(f"error: pass --bootstrap-servers or set {KAFKA_ENV}", file=sys.stderr)
+        return 2
+    from_day = _evaluation_start(args) if args.from_day is None else args.from_day
+    since = _day_start(args, from_day)
+    until = None if args.until_day is None else _day_start(args, args.until_day)
+    topics = Topics(args.topic_prefix)
+    ensure_topics(servers, topics, partitions=args.partitions)
+    published = publish_ledger(
+        Publisher(servers),
+        topics,
+        ledger_events(args.data, since=since, until=until),
+        limit=args.limit,
+    )
+    print(
+        f"published {published.transactions:,} Transactions to {topics.transactions} and "
+        f"{published.sim_swaps:,} SIM swaps to {topics.sim_swaps}, from day {from_day}"
+    )
+    return 0
+
+
+def _worker(args: argparse.Namespace) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    settings = WorkerSettings.from_env()
+    engine = create_engine(settings.database_url)
+    with engine.connect() as connection:
+        pending = pending_migrations(connection)
+    if pending:
+        print(f"error: run `txrisk migrate` first; pending: {', '.join(pending)}", file=sys.stderr)
+        return 1
+    bundle = None if settings.model_bundle is None else ModelBundle.load(settings.model_bundle)
+    scoring = StoredScoring(
+        engine, features=settings.features(), rules=settings.rules(), bundle=bundle
+    )
+    topics = settings.topics()
+    ensure_topics(settings.kafka_bootstrap_servers, topics, partitions=settings.topic_partitions)
+    worker = ScoringWorker(
+        scoring,
+        Publisher(settings.kafka_bootstrap_servers),
+        bootstrap_servers=settings.kafka_bootstrap_servers,
+        topics=topics,
+        group_id=settings.consumer_group,
+        batch_size=settings.batch_size,
+    )
+    stopping: list[int] = []
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signum, lambda received, _: stopping.append(received))
+    logging.getLogger(__name__).info(
+        "scoring %s with %s", topics.transactions, bundle.version if bundle else RULES_ONLY
+    )
+    worker.run(lambda: bool(stopping))
+    engine.dispose()
+    return 0
+
+
+def _schemas(args: argparse.Namespace) -> int:
+    args.out.mkdir(parents=True, exist_ok=True)
+    for topic in EVENTS:
+        path = args.out / schema_file(topic)
+        path.write_text(json.dumps(json_schema(topic), indent=2) + "\n", encoding="utf-8")
+        print(f"wrote {path}")
     return 0
 
 
@@ -342,6 +434,37 @@ def main(argv: list[str] | None = None) -> int:
     srv.add_argument("--host", default="127.0.0.1")
     srv.add_argument("--port", type=int, default=8000)
     srv.set_defaults(handler=_serve)
+
+    prod = commands.add_parser(
+        "produce",
+        help="publish a dataset's Transactions and SIM swaps to the stream, in event-time order",
+    )
+    prod.add_argument("--data", type=Path, default=Path("data/generated"))
+    prod.add_argument("--bootstrap-servers", help=f"default: ${KAFKA_ENV}")
+    prod.add_argument("--config", type=Path, default=Path("config/generator.toml"))
+    prod.add_argument("--evaluation-config", type=Path, default=Path("config/evaluation.toml"))
+    prod.add_argument(
+        "--from-day",
+        type=int,
+        help="publish from this day on (default: the evaluation start, where `seed` stops)",
+    )
+    prod.add_argument("--until-day", type=int, help="publish only before this day")
+    prod.add_argument("--limit", type=int, help="stop after this many Transactions")
+    prod.add_argument("--topic-prefix", default="")
+    prod.add_argument(
+        "--partitions", type=int, default=3, help="partitions for topics it has to create"
+    )
+    prod.set_defaults(handler=_produce)
+
+    wk = commands.add_parser(
+        "worker",
+        help="score transaction.created into score.produced, configured by TXRISK_* variables",
+    )
+    wk.set_defaults(handler=_worker)
+
+    sch = commands.add_parser("schemas", help="write the event topics' JSON Schemas")
+    sch.add_argument("--out", type=Path, default=Path("schemas"))
+    sch.set_defaults(handler=_schemas)
 
     args = parser.parse_args(argv)
     handler = args.handler

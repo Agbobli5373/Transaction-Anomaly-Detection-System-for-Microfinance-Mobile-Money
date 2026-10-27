@@ -31,14 +31,12 @@ def small_config(default_config: GeneratorConfig) -> GeneratorConfig:
     )
 
 
-@pytest.fixture(scope="session")
-def postgres() -> Iterator[str]:
-    """The URL of a throwaway Postgres server, run in Docker by Testcontainers.
+REDPANDA_IMAGE = "redpandadata/redpanda:v24.2.18"
 
-    Without Docker the tests that need it are skipped locally, but fail in CI.
-    """
+
+def _require_docker() -> None:
+    """Skip the test without Docker locally; in CI, fail instead."""
     import docker
-    from testcontainers.community.postgres import PostgresContainer
 
     try:
         docker.from_env().ping()
@@ -46,8 +44,36 @@ def postgres() -> Iterator[str]:
         if os.environ.get("CI"):
             raise
         pytest.skip("Docker is not running")
+
+
+@pytest.fixture(scope="session")
+def postgres() -> Iterator[str]:
+    """The URL of a throwaway Postgres server, run in Docker by Testcontainers.
+
+    Without Docker the tests that need it are skipped locally, but fail in CI.
+    """
+    from testcontainers.community.postgres import PostgresContainer
+
+    _require_docker()
     with PostgresContainer("postgres:16-alpine", driver="psycopg") as container:
         yield container.get_connection_url()
+
+
+@pytest.fixture(scope="session")
+def redpanda() -> Iterator[str]:
+    """The bootstrap server of a throwaway Redpanda broker, run in Docker by Testcontainers.
+
+    Tests share it, each under its own topic prefix.
+    """
+    from testcontainers.community.kafka import RedpandaContainer
+
+    _require_docker()
+    container = RedpandaContainer(REDPANDA_IMAGE)
+    container.start(timeout=120)
+    try:
+        yield container.get_bootstrap_server()
+    finally:
+        container.stop()
 
 
 def create_database(server_url: str, name: str, *, template: str | None = None) -> str:

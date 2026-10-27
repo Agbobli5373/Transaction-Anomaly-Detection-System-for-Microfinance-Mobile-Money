@@ -1,0 +1,326 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://txrisk.example/schemas/transaction.created.v1.json",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "transaction_type": {
+            "const": "cash_in"
+          }
+        },
+        "required": [
+          "transaction_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "direction": {
+            "const": "in"
+          },
+          "biller_id": {
+            "type": "null"
+          },
+          "counterparty_wallet_id": {
+            "type": "null"
+          },
+          "merchant_id": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "agent_id"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "transaction_type": {
+            "const": "cash_out"
+          }
+        },
+        "required": [
+          "transaction_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "direction": {
+            "const": "out"
+          },
+          "biller_id": {
+            "type": "null"
+          },
+          "counterparty_wallet_id": {
+            "type": "null"
+          },
+          "merchant_id": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "agent_id"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "transaction_type": {
+            "const": "transfer"
+          }
+        },
+        "required": [
+          "transaction_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "counterparty_wallet_id": {
+            "type": "string"
+          },
+          "direction": {
+            "const": "out"
+          },
+          "agent_id": {
+            "type": "null"
+          },
+          "biller_id": {
+            "type": "null"
+          },
+          "merchant_id": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "counterparty_wallet_id"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "transaction_type": {
+            "const": "payment"
+          }
+        },
+        "required": [
+          "transaction_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "merchant_id": {
+            "type": "string"
+          },
+          "direction": {
+            "const": "out"
+          },
+          "agent_id": {
+            "type": "null"
+          },
+          "biller_id": {
+            "type": "null"
+          },
+          "counterparty_wallet_id": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "merchant_id"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "transaction_type": {
+            "const": "bill_payment"
+          }
+        },
+        "required": [
+          "transaction_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "biller_id": {
+            "type": "string"
+          },
+          "direction": {
+            "const": "out"
+          },
+          "agent_id": {
+            "type": "null"
+          },
+          "counterparty_wallet_id": {
+            "type": "null"
+          },
+          "merchant_id": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "biller_id"
+        ]
+      }
+    }
+  ],
+  "description": "A Transaction as the ledger reports it, published to `transaction.created` when it happens.\n\nIt names exactly one Counterparty, in the field for its Transaction type: `agent_id` for a\nCash-in or Cash-out, `counterparty_wallet_id` for a Transfer, `merchant_id` for a Payment and\n`biller_id` for a Bill payment. There is no balance after.",
+  "properties": {
+    "transaction_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Transaction Id",
+      "type": "string"
+    },
+    "occurred_at": {
+      "description": "When it happened, with a UTC offset; it is the scoring clock (ADR 0005).",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "transaction_type": {
+      "enum": [
+        "cash_in",
+        "cash_out",
+        "transfer",
+        "payment",
+        "bill_payment"
+      ],
+      "title": "Transaction Type",
+      "type": "string"
+    },
+    "amount": {
+      "description": "GHS, at most two decimals.",
+      "exclusiveMaximum": 1000000000000.0,
+      "exclusiveMinimum": 0,
+      "multipleOf": 0.01,
+      "title": "Amount",
+      "type": "number"
+    },
+    "subject_wallet_id": {
+      "description": "The receiving Wallet for a Cash-in, the sending Wallet otherwise.",
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Subject Wallet Id",
+      "type": "string"
+    },
+    "direction": {
+      "description": "Into the Subject wallet for a Cash-in, out of it for every other type.",
+      "enum": [
+        "in",
+        "out"
+      ],
+      "title": "Direction",
+      "type": "string"
+    },
+    "subject_balance_before": {
+      "description": "The Subject wallet's balance before the Transaction, in GHS.",
+      "exclusiveMaximum": 1000000000000.0,
+      "minimum": 0,
+      "multipleOf": 0.01,
+      "title": "Subject Balance Before",
+      "type": "number"
+    },
+    "channel": {
+      "enum": [
+        "ussd",
+        "app"
+      ],
+      "title": "Channel",
+      "type": "string"
+    },
+    "device_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Device Id",
+      "type": "string"
+    },
+    "region": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Region",
+      "type": "string"
+    },
+    "counterparty_wallet_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Counterparty Wallet Id"
+    },
+    "agent_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Agent Id"
+    },
+    "merchant_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Merchant Id"
+    },
+    "biller_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Biller Id"
+    }
+  },
+  "required": [
+    "transaction_id",
+    "occurred_at",
+    "transaction_type",
+    "amount",
+    "subject_wallet_id",
+    "direction",
+    "subject_balance_before",
+    "channel",
+    "device_id",
+    "region"
+  ],
+  "title": "transaction.created",
+  "type": "object"
+}
