@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test check generate features evaluate
+.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised
 
 install:
 	uv sync
@@ -29,3 +29,8 @@ features:
 # Scores the evaluation days with the rules and writes reports/rules-only/.
 evaluate:
 	uv run txrisk evaluate --data data/generated --out reports/rules-only
+
+# Trains the supervised model on days 0-60, bands it at the Alert budget on days 60-90 and judges
+# its fraud probability alone on the evaluation days; writes reports/supervised/.
+evaluate-supervised:
+	uv run txrisk evaluate --data data/generated --scorer supervised --out reports/supervised
