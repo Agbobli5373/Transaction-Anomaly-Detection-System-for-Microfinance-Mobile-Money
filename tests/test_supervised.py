@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import date
 
+import numpy as np
 import pandas as pd
 import pytest
 from conftest import KEY
@@ -11,7 +12,7 @@ from scoring_helpers import RULES_CONFIG
 from txrisk.evaluation import EvaluationConfig
 from txrisk.features import FeatureConfig, feature_table, replay_history, transactions_from_frame
 from txrisk.generator import GeneratorConfig, generate
-from txrisk.models import model_inputs
+from txrisk.models import INPUT_COLUMNS, model_inputs
 from txrisk.models.anomaly import AnomalyModel
 from txrisk.models.supervised import train_supervised
 from txrisk.scoring import FixedClock, ScoringService, load_rules_config
@@ -95,6 +96,21 @@ def test_the_same_seed_gives_the_same_probabilities(market: Market):
     second = _train(market).score(market.inputs)
 
     pd.testing.assert_series_equal(first, second)
+
+
+def test_input_contributions_add_up_to_the_model_s_log_odds(market: Market):
+    model = _train(market)
+    raw = model.raw_probability(market.inputs)
+    inside = raw.between(1e-9, 1 - 1e-9)  # where the log-odds are still precise
+    inputs = market.inputs[inside]
+
+    contributions = model.contributions(inputs)
+
+    assert list(contributions.columns) == INPUT_COLUMNS
+    log_odds = np.log(raw[inside] / (1 - raw[inside]))
+    # What the contributions leave unexplained is the model's base rate: one level.
+    base = log_odds - contributions.sum(axis=1)
+    assert np.ptp(base.to_numpy()) < 1e-6
 
 
 def _discover(market: Market, transaction_ids: pd.Series, at: pd.Timestamp) -> pd.DataFrame:
@@ -248,7 +264,7 @@ def test_the_scoring_service_reports_the_fraud_probability_as_a_component(market
     assert with_model.component_scores["supervised"] == pytest.approx(batch[riskiest])
     assert with_model.component_scores["supervised"] > 0
     assert rules_only.component_scores["supervised"] is None
-    # Combining the components is a later step: the rules still decide the Risk score.
+    # Without a model bundle the rules still decide the Risk score.
     assert (with_model.risk_score, with_model.risk_band, with_model.reasons) == (
         rules_only.risk_score,
         rules_only.risk_band,

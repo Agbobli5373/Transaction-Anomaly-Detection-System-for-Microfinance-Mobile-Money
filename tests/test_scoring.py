@@ -143,6 +143,6 @@ def test_the_anomaly_score_is_reported_alongside_the_rules():
     expected = model.score(inputs_for(scored, features)).iloc[0]
     assert with_model.component_scores["anomaly"] == expected
     assert rules_only.component_scores["anomaly"] is None
-    # Until the components are stacked (#11), the rules alone set the Risk score and band.
+    # Without a model bundle, the rules alone set the Risk score and band.
     assert with_model.risk_score == rules_only.risk_score
     assert with_model.risk_band == rules_only.risk_band

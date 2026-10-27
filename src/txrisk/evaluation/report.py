@@ -78,8 +78,8 @@ def evaluate(
 
     Writes metrics.json, the PR and ROC curves and the evaluated scores to `out`, and returns
     the metrics. High is the scorer's own High Risk band. A scorer that also gives a calibrated
-    `fraud_probability` and its `raw_probability` gets a reliability check of both, against
-    eventual Fraud discovery and against Ground truth.
+    `fraud_probability`, and perhaps the `raw_probability` it came from, gets a reliability
+    check of each, against eventual Fraud discovery and against Ground truth.
     """
     transactions = pd.read_parquet(data / "transactions.parquet")
     wallets = pd.read_parquet(data / "wallets.parquet")
@@ -146,19 +146,18 @@ def evaluate(
         },
         "segments": _segments(frame, high),
     }
-    if {"fraud_probability", "raw_probability"} <= set(scores.columns):
+    if "fraud_probability" in scores.columns:
         # Calibration is fitted to Fraud labels, so the probability it gives is the chance of
         # fraud that gets discovered: judged against every Fraud discovery in the dataset,
         # however late. Against Ground truth it runs low by the share never discovered.
         eventually = frame["transaction_id"].isin(set(discoveries["transaction_id"]))
+        kinds = [
+            (kind, column)
+            for kind, column in (("raw", "raw_probability"), ("calibrated", "fraud_probability"))
+            if column in scores.columns
+        ]
         metrics["reliability"] = {
-            against: {
-                kind: asdict(reliability(fraud, frame[column]))
-                for kind, column in (
-                    ("raw", "raw_probability"),
-                    ("calibrated", "fraud_probability"),
-                )
-            }
+            against: {kind: asdict(reliability(fraud, frame[column])) for kind, column in kinds}
             for against, fraud in (
                 ("eventually_discovered", eventually),
                 ("ground_truth", frame["fraud"]),

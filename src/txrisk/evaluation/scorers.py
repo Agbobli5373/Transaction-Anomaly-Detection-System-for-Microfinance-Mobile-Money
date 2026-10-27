@@ -10,11 +10,13 @@ from txrisk.evaluation.thresholds import band, budget_thresholds
 from txrisk.features import FeatureConfig, feature_table
 from txrisk.models import model_inputs
 from txrisk.models.anomaly import AnomalyModel
+from txrisk.models.bundle import train_bundle
 from txrisk.models.supervised import train_supervised
-from txrisk.scoring import RulesConfig, score_table
+from txrisk.scoring import RulesConfig, rule_scores_table, score_table
 
 ANOMALY_SEED = 42
 SUPERVISED_SEED = 42
+STACKED_SEED = 42
 
 
 def rules_only_scores(
@@ -143,5 +145,57 @@ def supervised_scores(
             "risk_band": band(risk_score, thresholds).to_numpy(),
             "fraud_probability": probability.to_numpy(),
             "raw_probability": model.raw_probability(evaluated).to_numpy(),
+        }
+    ).astype({"transaction_id": "string", "risk_band": "string"})
+
+
+def stacked_scores(
+    transactions: pd.DataFrame,
+    wallets: pd.DataFrame,
+    sim_swaps: pd.DataFrame,
+    discoveries: pd.DataFrame,
+    *,
+    features: FeatureConfig,
+    rules: RulesConfig,
+    evaluation: EvaluationConfig,
+    period_start: date,
+    feature_rows: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """The stacked Risk score: a model bundle trained as `txrisk train` trains it, banded at its
+    own thresholds, and scored on the evaluation days.
+
+    Each component comes along, and so does the stacker's probability before the Critical rule
+    floor, for the reliability check. The scores come from the feature table rather than a
+    replay; the scoring service gives the same ones.
+    """
+    if feature_rows is None:
+        feature_rows = feature_table(transactions, wallets, sim_swaps, config=features)
+    rule_scores = rule_scores_table(transactions, feature_rows, rules)
+    bundle = train_bundle(
+        transactions,
+        feature_rows,
+        discoveries,
+        rules=rules,
+        period_start=period_start,
+        config=evaluation,
+        seed=STACKED_SEED,
+        rule_scores=rule_scores,
+    )
+    split = split_of(transactions["occurred_at"], period_start, evaluation)
+    evaluated = transactions[(split == Split.EVALUATION).fillna(False).to_numpy(dtype=bool)]
+    inputs = model_inputs(evaluated, feature_rows)
+    rule_scores = rule_scores.loc[inputs.index]
+    components = bundle.components(inputs, rule_scores)
+    risk_score = bundle.risk_scores(inputs, rule_scores, components)
+    return pd.DataFrame(
+        {
+            "transaction_id": inputs.index.to_numpy(),
+            "risk_score": risk_score.to_numpy(),
+            "risk_band": band(risk_score, bundle.thresholds).to_numpy(),
+            "fraud_probability": (bundle.stacker.score(components) / 100).to_numpy(),
+            "rules_score": rule_scores["rules_score"].to_numpy(),
+            "critical": rule_scores["critical"].to_numpy(),
+            "anomaly_score": components["anomaly"].to_numpy(),
+            "supervised_probability": components["fraud_probability"].to_numpy(),
         }
     ).astype({"transaction_id": "string", "risk_band": "string"})
