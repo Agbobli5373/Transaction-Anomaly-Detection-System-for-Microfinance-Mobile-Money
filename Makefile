@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed
+.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed openapi
 
 install:
 	uv sync
@@ -61,3 +61,7 @@ down:
 # Loads the parties and days 0-90 of data/generated into the compose Postgres as history.
 seed:
 	docker compose run --rm seed
+
+# Regenerates the committed OpenAPI snapshot CI checks for breaking changes.
+openapi:
+	uv run python -m txrisk.contract_check openapi > contracts/openapi.json

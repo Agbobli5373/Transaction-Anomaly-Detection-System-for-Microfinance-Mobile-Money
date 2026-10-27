@@ -5,7 +5,24 @@ on:
   push:
     branches: [main]
 
+# A newer push to the same PR supersedes the running checks; main always runs to completion.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+  # Pinned tools that run as containers.
+  TRIVY_IMAGE: aquasec/trivy:0.76.1
+  OASDIFF_IMAGE: tufin/oasdiff:v1.34.1
+
 jobs:
+  # Lint, strict types and the whole test suite except the smoke test, which has its own job.
+  # Coverage is gated at 80% on the core logic only; `[tool.coverage.report]` in pyproject.toml
+  # says what counts as core.
   check:
     runs-on: ubuntu-latest
     env:
@@ -21,7 +38,95 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy
-      - run: uv run pytest
+      - run: uv run pytest -m "not smoke" --cov --cov-report=term-missing
+
+  # generate -> features -> train -> evaluate on a tiny market, through the CLI.
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run pytest -m smoke
+
+  # Known vulnerabilities in the locked dependencies, runtime and dev. pip-audit has no severity
+  # filter, so any known vulnerability with a published advisory fails the build.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv export --locked --no-emit-project --no-hashes --output-file requirements.audit.txt
+      - run: uv run pip-audit --requirement requirements.audit.txt --no-deps --disable-pip
+
+  # Trivy: the built image's OS packages and libraries, and the repo's Dockerfile and compose
+  # file for misconfigurations. High and critical findings fail the build.
+  trivy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: txrisk:ci
+          cache-from: type=gha,scope=image
+          cache-to: type=gha,scope=image,mode=max
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ github.run_id }}
+          restore-keys: trivy-db-
+      - name: Scan the image
+        run: |
+          mkdir -p ~/.cache/trivy
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v ~/.cache/trivy:/root/.cache/trivy \
+            "$TRIVY_IMAGE" image --severity HIGH,CRITICAL --exit-code 1 txrisk:ci
+      - name: Scan the Dockerfile and compose file
+        run: |
+          docker run --rm \
+            -v "$PWD:/src" -v ~/.cache/trivy:/root/.cache/trivy \
+            "$TRIVY_IMAGE" config --severity HIGH,CRITICAL --exit-code 1 /src
+
+  # A breaking change to the OpenAPI spec or to an event schema fails the build. The spec the
+  # code serves is compared with the one on the commit this change builds on, so a breaking
+  # change cannot be hidden by regenerating the snapshot; a test keeps the snapshot current.
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Compare with the base commit
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "no base commit to compare with"
+            exit 0
+          fi
+          git worktree add ../base "$BASE"
+          uv run python -m txrisk.contract_check openapi > openapi.current.json
+          if [ -f ../base/contracts/openapi.json ]; then
+            docker run --rm -v "$PWD:/w" -v "$PWD/../base:/base" -w /w "$OASDIFF_IMAGE" \
+              breaking /base/contracts/openapi.json openapi.current.json --fail-on ERR
+          else
+            echo "the base commit has no OpenAPI snapshot yet"
+          fi
+          # Event schemas are every schemas/*.json; there is nothing to compare until they exist.
+          uv run python -m txrisk.contract_check schemas ../base/schemas schemas
 
   # The compose stack starts: Postgres, the migration job, then an API that reports ready.
   compose:
@@ -40,3 +145,29 @@ jobs:
         run: docker compose logs
       - if: always()
         run: docker compose down --volumes
+
+  # On main, once everything passes: push the image to GHCR, tagged with the commit SHA.
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [check, smoke, audit, trivy, contracts, compose]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # GHCR names are lower case; the repository's owner and name may not be.
+      - id: image
+        run: echo "name=${IMAGE,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.image.outputs.name }}:${{ github.sha }}
+          cache-from: type=gha,scope=image
