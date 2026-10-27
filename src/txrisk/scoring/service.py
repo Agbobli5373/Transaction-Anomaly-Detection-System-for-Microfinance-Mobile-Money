@@ -7,6 +7,8 @@ from enum import StrEnum
 from typing import Protocol
 
 from txrisk.features import FeatureConfig, HistoryProvider, Transaction, transaction_features
+from txrisk.models import inputs_for
+from txrisk.models.anomaly import AnomalyModel
 from txrisk.scoring.config import RulesConfig, Severity
 from txrisk.scoring.rules import RuleHit, rule_hits
 
@@ -78,11 +80,13 @@ class ScoringService:
         *,
         features: FeatureConfig,
         rules: RulesConfig,
+        anomaly: AnomalyModel | None = None,
     ) -> None:
         self._history = history
         self._clock = clock
         self._features = features
         self._rules = rules
+        self._anomaly = anomaly
 
     def assess(self, transaction: Transaction) -> RiskAssessment:
         features = transaction_features(
@@ -95,10 +99,13 @@ class ScoringService:
         if any(h.severity == Severity.CRITICAL for h in hits):
             score = max(score, self._rules.critical_floor)
         risk_score = round(score)
+        anomaly = None
+        if self._anomaly is not None:
+            anomaly = float(self._anomaly.score(inputs_for(transaction, features)).iloc[0])
         return RiskAssessment(
             transaction_id=transaction.transaction_id,
             risk_score=risk_score,
             risk_band=_band(risk_score, self._rules),
             reasons=_reasons(hits, self._rules),
-            component_scores={"rules": rules_score, "anomaly": None, "supervised": None},
+            component_scores={"rules": rules_score, "anomaly": anomaly, "supervised": None},
         )

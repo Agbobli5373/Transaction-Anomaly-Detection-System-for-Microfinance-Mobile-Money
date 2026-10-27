@@ -1,7 +1,12 @@
 """What a Risk assessment says: score, band, Reasons and components."""
 
-from scoring_helpers import DAY, HOUR, MINUTE, NOW, Market, routine, tx
+import numpy as np
+import pandas as pd
+from scoring_helpers import DAY, FEATURES, HOUR, MINUTE, NOW, Market, routine, tx
 
+from txrisk.features import transaction_features
+from txrisk.models import INPUT_COLUMNS, inputs_for
+from txrisk.models.anomaly import AnomalyModel
 from txrisk.scoring import Reason, RiskAssessment, RiskBand
 
 
@@ -122,3 +127,22 @@ def test_nothing_after_the_transaction_changes_its_assessment():
     after.sim_swap(NOW + MINUTE)
 
     assert before.assess(scored) == after.assess(scored)
+
+
+def test_the_anomaly_score_is_reported_alongside_the_rules():
+    rng = np.random.default_rng(0)
+    training = pd.DataFrame(rng.normal(1, 0.1, (500, len(INPUT_COLUMNS))), columns=INPUT_COLUMNS)
+    model = AnomalyModel.fit(training, seed=1)
+    market = Market().record(*routine())
+    scored = tx(transaction_type="payment", amount=300.0)
+
+    with_model = market.assess(scored, anomaly=model)
+    rules_only = market.assess(scored)
+
+    features = transaction_features(scored, market.history, now=scored.occurred_at, config=FEATURES)
+    expected = model.score(inputs_for(scored, features)).iloc[0]
+    assert with_model.component_scores["anomaly"] == expected
+    assert rules_only.component_scores["anomaly"] is None
+    # Until the components are stacked (#11), the rules alone set the Risk score and band.
+    assert with_model.risk_score == rules_only.risk_score
+    assert with_model.risk_band == rules_only.risk_band

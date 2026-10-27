@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from txrisk.features import FeatureConfig, ReplayHistory, Transaction, Wallet
+from txrisk.models.anomaly import AnomalyModel
 from txrisk.scoring import FixedClock, RiskAssessment, ScoringService, load_rules_config
 
 RULES_CONFIG = Path(__file__).resolve().parents[1] / "config" / "rules.toml"
@@ -73,12 +74,15 @@ class Market:
         self.history.record_sim_swap(SUBJECT, at)
         return self
 
-    def assess(self, transaction: Transaction) -> RiskAssessment:
+    def assess(
+        self, transaction: Transaction, *, anomaly: AnomalyModel | None = None
+    ) -> RiskAssessment:
         service = ScoringService(
             self.history,
             FixedClock(transaction.occurred_at),
             features=FEATURES,
             rules=load_rules_config(RULES_CONFIG),
+            anomaly=anomaly,
         )
         return service.assess(transaction)
 

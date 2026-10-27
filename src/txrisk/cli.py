@@ -9,9 +9,10 @@ import pandas as pd
 
 from txrisk.evaluation import load_evaluation_config
 from txrisk.evaluation.report import evaluate
+from txrisk.evaluation.scorers import anomaly_scores, rules_only_scores
 from txrisk.features import feature_table, load_feature_config
 from txrisk.generator import generate, load_config, write_dataset
-from txrisk.scoring import RULES_ONLY, load_rules_config, score_table
+from txrisk.scoring import RULES_ONLY, load_rules_config
 
 PSEUDONYM_KEY_ENV = "TXRISK_PSEUDONYM_KEY"
 
@@ -48,6 +49,10 @@ def _features(args: argparse.Namespace) -> int:
     return 0
 
 
+# Scorers `txrisk evaluate` can judge. LOF is an offline comparison only; it is never served.
+SCORERS = [RULES_ONLY, "anomaly", "lof"]
+
+
 def _evaluate(args: argparse.Namespace) -> int:
     generator = load_config(args.config)
     features = load_feature_config(
@@ -57,27 +62,36 @@ def _evaluate(args: argparse.Namespace) -> int:
         },
     )
     evaluation = load_evaluation_config(args.evaluation_config)
-    period_start = pd.Timestamp(generator.period.start, tz="UTC")
-    scores = score_table(
+    tables = (
         pd.read_parquet(args.data / "transactions.parquet"),
         pd.read_parquet(args.data / "wallets.parquet"),
         pd.read_parquet(args.data / "sim_swaps.parquet"),
-        features=features,
-        rules=load_rules_config(args.rules_config),
-        score_from=period_start + pd.Timedelta(days=evaluation.splits.evaluation.start),
     )
+    period_start = generator.period.start
+    if args.scorer == RULES_ONLY:
+        scores = rules_only_scores(
+            *tables,
+            features=features,
+            rules=load_rules_config(args.rules_config),
+            evaluation=evaluation,
+            period_start=period_start,
+        )
+    else:
+        scores = anomaly_scores(
+            *tables,
+            features=features,
+            evaluation=evaluation,
+            period_start=period_start,
+            method="isolation_forest" if args.scorer == "anomaly" else "local_outlier_factor",
+        )
+    out = args.out or Path("reports") / args.scorer
     metrics = evaluate(
-        scores,
-        args.data,
-        config=evaluation,
-        period_start=generator.period.start,
-        scorer=RULES_ONLY,
-        out=args.out,
+        scores, args.data, config=evaluation, period_start=period_start, scorer=args.scorer, out=out
     )
     high = metrics["at_high"]
     print(
-        f"{RULES_ONLY}: {high['per_day']:.1f} High a day, precision {high['precision']}, "
-        f"recall {high['recall']}; report in {args.out}"
+        f"{args.scorer}: {high['per_day']:.1f} High a day, precision {high['precision']}, "
+        f"recall {high['recall']}, PR-AUC {metrics['ranking']['pr_auc']}; report in {out}"
     )
     return 0
 
@@ -110,7 +124,8 @@ def main(argv: list[str] | None = None) -> int:
     ev.add_argument("--feature-config", type=Path, default=Path("config/features.toml"))
     ev.add_argument("--rules-config", type=Path, default=Path("config/rules.toml"))
     ev.add_argument("--evaluation-config", type=Path, default=Path("config/evaluation.toml"))
-    ev.add_argument("--out", type=Path, default=Path("reports/rules-only"))
+    ev.add_argument("--scorer", choices=SCORERS, default=RULES_ONLY)
+    ev.add_argument("--out", type=Path, help="report folder (default: reports/<scorer>)")
     ev.set_defaults(handler=_evaluate)
 
     args = parser.parse_args(argv)
