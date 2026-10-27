@@ -120,20 +120,25 @@ def test_fraud_discovered_after_the_model_goes_live_is_not_learned_as_fraud(mark
     assert not found_early.equals(baseline)
 
 
-def test_probabilities_are_calibrated_to_the_fraud_found_in_the_calibration_split(market: Market):
+def test_calibration_learns_from_the_calibration_split_and_training_does_not(market: Market):
+    # Legitimate-looking calibration-split Transfers, reported as fraud before day 14.
     tx = market.transactions
-    calibration = tx[(tx["occurred_at"] >= _at(8)) & (tx["occurred_at"] < _at(11))]
-    found = market.discoveries.loc[market.discoveries["discovered_at"] < _at(14), "transaction_id"]
-    fraud_share = calibration["transaction_id"].isin(found).mean()
+    quiet = tx[
+        (tx["occurred_at"] >= _at(8))
+        & (tx["occurred_at"] < _at(11))
+        & (tx["transaction_type"] == "transfer")
+        & ~tx["transaction_id"].isin(market.discoveries["transaction_id"])
+    ].nlargest(40, "amount")["transaction_id"]
     model = _train(market)
 
-    calibrated = model.score(market.inputs)
-    raw = model.raw_probability(market.inputs)
+    relabelled = _train(market, _discover(market, quiet, _at(13)))
 
+    calibrated = model.score(market.inputs)
     assert calibrated.between(0, 1).all()
-    # Isotonic calibration keeps the average of what it was fitted on, and only on that.
-    assert calibrated[calibration["transaction_id"]].mean() == pytest.approx(fraud_share)
-    assert raw[calibration["transaction_id"]].mean() != pytest.approx(fraud_share, rel=0.1)
+    pd.testing.assert_series_equal(
+        relabelled.raw_probability(market.inputs), model.raw_probability(market.inputs)
+    )
+    assert not relabelled.score(market.inputs).equals(calibrated)
 
 
 def test_calibration_fits_the_calibration_labels_better_than_the_raw_probability(market: Market):
@@ -149,9 +154,24 @@ def test_calibration_fits_the_calibration_labels_better_than_the_raw_probability
     def brier(probability: pd.Series) -> float:
         return float(((probability.to_numpy() - fraud) ** 2).mean())
 
-    # Isotonic regression is the best monotone fit to its labels, and the raw probability is
-    # one such monotone fit, so on those labels calibration can only do better.
+    # Class weighting tilts the raw probability towards fraud; calibration is fitted to these
+    # labels and brings it back to how often they say fraud happens.
     assert brier(model.score(inputs)) < brier(model.raw_probability(inputs))
+
+
+def test_calibration_keeps_the_model_s_ranking(market: Market):
+    model = _train(market)
+    raw = model.raw_probability(market.inputs)
+    calibrated = model.score(market.inputs)
+    # Beyond the lowest and highest calibration points the probability is flat.
+    inside = (calibrated > calibrated.min()) & (calibrated < calibrated.max())
+
+    ranked = calibrated[raw[inside].sort_values(kind="stable").index]
+
+    # A step function would put whole bands of Transactions on one probability, and an Alert
+    # budget threshold can only take or leave a step whole.
+    assert ranked.is_monotonic_increasing
+    assert ranked.nunique() == raw[inside].nunique()
 
 
 def test_nothing_after_the_calibration_split_shapes_the_model(market: Market):

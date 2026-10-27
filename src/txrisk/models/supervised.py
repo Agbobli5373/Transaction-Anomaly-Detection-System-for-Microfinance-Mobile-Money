@@ -18,10 +18,43 @@ from txrisk.evaluation import EvaluationConfig, Split, split_of, training_labels
 from txrisk.models.inputs import model_inputs
 
 
+def _raw_probability(classifier: lgb.LGBMClassifier, inputs: pd.DataFrame) -> np.ndarray:
+    rows = inputs[classifier.feature_name_].to_numpy(dtype=np.float64)
+    return np.asarray(classifier.booster_.predict(rows))
+
+
+@dataclass(frozen=True)
+class CentredIsotonic:
+    """Isotonic calibration with each flat step replaced by its centre point.
+
+    Plain isotonic regression is a step function: whole bands of raw probabilities share one
+    calibrated value, which throws away the model's ranking inside each step and leaves an
+    Alert budget threshold able only to take or leave a step whole. Joining the centres of the
+    steps with straight lines keeps the same fit to the labels in each step's middle while
+    staying strictly increasing between the lowest and highest centre; beyond those it is flat.
+    """
+
+    raw: np.ndarray  # each step's centre, as a raw probability
+    probability: np.ndarray  # each step's calibrated probability
+
+    @classmethod
+    def fit(cls, raw: np.ndarray, fraud: np.ndarray) -> "CentredIsotonic":
+        isotonic = IsotonicRegression(out_of_bounds="clip").fit(raw, fraud)
+        # The fitted points are each step's two ends; consecutive points with one value are a step.
+        x, y = isotonic.X_thresholds_, isotonic.y_thresholds_
+        starts = np.r_[True, np.diff(y) != 0]
+        step = np.cumsum(starts) - 1
+        centres = np.bincount(step, weights=x) / np.bincount(step)
+        return cls(raw=centres, probability=y[starts])
+
+    def predict(self, raw: np.ndarray) -> np.ndarray:
+        return np.asarray(np.interp(raw, self.raw, self.probability), dtype=np.float64)
+
+
 @dataclass(frozen=True)
 class SupervisedModel:
     classifier: lgb.LGBMClassifier
-    calibrator: IsotonicRegression
+    calibrator: CentredIsotonic
 
     def raw_probability(self, inputs: pd.DataFrame) -> pd.Series:
         """The classifier's own probability, before calibration, indexed like `inputs`.
@@ -30,8 +63,7 @@ class SupervisedModel:
         probability. Predicting with the booster on a plain array, in the fitted column order,
         skips the scikit-learn wrapper's checks, which cost far more than the trees for one row.
         """
-        rows = inputs[self.classifier.feature_name_].to_numpy(dtype=np.float64)
-        fraud = np.asarray(self.classifier.booster_.predict(rows))
+        fraud = _raw_probability(self.classifier, inputs)
         return pd.Series(fraud, index=inputs.index, name="raw_probability")
 
     def score(self, inputs: pd.DataFrame) -> pd.Series:
@@ -66,6 +98,7 @@ def train_supervised(
     """Fit on the train split and calibrate on the calibration split.
 
     Both use the labels known when the evaluation split starts, the day the model goes live.
+    Calibration is centred isotonic, so the probability keeps the classifier's ranking.
     """
     cutoff = pd.Timestamp(period_start, tz="UTC") + pd.Timedelta(
         days=config.splits.evaluation.start
@@ -82,7 +115,6 @@ def train_supervised(
         verbose=-1,
     )
     classifier.fit(x, y)
-    model = SupervisedModel(classifier, IsotonicRegression(out_of_bounds="clip"))
     x, y = _labelled(inputs, labels, split, Split.CALIBRATION)
-    model.calibrator.fit(model.raw_probability(x).to_numpy(), y.to_numpy())
-    return model
+    calibrator = CentredIsotonic.fit(_raw_probability(classifier, x), y.to_numpy(np.float64))
+    return SupervisedModel(classifier, calibrator)
