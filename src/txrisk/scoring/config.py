@@ -43,6 +43,9 @@ class AgentStructuring(_Rule):
 
 class AboveMedian(_Rule):
     above_median_multiple: float = Field(gt=0)
+    # A younger Wallet is still settling into its usual amounts and Counterparties, so a large
+    # amount against its short history says little.
+    min_wallet_age_days: float = Field(ge=0)
 
 
 class NearKycLimit(_Rule):

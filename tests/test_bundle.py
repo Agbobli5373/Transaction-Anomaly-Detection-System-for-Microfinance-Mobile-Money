@@ -124,6 +124,19 @@ def test_rule_scores_from_a_feature_table_match_the_scoring_service(market: Mark
     )
 
 
+def test_rule_scores_ignore_the_usual_amount_in_a_wallets_first_30_days(market: Market):
+    inputs = model_inputs(market.transactions, market.features)
+    codes = rule_scores_table(market.transactions, market.features, RULES)["rule_codes"]
+    young = inputs["wallet_age_days"].to_numpy() < 30
+    outgoing = (market.transactions["direction"] == "out").to_numpy()
+    large = inputs["amount_to_median_30d"] > RULES.rules.AMOUNT_VS_MEDIAN.above_median_multiple
+
+    assert (young & outgoing & large.to_numpy()).any()
+    usual_amount = codes.str.contains("AMOUNT_VS_MEDIAN|FIRST_TIME_LARGE_TRANSFER", regex=True)
+    assert not usual_amount[young].any()
+    assert usual_amount[~young].any()
+
+
 def test_the_bundle_records_which_days_fitted_what(bundle: ModelBundle):
     assert bundle.fitted_on == {
         "models": [0, 8],
