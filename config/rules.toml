@@ -40,13 +40,19 @@ severity = "high"
 min_share_of_limit = 0.90
 min_near_limit_cash_outs_24h = 5
 
+# Both rules compare an amount with the Wallet's own usual amount, so neither fires in a Wallet's
+# first 30 days. On the training and calibration days, 6 of their 2,716 hits on new Wallets were
+# fraud, against 1 in 15 (FIRST_TIME_LARGE_TRANSFER) and 1 in 50 (AMOUNT_VS_MEDIAN) on older
+# Wallets. See docs/evaluation/stacked.md, New Wallets.
 [rules.FIRST_TIME_LARGE_TRANSFER]
 severity = "medium"
 above_median_multiple = 3
+min_wallet_age_days = 30
 
 [rules.AMOUNT_VS_MEDIAN]
 severity = "medium"
 above_median_multiple = 5
+min_wallet_age_days = 30
 
 [rules.NEAR_KYC_LIMIT]
 severity = "low"

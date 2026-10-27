@@ -53,17 +53,26 @@ def routine(days: int = 6) -> list[Transaction]:
 class _Wallets(dict[str, Wallet]):
     """Every Wallet is registered on 1 January, on the minimum tier unless told otherwise."""
 
-    def __init__(self, tiers: dict[str, str]) -> None:
+    def __init__(self, tiers: dict[str, str], registered: dict[str, datetime]) -> None:
         super().__init__()
         self.tiers = tiers
+        self.registered = registered
 
     def __missing__(self, wallet_id: str) -> Wallet:
-        return Wallet(registered_at=REGISTERED, kyc_tier=self.tiers.get(wallet_id, "minimum"))
+        return Wallet(
+            registered_at=self.registered.get(wallet_id, REGISTERED),
+            kyc_tier=self.tiers.get(wallet_id, "minimum"),
+        )
 
 
 class Market:
-    def __init__(self, *, tiers: dict[str, str] | None = None) -> None:
-        self.history = ReplayHistory(_Wallets(tiers or {}))
+    def __init__(
+        self,
+        *,
+        tiers: dict[str, str] | None = None,
+        registered: dict[str, datetime] | None = None,
+    ) -> None:
+        self.history = ReplayHistory(_Wallets(tiers or {}, registered or {}))
 
     def record(self, *transactions: Transaction) -> "Market":
         for t in transactions:
