@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test check generate features
+.PHONY: install lint format typecheck test check generate features evaluate
 
 install:
 	uv sync
