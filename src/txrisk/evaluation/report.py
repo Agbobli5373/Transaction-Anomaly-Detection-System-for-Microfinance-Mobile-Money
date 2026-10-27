@@ -32,9 +32,14 @@ def _wallet_age_band(age_days: pd.Series, edges: list[int]) -> pd.Series:
     return bands.astype(str)
 
 
-def _segments(frame: pd.DataFrame, flagged: pd.Series) -> dict[str, dict[str, Any]]:
+SEGMENTS = ("region", "kyc_tier", "channel", "wallet_age_band")
+
+
+def _segments(
+    frame: pd.DataFrame, flagged: pd.Series, names: tuple[str, ...] = SEGMENTS
+) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
-    for segment in ("region", "kyc_tier", "channel", "wallet_age_band"):
+    for segment in names:
         groups: dict[str, Any] = {}
         for value, rows in frame.groupby(segment, sort=True):
             metrics = at_threshold(rows["fraud"], flagged[rows.index])
@@ -104,12 +109,46 @@ def evaluate(
     frame["day"] = frame["occurred_at"].dt.floor("D")
     age = (frame["occurred_at"] - frame["registered_at"]).dt.total_seconds() / 86_400
     frame["wallet_age_band"] = _wallet_age_band(age, config.wallet_age_band_edges)
-    high = frame["risk_band"] == "High"
     discovered = frame["transaction_id"].isin(
         set(discoveries.loc[discoveries["discovered_at"] < end, "transaction_id"])
     )
-    days = window.end - window.start
+    return report_metrics(
+        frame,
+        scores,
+        config=config,
+        scorer=scorer,
+        out=out,
+        days=window.end - window.start,
+        discovered=discovered,
+        eventually=frame["transaction_id"].isin(set(discoveries["transaction_id"])),
+        segments=SEGMENTS,
+    )
 
+
+def report_metrics(
+    frame: pd.DataFrame,
+    scores: pd.DataFrame,
+    *,
+    config: EvaluationConfig,
+    scorer: str,
+    out: Path,
+    days: float,
+    discovered: pd.Series,
+    eventually: pd.Series,
+    segments: tuple[str, ...],
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The metrics of `scores` over the evaluation `frame`, written to `out` and returned.
+
+    `frame` holds one row per evaluated Transaction: its transaction_id, `day`, the `fraud`
+    Ground truth, a `scenario` for the fraud rows, the scorer's `risk_score` and `risk_band` and a
+    column for each of `segments`. `days` is how many days it spans. `discovered` marks the
+    Transactions whose fraud the operation would know by the end, and `eventually` those whose
+    fraud is ever discovered. `extra` adds top-level entries. Shared with the PaySim benchmark so
+    both report the same way.
+    """
+    window = config.splits.evaluation
+    high = frame["risk_band"] == "High"
     at_high = at_threshold(frame["fraud"], high)
     metrics: dict[str, Any] = {
         "scorer": scorer,
@@ -144,13 +183,13 @@ def evaluate(
                 frame.loc[discovered, "fraud"], high[discovered]
             ).recall,
         },
-        "segments": _segments(frame, high),
+        "segments": _segments(frame, high, segments),
+        **(extra or {}),
     }
     if "fraud_probability" in scores.columns:
         # Calibration is fitted to Fraud labels, so the probability it gives is the chance of
         # fraud that gets discovered: judged against every Fraud discovery in the dataset,
         # however late. Against Ground truth it runs low by the share never discovered.
-        eventually = frame["transaction_id"].isin(set(discoveries["transaction_id"]))
         kinds = [
             (kind, column)
             for kind, column in (("raw", "raw_probability"), ("calibrated", "fraud_probability"))
