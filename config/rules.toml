@@ -1,0 +1,59 @@
+# Rules-only scoring: thresholds for each rule and how Rule hits combine into a Risk score.
+# Stacking with the models (ticket #11) replaces the weights and bands; the rules stay.
+
+# At most this many Reasons are returned per Risk score.
+max_reasons = 3
+# A Critical rule hit puts the Risk score at least this high, inside the High band.
+critical_floor = 90
+
+# How much one hit of each severity adds; hits combine as 1 - product(1 - weight).
+[severity_weights]
+low = 0.10
+medium = 0.25
+high = 0.50
+critical = 0.90
+
+# The Risk score (0-100) at which each band starts; below Medium is Low.
+[bands]
+medium = 20
+high = 50
+
+[rules.SIM_SWAP_DRAIN]
+severity = "critical"
+within_hours = 24
+min_share_of_balance = 0.5
+
+[rules.NEW_DEVICE_BURST]
+severity = "high"
+device_new_within_minutes = 60
+min_new_counterparty_transfers = 3
+
+[rules.MULE_CASHOUT]
+severity = "high"
+min_distinct_senders_24h = 10
+
+[rules.AGENT_STRUCTURING]
+severity = "high"
+# Matches near_limit_share in config/features.toml: at least 90% of the KYC tier limit.
+min_share_of_limit = 0.90
+min_near_limit_cash_outs_24h = 5
+
+[rules.FIRST_TIME_LARGE_TRANSFER]
+severity = "medium"
+above_median_multiple = 3
+
+[rules.AMOUNT_VS_MEDIAN]
+severity = "medium"
+above_median_multiple = 5
+
+[rules.NEAR_KYC_LIMIT]
+severity = "low"
+min_share_of_limit = 0.95
+
+[rules.NEW_REGION]
+severity = "low"
+
+[rules.ODD_HOUR]
+severity = "low"
+night_ends_at_hour = 5
+max_night_share = 0.05

@@ -13,6 +13,8 @@ _DAY = timedelta(days=1)
 DEFAULT_MIN_HISTORY = 5
 # How far back the Profile reaches for the median amount, hours of day and regions.
 _PROFILE_WINDOW = timedelta(days=30)
+# Night is from midnight up to, but not including, 05:00.
+_NIGHT_ENDS_AT_HOUR = 5
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,8 @@ class SubjectWalletFeatures:
     new_counterparty: bool | None = None
     unusual_hour: bool | None = None
     new_region_30d: bool | None = None
+    # Share of the last 30 days' Transactions made between 00:00 and 05:00.
+    night_share_30d: float | None = None
 
 
 def _since(transactions: Sequence[Transaction], start: datetime) -> Sequence[Transaction]:
@@ -79,4 +83,9 @@ def subject_wallet_features(
         new_counterparty=all(t.counterparty_id != transaction.counterparty_id for t in past),
         unusual_hour=all(t.occurred_at.hour not in nearby_hours for t in profile),
         new_region_30d=all(t.region != transaction.region for t in profile),
+        night_share_30d=(
+            sum(t.occurred_at.hour < _NIGHT_ENDS_AT_HOUR for t in profile) / len(profile)
+            if profile
+            else None
+        ),
     )
