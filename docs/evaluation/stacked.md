@@ -90,29 +90,30 @@ Each Risk assessment gives up to three Reasons. Critical rule hits come first; a
 - **A model input** counts for its TreeSHAP contribution, weighted as the stacker weighs its model:
   - For the supervised model, this is LightGBM's own contribution to the raw log-odds.
   - For the Isolation Forest, SHAP explains the average path length. Unusualness is 2^(−path length / c), so each Transaction's rise in Anomaly score above a typical one is shared out in proportion to its path-length contributions.
-- **Inputs that measure what a rule measures** share its code (`AMOUNT_VS_MEDIAN`, `NEAR_KYC_LIMIT`, `NEW_REGION`, `AGENT_STRUCTURING`). They become one Reason, in the rule's words.
+- **Inputs that measure what a rule measures** name that rule. When the rule fired, the input's push joins the rule's Reason, in the rule's words, so one fact is never given twice; otherwise the input keeps its own code. For example, `receiver_fan_in_24h` joins `MULE_CASHOUT` when that rule fired, and reads as `RECEIVER_FAN_IN` on a Transfer the rule doesn't cover.
+- **Messages state the value without judging it** (`WALLET_AGE`: "Wallet registered 400 days ago"), because the model can be pushed up by a long history as well as a short one. A count of zero is never a Reason.
 - **Inputs that only say what kind of Transaction it is** (its type, channel and direction) give no Reason.
 
 The riskiest evaluation Transactions, by scenario:
 
 | Scenario | Risk score | Reasons |
 |---|---|---|
-| SIM-swap takeover | 99.29 | `SIM_SWAP_DRAIN` Moved 99% of the balance 11.7 hours after a SIM swap · `RECEIVER_FAN_IN` The receiving Wallet got money from 5 different Wallets in 24 hours · `AMOUNT_VS_MEDIAN` Amount is 5.2x this Wallet's 30-day median |
-| Account takeover drain | 95.37 | `NEW_DEVICE_BURST` 3 Transfers to new Counterparties within an hour, from a device first used 15 minutes ago · `AMOUNT_VS_MEDIAN` Amount is 6.1x this Wallet's 30-day median · `FIRST_TIME_LARGE_TRANSFER` Transfer of 6.1x the usual amount to a first-time recipient |
-| Mule fan-in | 91.54 | `RECEIVER_FAN_IN` The receiving Wallet got money from 17 different Wallets in 24 hours · `MULE_CASHOUT` Cash-out after receiving from 17 different Wallets in 24 hours · `AMOUNT_VS_MEDIAN` Amount is 76.2x this Wallet's 30-day median |
-| Social-engineering push | 84.33 | `LARGE_AMOUNT` Amount of 5,000 GHS · `AMOUNT_VS_MEDIAN` Amount is 78.3x this Wallet's 30-day median · `FIRST_TIME_LARGE_TRANSFER` Transfer of 78.3x the usual amount to a first-time recipient |
-| Agent structuring | 17.56 | `AGENT_STRUCTURING` 5 Cash-outs just under the limit at this Agent in 24 hours · `AMOUNT_VS_MEDIAN` Amount is 16.0x this Wallet's 30-day median · `LARGE_AMOUNT` Amount of 978 GHS |
-| Reversal scam | 15.18 | `AMOUNT_VS_MEDIAN` Amount is 8.2x this Wallet's 30-day median · `FIRST_TIME_LARGE_TRANSFER` Transfer of 8.2x the usual amount to a first-time recipient · `TIME_SINCE_LAST` 9 minutes since this Wallet's last Transaction |
-| Legitimate | 66.48 | `SIM_SWAP_DRAIN` Moved 100% of the balance 0.1 hours after a SIM swap · `RECENT_SIM_SWAP` SIM swapped 5 minutes earlier · `AMOUNT_VS_MEDIAN` Amount is 6.1x this Wallet's 30-day median |
+| SIM-swap takeover | 99.29 | `SIM_SWAP_DRAIN` Moved 99% of the balance 11.7 hours after a SIM swap · `RECEIVER_FAN_IN` The receiving Wallet got money from 5 different Wallets in 24 hours · `FIRST_TIME_LARGE_TRANSFER` Transfer of 5.2x the usual amount to a first-time recipient |
+| Account takeover drain | 95.37 | `NEW_DEVICE_BURST` 3 Transfers to new Counterparties within an hour, from a device first used 15 minutes ago · `FIRST_TIME_LARGE_TRANSFER` Transfer of 6.1x the usual amount to a first-time recipient · `AMOUNT_VS_MEDIAN` Amount is 6.1x this Wallet's 30-day median |
+| Mule fan-in | 91.54 | `MULE_CASHOUT` Cash-out after receiving from 17 different Wallets in 24 hours · `AMOUNT_VS_MEDIAN` Amount is 76.2x this Wallet's 30-day median · `SHARE_OF_BALANCE` Moves 100% of the balance |
+| Social-engineering push | 84.33 | `FIRST_TIME_LARGE_TRANSFER` Transfer of 78.3x the usual amount to a first-time recipient · `AMOUNT` Amount of 5,000 GHS · `AMOUNT_VS_MEDIAN` Amount is 78.3x this Wallet's 30-day median |
+| Agent structuring | 17.56 | `AGENT_STRUCTURING` 5 Cash-outs just under the limit at this Agent in 24 hours · `AMOUNT_VS_MEDIAN` Amount is 16.0x this Wallet's 30-day median · `AMOUNT` Amount of 978 GHS |
+| Reversal scam | 15.18 | `FIRST_TIME_LARGE_TRANSFER` Transfer of 8.2x the usual amount to a first-time recipient · `AMOUNT_VS_MEDIAN` Amount is 8.2x this Wallet's 30-day median · `TIME_SINCE_LAST` 9 minutes since this Wallet's last Transaction |
+| Legitimate | 66.48 | `SIM_SWAP_DRAIN` Moved 100% of the balance 0.1 hours after a SIM swap · `AMOUNT_VS_MEDIAN` Amount is 6.1x this Wallet's 30-day median · `DEVICE_AGE` From a device first used 100.3 days ago |
 
-The legitimate one is a real owner who swapped their SIM and moved everything at once. It is exactly what `SIM_SWAP_DRAIN` exists to stop, and it is why that rule is Critical.
+The legitimate one is a real owner who swapped their SIM and moved everything at once. It is exactly what `SIM_SWAP_DRAIN` exists to stop, and it is why that rule is Critical. A Critical rule hit is floored at the bundle's High threshold, not at the rules-only `critical_floor` of 90, because the stacked Risk score is on a different scale.
 
 In a random 400 of the High alerts, every one had at least one Reason. The commonest first Reasons were:
 
-- `AMOUNT_VS_MEDIAN` (257)
-- `FIRST_TIME_LARGE_TRANSFER` (65)
+- `AMOUNT_VS_MEDIAN` (191)
+- `FIRST_TIME_LARGE_TRANSFER` (139)
 - `SIM_SWAP_DRAIN` (23)
-- `RECEIVER_FAN_IN` (19)
+- `RECEIVER_FAN_IN` (16)
 
 ## Training and scoring time
 

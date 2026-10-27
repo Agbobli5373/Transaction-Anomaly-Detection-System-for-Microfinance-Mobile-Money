@@ -1,6 +1,7 @@
 """Risk band thresholds set from the Alert budget, on scores alone."""
 
 import pandas as pd
+import pytest
 
 from txrisk.evaluation.thresholds import BandThresholds, band, budget_thresholds
 
@@ -25,3 +26,19 @@ def test_bands_follow_the_thresholds():
         "Medium",
         "Low",
     ]
+
+
+def test_when_critical_rule_hits_use_up_the_budget_no_scored_transaction_is_high():
+    scores = pd.Series(range(100, 0, -5))
+
+    # 4 Alerts of budget, already taken by 5 Critical rule hits.
+    thresholds = budget_thresholds(scores, days=2, budget_per_day=2, already_high=5)
+
+    assert (band(scores, thresholds) != "High").all()
+    # Medium still covers three times the budget.
+    assert (band(scores, thresholds) == "Medium").sum() == 12
+
+
+def test_thresholds_need_scores_to_set_them_from():
+    with pytest.raises(ValueError, match="no scores"):
+        budget_thresholds(pd.Series(dtype=float), days=2, budget_per_day=2)

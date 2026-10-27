@@ -136,6 +136,12 @@ def test_the_stacked_risk_score_is_judged_like_any_other(stacked: Path):
     assert scores.loc[scores["critical"], "risk_band"].eq("High").all()
 
 
+def test_the_stacked_scores_name_the_bundle_txrisk_train_gives(stacked: Path, trained: Path):
+    scores = pd.read_parquet(stacked / "scores.parquet")
+
+    assert set(scores["model_version"]) == {_bundle_folder(trained).name}
+
+
 def test_each_component_is_kept_beside_the_stacked_risk_score(stacked: Path):
     scores = pd.read_parquet(stacked / "scores.parquet")
 
