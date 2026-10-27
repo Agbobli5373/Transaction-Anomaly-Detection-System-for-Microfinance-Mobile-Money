@@ -6,7 +6,17 @@ from datetime import UTC, datetime, time
 import numpy as np
 import pandas as pd
 
+from txrisk.generator.benign import (
+    BENIGN,
+    BenignAnomaly,
+    Trips,
+    benign_candidates,
+    festive_multiples,
+    plan_new_phones,
+    plan_trips,
+)
 from txrisk.generator.config import FraudScenario, GeneratorConfig
+from txrisk.generator.discovery import discover
 from txrisk.generator.fraud import FraudContext, plan_fraud
 from txrisk.generator.market import (
     CASH_IN,
@@ -31,12 +41,15 @@ class Activity:
     transactions: pd.DataFrame
     sim_swaps: pd.DataFrame
     ground_truth: pd.DataFrame
+    fraud_discoveries: pd.DataFrame
+    benign_anomalies: pd.DataFrame
 
 
 def _everyday_candidates(
     config: GeneratorConfig,
     population: Population,
     wallet_contacts: np.ndarray,
+    trips: Trips,
     rng: np.random.Generator,
 ) -> pd.DataFrame:
     """Intended legitimate Transactions before balances and limits are applied."""
@@ -55,14 +68,15 @@ def _everyday_candidates(
     days: list[pd.DataFrame] = []
     for day in range(config.period.days):
         day_start = start + pd.Timedelta(days=day)
-        rate = behaviour.mean_transactions_per_day
+        busier, larger = festive_multiples(config, day_start.date())
+        rate = behaviour.mean_transactions_per_day * busier
         if day_start.day_of_week >= 5:
             rate *= behaviour.weekend_activity_factor
         subject = np.repeat(np.arange(n_wallets), rng.poisson(rate, n_wallets))
         n = len(subject)
         seconds = rng.choice(24, n, p=hour_weights) * 3600 + rng.integers(0, 3600, n)
         type_index = rng.choice(len(TYPES), n, p=type_weights)
-        intended = medians[type_index] * rng.lognormal(0.0, _AMOUNT_SPREAD, n)
+        intended = medians[type_index] * larger * rng.lognormal(0.0, _AMOUNT_SPREAD, n)
         picks = wallet_contacts[subject, rng.integers(0, wallet_contacts.shape[1], n)]
         frame = pd.DataFrame(
             {
@@ -79,7 +93,11 @@ def _everyday_candidates(
             home[subject],
             rng.choice(len(regions), n, p=weights),
         )
+        # A Wallet holder away on a trip transacts where they are.
+        away = trips.away(subject, frame["occurred_at"].dt.tz_convert(None).to_numpy())
+        location = np.where(away, trips.region[subject], location)
         frame["location"] = location
+        frame["benign"] = np.where(away, BENIGN.index(BenignAnomaly.TRAVEL), -1)
         for column, members in local.items():
             frame[column] = local_pick(location, members, rng)
         frame["biller_id"] = rng.integers(0, len(population.billers), n)
@@ -97,6 +115,7 @@ def _everyday_candidates(
 
 def _in_time_order(candidates: pd.DataFrame, registered: np.ndarray) -> pd.DataFrame:
     """Sort candidates and drop any involving a Wallet that has not registered yet."""
+    candidates = candidates.assign(benign=candidates["benign"].fillna(-1).astype(np.int64))
     candidates = candidates.sort_values(
         ["occurred_at", "subject"], kind="stable", ignore_index=True
     )
@@ -192,7 +211,16 @@ def simulate(config: GeneratorConfig, population: Population, rng: np.random.Gen
 
     # First pass: everyday activity alone, to learn which Wallets usually hold money.
     everyday = _in_time_order(
-        _everyday_candidates(config, population, wallet_contacts, rng), registered
+        pd.concat(
+            [
+                _everyday_candidates(
+                    config, population, wallet_contacts, plan_trips(config, population, rng), rng
+                ),
+                benign_candidates(config, population, rng),
+            ],
+            ignore_index=True,
+        ),
+        registered,
     )
     _, everyday_before, everyday_settled = _settle(everyday, opening, single_limit, max_balance)
     usual_balance = (
@@ -226,6 +254,16 @@ def simulate(config: GeneratorConfig, population: Population, rng: np.random.Gen
     type_index = tx["type_index"].to_numpy()
     subject = tx["subject"].to_numpy()
 
+    # From a legitimate new phone onward, the holder uses it (and sometimes moves to the App).
+    phones = plan_new_phones(config, population, rng)
+    switched = tx["occurred_at"].dt.tz_convert(None).to_numpy() >= phones.switch_at[subject]
+    device = np.where(switched, phones.device[subject], wallet_device[subject])
+    channel = np.where(switched & phones.to_app[subject], "app", wallet_channel[subject])
+    benign = tx["benign"].to_numpy().copy()
+    own_phone = switched & tx["device"].isna().to_numpy()
+    first_on_new_phone = own_phone & ~pd.Series(subject).where(own_phone).duplicated().to_numpy()
+    benign[first_on_new_phone] = BENIGN.index(BenignAnomaly.NEW_PHONE)
+
     wallet_ids = wallets["wallet_id"].to_numpy()
     regions = np.asarray(list(config.market.regions))
     region = regions[tx["location"].to_numpy()]
@@ -245,8 +283,8 @@ def simulate(config: GeneratorConfig, population: Population, rng: np.random.Gen
             "subject_wallet_id": wallet_ids[subject],
             "direction": np.where(type_index == CASH_IN, "in", "out"),
             "subject_balance_before": balance_before[settled] / 100,
-            "channel": tx["channel"].fillna(pd.Series(wallet_channel[subject])).to_numpy(),
-            "device_id": tx["device"].fillna(pd.Series(wallet_device[subject])).to_numpy(),
+            "channel": tx["channel"].fillna(pd.Series(channel)).to_numpy(),
+            "device_id": tx["device"].fillna(pd.Series(device)).to_numpy(),
             "region": region,
         }
     )
@@ -283,4 +321,27 @@ def simulate(config: GeneratorConfig, population: Population, rng: np.random.Gen
         }
     )
     sim_swaps["occurred_at"] = pd.to_datetime(sim_swaps["occurred_at"], utc=True)
-    return Activity(transactions=transactions, sim_swaps=sim_swaps, ground_truth=ground_truth)
+    unusual = benign >= 0
+    benign_anomalies = pd.DataFrame(
+        {
+            "transaction_id": transactions["transaction_id"][unusual].to_numpy(),
+            "kind": np.asarray([b.value for b in BENIGN])[benign[unusual]],
+        }
+    ).astype({"transaction_id": "string", "kind": "string"})
+    fraud_discoveries = discover(
+        config,
+        ground_truth.merge(
+            transactions[
+                ["transaction_id", "subject_wallet_id", "transaction_type", "occurred_at"]
+            ],
+            on="transaction_id",
+        ),
+        rng,
+    )
+    return Activity(
+        transactions=transactions,
+        sim_swaps=sim_swaps,
+        ground_truth=ground_truth,
+        fraud_discoveries=fraud_discoveries,
+        benign_anomalies=benign_anomalies,
+    )

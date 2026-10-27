@@ -18,6 +18,11 @@ class Dataset:
     sim_swaps: pd.DataFrame
     # Which Transactions are fraudulent. Only offline evaluation may read it (ADR 0007).
     ground_truth: pd.DataFrame
+    # Complaints and chargebacks: how fraud comes to light, dated when it does. The running
+    # system may see these, from their discovery time onward.
+    fraud_discoveries: pd.DataFrame
+    # Which Transactions are legitimate but unusual, and why. Offline evaluation only.
+    benign_anomalies: pd.DataFrame
 
 
 def write_dataset(dataset: Dataset, out_dir: Path) -> None:

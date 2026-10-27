@@ -190,6 +190,10 @@ _Avoid_: Smurfing, agent collusion
 A Fraud scenario in which a deceived customer willingly sends an unusually large Transfer to a first-time recipient.
 _Avoid_: Scam, authorised push payment
 
+**Reversal scam**:
+A Fraud scenario in which a stranger sends a small Transfer as bait, claims it was a mistake, and gets the victim to send back more than they received.
+_Avoid_: Wrong-number scam, refund fraud
+
 **Benign anomaly**:
 Unusual but legitimate behaviour, such as a salary-day spike or a one-off large Payment.
 _Avoid_: False positive (that is a scoring outcome, not a behaviour)

@@ -6,7 +6,7 @@ from datetime import UTC, datetime, time
 import numpy as np
 import pandas as pd
 
-from txrisk.generator.config import FraudScenario, GeneratorConfig, Range
+from txrisk.generator.config import FraudScenario, GeneratorConfig, Range, SimSwapTakeover
 from txrisk.generator.market import (
     CASH_IN,
     CASH_OUT,
@@ -100,16 +100,48 @@ class _Planner:
     def count(self, value: Range) -> int:
         return int(self.rng.integers(round(value.low), round(value.high) + 1))
 
-    def instances(self, scenario: FraudScenario, transactions_per_instance: float) -> int:
-        """How many instances give this scenario its configured share of the fraud rate."""
+    def active_from(self, scenario: FraudScenario) -> float:
+        """The day a scenario starts: the drift day for the new variant, otherwise day 0."""
+        drift = self.config.fraud.drift
+        return float(drift.day) if scenario == drift.new_scenario else 0.0
+
+    def instances(
+        self,
+        scenario: FraudScenario,
+        transactions_per_instance: float,
+        last_day_margin: float = 1.0,
+    ) -> int:
+        """How many instances give this scenario its configured share of the fraud rate while it
+        is active. A scenario that never becomes active in the period gets none."""
         fraud = self.config.fraud
-        target = fraud.rate * self.context.everyday_transactions * fraud.scenarios.share(scenario)
+        days = self.config.period.days - last_day_margin
+        active = max(days - self.active_from(scenario), 0.0) / days
+        if active == 0:
+            return 0
+        share = fraud.scenarios.share(scenario) * active
+        target = fraud.rate * self.context.everyday_transactions * share
         return max(1, round(target / transactions_per_instance))
 
-    def moment(self, last_day_margin: float = 1.0) -> pd.Timestamp:
-        """A random moment in the period, leaving room for the instance to play out."""
-        seconds = self.rng.uniform(0, (self.config.period.days - last_day_margin) * 86_400)
+    def moment(self, scenario: FraudScenario, last_day_margin: float = 1.0) -> pd.Timestamp:
+        """A random moment while the scenario is active, leaving room for it to play out."""
+        first = self.active_from(scenario) * 86_400
+        seconds = self.rng.uniform(first, (self.config.period.days - last_day_margin) * 86_400)
         return self.start + pd.Timedelta(seconds=seconds)
+
+    def drifted(self, at: pd.Timestamp) -> bool:
+        return at >= self.start + pd.Timedelta(days=self.config.fraud.drift.day)
+
+    def sim_swap_params(self, at: pd.Timestamp) -> SimSwapTakeover:
+        """SIM-swap takeovers that begin after the drift day may follow a shifted pattern."""
+        drift = self.config.fraud.drift
+        shifted = drift.sim_swap_takeover
+        if (
+            shifted is not None
+            and drift.shifted_scenario == FraudScenario.SIM_SWAP_TAKEOVER
+            and self.drifted(at)
+        ):
+            return shifted
+        return self.config.fraud.scenarios.sim_swap_takeover
 
     def victim(self) -> int:
         """A Wallet worth defrauding that no other instance has targeted yet, where possible."""
@@ -231,7 +263,8 @@ class _Planner:
         params = self.config.fraud.scenarios.sim_swap_takeover
         for _ in range(self.instances(scenario, params.transactions.mean)):
             self.begin()
-            wallet, swapped = self.victim(), self.moment()
+            wallet, swapped = self.victim(), self.moment(scenario)
+            params = self.sim_swap_params(swapped)
             self.sim_swap(wallet, swapped)
             # The fraudster now receives the Wallet's PINs and OTPs on their own phone.
             device, channel = self.new_device(), str(self.rng.choice(["ussd", "app"]))
@@ -258,7 +291,7 @@ class _Planner:
         params = self.config.fraud.scenarios.account_takeover_drain
         for _ in range(self.instances(scenario, params.transactions.mean)):
             self.begin()
-            wallet, at = self.victim(), self.moment()
+            wallet, at = self.victim(), self.moment(scenario)
             count = self.count(params.transactions)
             burst = pd.Timedelta(minutes=self.uniform(params.burst_minutes))
             offsets = np.sort(self.rng.uniform(0, 1, count))
@@ -281,9 +314,9 @@ class _Planner:
         scenario = FraudScenario.MULE_FAN_IN
         params = self.config.fraud.scenarios.mule_fan_in
         per_instance = params.senders.mean + params.cash_outs.mean
-        for _ in range(self.instances(scenario, per_instance)):
+        for _ in range(self.instances(scenario, per_instance, last_day_margin=2.0)):
             self.begin()
-            start = self.moment(last_day_margin=2.0)
+            start = self.moment(scenario, last_day_margin=2.0)
             window = pd.Timedelta(hours=self.uniform(params.window_hours))
             senders = self.count(params.senders)
             # The mule is a stranger to every sender: scam victims paying who they were told to.
@@ -321,7 +354,7 @@ class _Planner:
             self.begin()
             agent = int(self.rng.integers(self.n_agents))
             agent_region = int(self.agent_region[agent])
-            start = self.moment()
+            start = self.moment(scenario)
             window = pd.Timedelta(hours=self.uniform(params.window_hours))
             for wallet in self.accomplices(self.count(params.cash_outs)):
                 at = start + window * float(self.rng.uniform(0, 1))
@@ -348,13 +381,41 @@ class _Planner:
                     require_exact=True,
                 )
 
+    def reversal_scam(self) -> None:
+        scenario = FraudScenario.REVERSAL_SCAM
+        params = self.config.fraud.scenarios.reversal_scam
+        for _ in range(self.instances(scenario, 2)):
+            self.begin()
+            victim, at = self.victim(), self.moment(scenario)
+            fraudster = self.strangers(victim, 1)[0]
+            bait = round(self.uniform(params.bait_amount) * 100)
+            # "Sorry, I sent that to you by mistake. Please send it back"... and more besides.
+            self.add(
+                scenario,
+                at,
+                fraudster,
+                TRANSFER,
+                int(self.home[fraudster]),
+                amount_pesewas=bait,
+                receiver=victim,
+            )
+            self.add(
+                scenario,
+                at + pd.Timedelta(minutes=self.uniform(params.reply_minutes)),
+                victim,
+                TRANSFER,
+                int(self.home[victim]),
+                amount_pesewas=round(bait * self.uniform(params.return_multiple)),
+                receiver=fraudster,
+            )
+
     def social_engineering_push(self) -> None:
         scenario = FraudScenario.SOCIAL_ENGINEERING_PUSH
         params = self.config.fraud.scenarios.social_engineering_push
         for _ in range(self.instances(scenario, 1)):
             self.begin()
             # The victim is persuaded and acts from their own phone: no device or Channel override.
-            wallet, at = self.victim(), self.moment()
+            wallet, at = self.victim(), self.moment(scenario)
             home = int(self.home[wallet])
             top_up = round(
                 self.uniform(params.top_up_multiple) * self.context.usual_balance[wallet]
@@ -394,6 +455,7 @@ def plan_fraud(
     planner.mule_fan_in()
     planner.agent_structuring()
     planner.social_engineering_push()
+    planner.reversal_scam()
 
     swaps = pd.concat(
         [

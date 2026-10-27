@@ -229,9 +229,12 @@ def test_fraud_rate_and_scenario_mix_match_the_config(
     rate = len(market_dataset.ground_truth) / len(market_dataset.transactions)
     mix = market_dataset.ground_truth["scenario"].value_counts(normalize=True)
 
+    # This market ends before the drift day, so the new variant never appears.
+    assert fraud.drift.day >= 30
     assert 0.5 * fraud.rate <= rate <= 1.5 * fraud.rate
     for scenario in FraudScenario:
-        assert abs(mix.get(scenario.value, 0) - fraud.scenarios.share(scenario)) < 0.1, scenario
+        expected = 0 if scenario == fraud.drift.new_scenario else fraud.scenarios.share(scenario)
+        assert abs(mix.get(scenario.value, 0) - expected) < 0.1, scenario
 
 
 def test_every_instance_draws_its_own_parameters(fraud_dataset: Dataset):
@@ -266,7 +269,12 @@ def test_a_tiny_market_still_generates_every_scenario(small_config: GeneratorCon
             "population": small_config.population.model_copy(
                 update={"wallets": 40, "agents": 3, "merchants": 3}
             ),
-            "fraud": small_config.fraud.model_copy(update={"rate": 0.2}),
+            "fraud": small_config.fraud.model_copy(
+                update={
+                    "rate": 0.2,
+                    "drift": small_config.fraud.drift.model_copy(update={"day": 10}),
+                }
+            ),
         }
     )
 
