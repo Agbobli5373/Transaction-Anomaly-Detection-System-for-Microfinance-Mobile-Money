@@ -21,8 +21,10 @@ from txrisk.generator import generate, load_config, write_dataset
 from txrisk.models.bundle import train_bundle
 from txrisk.models.registry import MODEL_NAME, log_bundle
 from txrisk.scoring import RULES_ONLY, load_rules_config
+from txrisk.store import create_engine, migrate, pending_migrations, seed
 
 PSEUDONYM_KEY_ENV = "TXRISK_PSEUDONYM_KEY"
+DATABASE_URL_ENV = "TXRISK_DATABASE_URL"
 
 
 def _generate(args: argparse.Namespace) -> int:
@@ -170,6 +172,51 @@ def _train(args: argparse.Namespace) -> int:
     return 0
 
 
+def _database_url(args: argparse.Namespace) -> str | None:
+    url = args.database_url or os.environ.get(DATABASE_URL_ENV)
+    if not url:
+        print(f"error: pass --database-url or set {DATABASE_URL_ENV}", file=sys.stderr)
+    return url
+
+
+def _migrate(args: argparse.Namespace) -> int:
+    url = _database_url(args)
+    if url is None:
+        return 2
+    applied = migrate(create_engine(url))
+    print(f"applied {', '.join(applied)}" if applied else "schema already up to date")
+    return 0
+
+
+def _seed(args: argparse.Namespace) -> int:
+    url = _database_url(args)
+    if url is None:
+        return 2
+    until_day = args.until_day
+    if until_day is None:
+        until_day = load_evaluation_config(args.evaluation_config).splits.evaluation.start
+    until = pd.Timestamp(load_config(args.config).period.start, tz="UTC") + pd.Timedelta(
+        days=until_day
+    )
+    engine = create_engine(url)
+    with engine.connect() as connection:
+        pending = pending_migrations(connection)
+    if pending:
+        print(f"error: run `txrisk migrate` first; pending: {', '.join(pending)}", file=sys.stderr)
+        return 1
+    counts = seed(engine, args.data, until=until.to_pydatetime())
+    stored = ", ".join(f"{n:,} {table}" for table, n in counts.items())
+    print(f"seeded history before day {until_day} ({until:%Y-%m-%d}): {stored}")
+    return 0
+
+
+def _serve(args: argparse.Namespace) -> int:
+    import uvicorn
+
+    uvicorn.run("txrisk.api:app_from_env", factory=True, host=args.host, port=args.port)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="txrisk")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -233,6 +280,29 @@ def main(argv: list[str] | None = None) -> int:
     )
     tr.add_argument("--no-mlflow", action="store_true", help="save the bundle only")
     tr.set_defaults(handler=_train)
+
+    mig = commands.add_parser("migrate", help="apply pending Postgres schema migrations")
+    mig.add_argument("--database-url", help=f"default: ${DATABASE_URL_ENV}")
+    mig.set_defaults(handler=_migrate)
+
+    sd = commands.add_parser(
+        "seed", help="load a dataset's parties, and its history before a day, into Postgres"
+    )
+    sd.add_argument("--data", type=Path, default=Path("data/generated"))
+    sd.add_argument("--database-url", help=f"default: ${DATABASE_URL_ENV}")
+    sd.add_argument("--config", type=Path, default=Path("config/generator.toml"))
+    sd.add_argument("--evaluation-config", type=Path, default=Path("config/evaluation.toml"))
+    sd.add_argument(
+        "--until-day",
+        type=int,
+        help="load SIM swaps and Transactions before this day (default: the evaluation start)",
+    )
+    sd.set_defaults(handler=_seed)
+
+    srv = commands.add_parser("serve", help="run the scoring API, configured by TXRISK_* variables")
+    srv.add_argument("--host", default="127.0.0.1")
+    srv.add_argument("--port", type=int, default=8000)
+    srv.set_defaults(handler=_serve)
 
     args = parser.parse_args(argv)
     handler = args.handler

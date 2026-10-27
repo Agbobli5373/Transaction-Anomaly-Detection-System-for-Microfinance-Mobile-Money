@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train
+.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train up down seed
 
 install:
 	uv sync
@@ -44,3 +44,14 @@ evaluate-stacked:
 # (mlflow.db, mlruns/). Browse it with: uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
 train:
 	uv run txrisk train --data data/generated --features data/features/features.parquet
+
+# The serving stack in Docker: Postgres, the migration job, then the API on :8000.
+up:
+	docker compose up --build --detach --wait api
+
+down:
+	docker compose down
+
+# Loads the parties and days 0-90 of data/generated into the compose Postgres as history.
+seed:
+	docker compose run --rm seed

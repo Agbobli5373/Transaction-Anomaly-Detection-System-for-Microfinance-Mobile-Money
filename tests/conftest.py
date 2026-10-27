@@ -1,8 +1,13 @@
+import itertools
+import os
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+import sqlalchemy as sa
 
 from txrisk.generator import GeneratorConfig, load_config
+from txrisk.store import create_engine, migrate
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "config" / "generator.toml"
 KEY = b"test-pseudonym-key"
@@ -24,3 +29,56 @@ def small_config(default_config: GeneratorConfig) -> GeneratorConfig:
             ),
         }
     )
+
+
+@pytest.fixture(scope="session")
+def postgres() -> Iterator[str]:
+    """The URL of a throwaway Postgres server, run in Docker by Testcontainers.
+
+    Without Docker the tests that need it are skipped locally, but fail in CI.
+    """
+    import docker
+    from testcontainers.community.postgres import PostgresContainer
+
+    try:
+        docker.from_env().ping()
+    except docker.errors.DockerException:
+        if os.environ.get("CI"):
+            raise
+        pytest.skip("Docker is not running")
+    with PostgresContainer("postgres:16-alpine", driver="psycopg") as container:
+        yield container.get_connection_url()
+
+
+def create_database(server_url: str, name: str, *, template: str | None = None) -> str:
+    admin = sa.create_engine(server_url, isolation_level="AUTOCOMMIT")
+    with admin.connect() as connection:
+        clause = f" TEMPLATE {template}" if template else ""
+        connection.execute(sa.text(f'CREATE DATABASE "{name}"{clause}'))
+    admin.dispose()
+    return sa.make_url(server_url).set(database=name).render_as_string(hide_password=False)
+
+
+_databases = itertools.count()
+
+
+@pytest.fixture(scope="session")
+def migrated_template(postgres: str) -> str:
+    """A migrated database to copy, so each test starts from a fresh schema in milliseconds."""
+    url = create_database(postgres, "migrated_template")
+    engine = create_engine(url)
+    migrate(engine)
+    engine.dispose()  # a template cannot be copied while anyone is connected to it
+    return "migrated_template"
+
+
+@pytest.fixture
+def empty_database(postgres: str) -> str:
+    """The URL of a new database that has never been migrated."""
+    return create_database(postgres, f"empty_{next(_databases)}")
+
+
+@pytest.fixture
+def database(postgres: str, migrated_template: str) -> str:
+    """The URL of a new database with every migration applied."""
+    return create_database(postgres, f"test_{next(_databases)}", template=migrated_template)
