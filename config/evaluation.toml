@@ -8,9 +8,11 @@ alert_budget_per_day = 100
 wallet_age_band_edges = [30, 180]
 
 # Days count from the period start (day 0 is its first day); each split includes its first day
-# and excludes its last.
+# and excludes its last. The first Champion model goes live on day 90, when only Transactions
+# before day 60 are old enough to have mature labels, so everything that needs labels is fitted
+# on days 0-60. Thresholds need only scores, so they use the most recent days (ADR 0008).
 [splits]
-train = [0, 60]
-calibration = [60, 75]
-thresholds = [75, 90]
+train = [0, 45]
+calibration = [45, 60]
+thresholds = [60, 90]
 evaluation = [90, 120]

@@ -16,7 +16,7 @@ def _at(day: float) -> pd.Timestamp:
 
 
 def test_each_transaction_falls_in_the_split_for_its_day():
-    occurred = pd.Series([_at(0), _at(59.99), _at(60), _at(74.5), _at(75), _at(89.9), _at(90)])
+    occurred = pd.Series([_at(0), _at(44.99), _at(45), _at(59.5), _at(60), _at(89.9), _at(90)])
 
     assert split_of(occurred, START, CONFIG).tolist() == [
         Split.TRAIN,
