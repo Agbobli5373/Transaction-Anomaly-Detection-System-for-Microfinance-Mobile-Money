@@ -10,5 +10,6 @@ Requires [uv](https://docs.astral.sh/uv/).
 uv sync
 cp .env.example .env   # then set TXRISK_PSEUDONYM_KEY to a long random value
 make generate          # writes the synthetic dataset to data/generated/
+make features          # writes point-in-time features to data/features/
 make check             # lint, type-check and test
 ```
