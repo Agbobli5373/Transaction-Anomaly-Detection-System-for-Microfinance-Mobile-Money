@@ -130,9 +130,71 @@ cash_outs = [5, 12]
 window_hours = [4, 24]
 limit_share = [0.9, 0.995]
 
+# Introduced by drift (see [fraud.drift]); its share applies only once it is active.
+[fraud.scenarios.reversal_scam]
+share = 0.15
+bait_amount = [20, 100]
+reply_minutes = [10, 90]
+return_multiple = [3, 10]
+
 [fraud.scenarios.social_engineering_push]
 share = 0.15
 # Told to "secure" their money, the victim first tops up by a multiple of their usual balance.
 top_up_multiple = [2, 5]
 top_up_lead_minutes = [10, 120]
 drain_share = [0.5, 0.95]
+
+# How fraud comes to light without the system: the victim complains or disputes a charge.
+[fraud.discovery]
+delay_days = [1, 30]
+chargeback_share = 0.3
+
+# Chance that a victim of each scenario ever reports it. Agent structuring has no victim to complain.
+[fraud.discovery.probability]
+sim_swap_takeover = 0.8
+account_takeover_drain = 0.7
+mule_fan_in = 0.5
+agent_structuring = 0.05
+social_engineering_push = 0.6
+reversal_scam = 0.6
+
+# From this day of the period, a new scenario appears and an existing one changes shape.
+[fraud.drift]
+day = 100
+new_scenario = "reversal_scam"
+shifted_scenario = "sim_swap_takeover"
+
+[fraud.drift.sim_swap_takeover]
+delay_hours = [24, 72]
+transactions = [3, 6]
+drain_share = [0.2, 0.4]
+
+# Unusual but legitimate behaviour. None of it is fraud.
+[benign]
+# Wallets paid monthly bring the money in as a Cash-in around pay day.
+salaried_share = 0.15
+pay_day = [25, 28]
+pay_amount = [400, 3000]
+# One-off large Payments (a phone, school fees), topped up just before.
+large_payment_share = 0.05
+large_payment_multiple = [5, 20]
+# Trips: for a few days a Wallet transacts in another region.
+travel_share = 0.08
+travel_days = [2, 10]
+# A legitimate new phone, used from then on; some move to the App with it.
+new_phone_share = 0.04
+new_phone_app_share = 0.5
+
+[[benign.festive]]
+name = "New Year"
+start = "2026-01-01"
+end = "2026-01-02"
+activity_multiple = 1.6
+amount_multiple = 1.4
+
+[[benign.festive]]
+name = "Easter"
+start = "2026-04-03"
+end = "2026-04-06"
+activity_multiple = 1.4
+amount_multiple = 1.3

@@ -31,4 +31,6 @@ def generate(config: GeneratorConfig, seed: int, key: bytes) -> Dataset:
         transactions=activity.transactions,
         sim_swaps=activity.sim_swaps,
         ground_truth=activity.ground_truth,
+        fraud_discoveries=activity.fraud_discoveries,
+        benign_anomalies=activity.benign_anomalies,
     )

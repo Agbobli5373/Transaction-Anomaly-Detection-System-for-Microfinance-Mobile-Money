@@ -15,6 +15,8 @@ OUTPUT_FILES = [
     "transactions",
     "sim_swaps",
     "ground_truth",
+    "fraud_discoveries",
+    "benign_anomalies",
 ]
 COUNTERPARTY_COLUMNS = {
     "counterparty_wallet_id": "wallets",
@@ -256,14 +258,21 @@ def test_channel_is_ussd_or_app_with_ussd_the_majority(dataset: Dataset):
     assert 0.5 < (channels == "ussd").mean() < 0.9
 
 
-def test_in_legitimate_activity_each_wallet_uses_its_own_single_device(dataset: Dataset):
+def test_in_legitimate_activity_each_wallet_uses_its_own_device_until_a_new_phone(
+    dataset: Dataset,
+):
     tx = dataset.transactions
     legitimate = tx[~tx["transaction_id"].isin(dataset.ground_truth["transaction_id"])]
     devices = legitimate.groupby("subject_wallet_id")["device_id"].nunique()
     owners = legitimate.groupby("device_id")["subject_wallet_id"].nunique()
+    new_phone = dataset.benign_anomalies.loc[
+        dataset.benign_anomalies["kind"] == "new_phone", "transaction_id"
+    ]
+    switched = set(tx.loc[tx["transaction_id"].isin(new_phone), "subject_wallet_id"])
 
-    assert (devices == 1).all()
     assert (owners == 1).all()
+    assert (devices <= 2).all()
+    assert set(devices[devices == 2].index) <= switched
 
 
 def test_transactions_mostly_happen_in_the_home_region_at_local_counterparties(

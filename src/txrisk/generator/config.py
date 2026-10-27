@@ -77,6 +77,7 @@ class FraudScenario(StrEnum):
     MULE_FAN_IN = "mule_fan_in"
     AGENT_STRUCTURING = "agent_structuring"
     SOCIAL_ENGINEERING_PUSH = "social_engineering_push"
+    REVERSAL_SCAM = "reversal_scam"
 
 
 class Range(_Frozen):
@@ -134,6 +135,12 @@ class AgentStructuring(_Scenario):
     limit_share: Range
 
 
+class ReversalScam(_Scenario):
+    bait_amount: Range
+    reply_minutes: Range
+    return_multiple: Range
+
+
 class SocialEngineeringPush(_Scenario):
     top_up_multiple: Range
     top_up_lead_minutes: Range
@@ -146,10 +153,39 @@ class FraudScenarios(_Frozen):
     mule_fan_in: MuleFanIn
     agent_structuring: AgentStructuring
     social_engineering_push: SocialEngineeringPush
+    reversal_scam: ReversalScam
 
     def share(self, scenario: FraudScenario) -> float:
         configured: _Scenario = getattr(self, scenario.value)
         return configured.share
+
+
+class Discovery(_Frozen):
+    delay_days: Range
+    chargeback_share: float = Field(ge=0, le=1)
+    probability: dict[FraudScenario, float]
+
+    @model_validator(mode="after")
+    def _every_scenario_has_a_probability(self) -> "Discovery":
+        missing = set(FraudScenario) - set(self.probability)
+        if missing:
+            raise ValueError(f"discovery missing probabilities for: {sorted(missing)}")
+        return self
+
+
+class Drift(_Frozen):
+    day: int = Field(ge=0)
+    new_scenario: FraudScenario
+    shifted_scenario: FraudScenario
+    sim_swap_takeover: SimSwapTakeover | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _shifted_parameters_inherit_share(cls, value: object) -> object:
+        # The shifted block lists only parameters; its share is irrelevant once drifted.
+        if isinstance(value, dict) and isinstance(value.get("sim_swap_takeover"), dict):
+            value = {**value, "sim_swap_takeover": {"share": 1.0, **value["sim_swap_takeover"]}}
+        return value
 
 
 class Fraud(_Frozen):
@@ -157,6 +193,29 @@ class Fraud(_Frozen):
     legitimate_sim_swap_share: float = Field(ge=0, le=1)
     victim_min_median_balance: float = Field(ge=0)
     scenarios: FraudScenarios
+    discovery: Discovery
+    drift: Drift
+
+
+class FestiveSeason(_Frozen):
+    name: str
+    start: date
+    end: date
+    activity_multiple: float = Field(gt=0)
+    amount_multiple: float = Field(gt=0)
+
+
+class Benign(_Frozen):
+    salaried_share: float = Field(ge=0, le=1)
+    pay_day: Range
+    pay_amount: Range
+    large_payment_share: float = Field(ge=0, le=1)
+    large_payment_multiple: Range
+    travel_share: float = Field(ge=0, le=1)
+    travel_days: Range
+    new_phone_share: float = Field(ge=0, le=1)
+    new_phone_app_share: float = Field(ge=0, le=1)
+    festive: list[FestiveSeason]
 
 
 class GeneratorConfig(_Frozen):
@@ -165,6 +224,7 @@ class GeneratorConfig(_Frozen):
     market: Market
     behaviour: Behaviour
     fraud: Fraud
+    benign: Benign
 
 
 def load_config(path: Path) -> GeneratorConfig:
