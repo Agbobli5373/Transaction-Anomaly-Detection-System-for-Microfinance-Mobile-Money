@@ -1,5 +1,7 @@
 """How fraud comes to light outside the system: victims complain or dispute a charge."""
 
+import hashlib
+
 import numpy as np
 import pandas as pd
 
@@ -19,6 +21,12 @@ def _episodes(frauds: pd.DataFrame) -> pd.Series:
     return key.where(~sender, key + ":" + frauds["subject_wallet_id"].astype(str))
 
 
+def _episode_rng(base: int, episode: str) -> np.random.Generator:
+    """A random stream of the episode's own, so other episodes coming or going never change it."""
+    digest = int.from_bytes(hashlib.sha256(episode.encode()).digest()[:8], "big")
+    return np.random.default_rng([base, digest])
+
+
 def discover(
     config: GeneratorConfig, frauds: pd.DataFrame, rng: np.random.Generator
 ) -> pd.DataFrame:
@@ -33,13 +41,17 @@ def discover(
         frauds["transaction_type"] == "cash_out"
     )
 
+    base = int(rng.integers(0, 2**63 - 1))
     reports: dict[str, tuple[pd.Timestamp, str]] = {}
     for episode, group in frauds[~mule_cash_out].groupby("episode", sort=True):
         scenario = FraudScenario(group["scenario"].iloc[0])
-        if rng.random() >= params.probability[scenario]:
+        draws = _episode_rng(base, str(episode))
+        if draws.random() >= params.probability[scenario]:
             continue
-        delay = pd.Timedelta(days=float(rng.uniform(params.delay_days.low, params.delay_days.high)))
-        source = "chargeback" if rng.random() < params.chargeback_share else "complaint"
+        delay = pd.Timedelta(
+            days=float(draws.uniform(params.delay_days.low, params.delay_days.high))
+        )
+        source = "chargeback" if draws.random() < params.chargeback_share else "complaint"
         reports[str(episode)] = (group["occurred_at"].max() + delay, source)
 
     rows: list[dict[str, object]] = []

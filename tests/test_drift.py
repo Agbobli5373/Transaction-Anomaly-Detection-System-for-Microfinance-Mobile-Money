@@ -103,3 +103,25 @@ def test_sim_swap_takeovers_change_shape_from_the_drift_day(
         assert len(instance) <= params.transactions.high, side
 
     assert seen["before"] >= 3 and seen["after"] >= 3
+
+
+def test_no_transaction_runs_past_the_end_of_the_period(small_config: GeneratorConfig):
+    # Drift near the end: shifted SIM-swap takeovers wait up to 72 hours after the SIM swap,
+    # so instances that start in the last days would otherwise run past the period.
+    fraud = small_config.fraud
+    late_drift = small_config.model_copy(
+        update={
+            "population": small_config.population.model_copy(update={"wallets": 1500}),
+            "fraud": fraud.model_copy(
+                update={"rate": 0.05, "drift": fraud.drift.model_copy(update={"day": 15})}
+            ),
+        }
+    )
+
+    dataset = generate(late_drift, seed=3, key=KEY)
+
+    end = pd.Timestamp(late_drift.period.start, tz="UTC") + pd.Timedelta(
+        days=late_drift.period.days
+    )
+    assert (dataset.transactions["occurred_at"] < end).all()
+    assert (dataset.sim_swaps["occurred_at"] < end).all()
