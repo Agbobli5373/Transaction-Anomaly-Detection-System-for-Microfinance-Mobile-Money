@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test check generate
+.PHONY: install lint format typecheck test check generate features
 
 install:
 	uv sync
@@ -22,3 +22,6 @@ check: lint typecheck test
 # Reads TXRISK_PSEUDONYM_KEY from the environment (see .env.example).
 generate:
 	uv run txrisk generate --config config/generator.toml --seed 42 --out data/generated
+
+features:
+	uv run txrisk features --data data/generated --out data/features/subject_wallet.parquet
