@@ -1,8 +1,10 @@
+import numpy as np
 import pandas as pd
 import pytest
 from conftest import KEY
 
 from txrisk.generator import Dataset, FraudScenario, GeneratorConfig, generate
+from txrisk.generator.discovery import discover
 
 
 @pytest.fixture(scope="module")
@@ -96,3 +98,27 @@ def test_a_mules_cash_outs_come_to_light_with_its_senders_complaints(discovered:
 
     assert len(cash_outs) > 0
     assert set(cash_outs["instance_id"]) <= set(complaints["instance_id"])
+
+
+def test_a_victims_report_does_not_depend_on_other_episodes(
+    dataset: Dataset, config: GeneratorConfig
+):
+    frauds = dataset.ground_truth.merge(
+        dataset.transactions[
+            ["transaction_id", "subject_wallet_id", "transaction_type", "occurred_at"]
+        ],
+        on="transaction_id",
+    )
+    first_instance = frauds["instance_id"].min()
+
+    everything = discover(config, frauds, np.random.default_rng(1))
+    without_one = discover(
+        config, frauds[frauds["instance_id"] != first_instance], np.random.default_rng(1)
+    )
+
+    others = everything[everything["transaction_id"].isin(without_one["transaction_id"])]
+    pd.testing.assert_frame_equal(
+        others.reset_index(drop=True),
+        without_one.reset_index(drop=True),
+    )
+    assert len(without_one) > 0

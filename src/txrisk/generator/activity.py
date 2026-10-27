@@ -113,8 +113,11 @@ def _everyday_candidates(
     return candidates
 
 
-def _in_time_order(candidates: pd.DataFrame, registered: np.ndarray) -> pd.DataFrame:
-    """Sort candidates and drop any involving a Wallet that has not registered yet."""
+def _in_time_order(
+    candidates: pd.DataFrame, registered: np.ndarray, period_end: np.datetime64
+) -> pd.DataFrame:
+    """Sort candidates and drop any that fall after the period or involve a Wallet that has not
+    registered yet. A Fraud scenario that starts near the end is cut off at the end."""
     candidates = candidates.assign(benign=candidates["benign"].fillna(-1).astype(np.int64))
     candidates = candidates.sort_values(
         ["occurred_at", "subject"], kind="stable", ignore_index=True
@@ -124,7 +127,8 @@ def _in_time_order(candidates: pd.DataFrame, registered: np.ndarray) -> pd.DataF
     registered_parties = (occurred >= registered[candidates["subject"].to_numpy()]) & (
         ~is_transfer | (occurred >= registered[candidates["counterparty_wallet"].to_numpy()])
     )
-    kept: pd.DataFrame = candidates[registered_parties].reset_index(drop=True)
+    in_period = occurred < period_end
+    kept: pd.DataFrame = candidates[registered_parties & in_period].reset_index(drop=True)
     return kept
 
 
@@ -209,6 +213,8 @@ def simulate(config: GeneratorConfig, population: Population, rng: np.random.Gen
     )
     wallet_device = np.asarray([f"D{d:016x}" for d in rng.integers(0, 2**63 - 1, len(wallets))])
 
+    period_end = (start + pd.Timedelta(days=config.period.days)).tz_convert(None).to_datetime64()
+
     # First pass: everyday activity alone, to learn which Wallets usually hold money.
     everyday = _in_time_order(
         pd.concat(
@@ -221,6 +227,7 @@ def simulate(config: GeneratorConfig, population: Population, rng: np.random.Gen
             ignore_index=True,
         ),
         registered,
+        period_end,
     )
     _, everyday_before, everyday_settled = _settle(everyday, opening, single_limit, max_balance)
     usual_balance = (
@@ -247,7 +254,7 @@ def simulate(config: GeneratorConfig, population: Population, rng: np.random.Gen
 
     # Second pass: everyday activity and fraud settle together against the same balances.
     candidates = _in_time_order(
-        pd.concat([everyday, plan.candidates], ignore_index=True), registered
+        pd.concat([everyday, plan.candidates], ignore_index=True), registered, period_end
     )
     amounts, balance_before, settled = _settle(candidates, opening, single_limit, max_balance)
     tx = candidates[settled].reset_index(drop=True)

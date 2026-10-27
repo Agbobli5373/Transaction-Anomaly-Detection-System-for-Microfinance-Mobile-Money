@@ -7,7 +7,7 @@
   ],
   "transactions": 533625,
   "fraud": 974,
-  "fraud_discovered": 317,
+  "fraud_discovered": 302,
   "ranking": {
     "roc_auc": 0.9062555713684368,
     "pr_auc": 0.25735412559884574
@@ -58,7 +58,7 @@
   },
   "recall_against": {
     "ground_truth": 0.5359342915811088,
-    "discovered_labels": 0.5741324921135647
+    "discovered_labels": 0.6059602649006622
   },
   "segments": {
     "region": {
