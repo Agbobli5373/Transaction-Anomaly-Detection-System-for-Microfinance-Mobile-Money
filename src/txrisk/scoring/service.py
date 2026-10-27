@@ -37,7 +37,9 @@ class RiskBand(StrEnum):
 @dataclass(frozen=True)
 class RiskAssessment:
     transaction_id: str
-    risk_score: int
+    # 0-100. Rules-only scores are whole numbers; a stacked score is the chance of discovered
+    # fraud x 100, which is mostly well under 1, so it keeps two decimals.
+    risk_score: float
     risk_band: RiskBand
     reasons: tuple[Reason, ...]
     # Each component on a 0-1 scale; components without a model yet are None.
@@ -152,7 +154,7 @@ class ScoringService:
         thresholds = bundle.thresholds
         return RiskAssessment(
             transaction_id=transaction.transaction_id,
-            risk_score=round(score),
+            risk_score=round(score, 2),
             # Banded before rounding, as the thresholds were set on unrounded scores.
             risk_band=_band(score, medium=thresholds.medium, high=thresholds.high),
             reasons=reasons,

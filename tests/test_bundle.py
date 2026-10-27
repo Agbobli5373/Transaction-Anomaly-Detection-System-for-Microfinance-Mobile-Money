@@ -230,7 +230,10 @@ def test_the_scoring_service_gives_the_bundle_s_risk_score_and_band(
     scores, assessments = served
     expected = scores[list(assessments)]
 
-    assert [a.risk_score for a in assessments.values()] == expected.round().astype(int).tolist()
+    # Mostly well under 1, so the Risk score keeps two decimals rather than rounding to 0.
+    assert [a.risk_score for a in assessments.values()] == pytest.approx(
+        expected.tolist(), abs=0.005
+    )
     assert [a.risk_band.value for a in assessments.values()] == band(
         expected, bundle.thresholds
     ).tolist()

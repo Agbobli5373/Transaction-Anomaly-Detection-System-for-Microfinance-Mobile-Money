@@ -264,7 +264,7 @@ def test_the_scoring_service_reports_the_fraud_probability_as_a_component(market
     assert with_model.component_scores["supervised"] == pytest.approx(batch[riskiest])
     assert with_model.component_scores["supervised"] > 0
     assert rules_only.component_scores["supervised"] is None
-    # Combining the components is a later step: the rules still decide the Risk score.
+    # Without a model bundle the rules still decide the Risk score.
     assert (with_model.risk_score, with_model.risk_band, with_model.reasons) == (
         rules_only.risk_score,
         rules_only.risk_band,
