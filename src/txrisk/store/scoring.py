@@ -61,6 +61,9 @@ class StoredScoring:
             assessment = service.assess(transaction)
 
         with self._engine.begin() as connection:
+            # A concurrent call may have stored a Transaction under this ID since the check
+            # above: the insert waits for it to commit, and raises `TransactionConflict` if it
+            # differs from this one, so a different payload is never answered as a replay.
             records.record_transaction(connection, transaction)
             # A concurrent call for the same Transaction may have stored its assessment first;
             # the insert then waits for it to commit, stores nothing, and its result stands.

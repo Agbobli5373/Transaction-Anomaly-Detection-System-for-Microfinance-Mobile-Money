@@ -1,4 +1,5 @@
 # The development stack: Postgres, the migration job and the scoring API.
+# Set POSTGRES_PASSWORD in .env first (see .env.example); there is no default.
 #   docker compose up --build             # Postgres, migrations, then the API on :8000
 #   docker compose run --rm seed          # load data/generated as history (after `make generate`)
 # Set TXRISK_MODEL_BUNDLE=/models/<version> to score with a bundle from `make train`; without it
@@ -8,14 +9,14 @@ x-txrisk: &txrisk
   build: .
   image: txrisk:dev
   environment:
-    TXRISK_DATABASE_URL: postgresql://txrisk:${POSTGRES_PASSWORD:-txrisk-dev}@postgres:5432/txrisk
+    TXRISK_DATABASE_URL: postgresql://txrisk:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}@postgres:5432/txrisk
 
 services:
   postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: txrisk
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-txrisk-dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
       POSTGRES_DB: txrisk
     ports:
       - "5432:5432"
@@ -49,7 +50,7 @@ services:
   api:
     <<: *txrisk
     environment:
-      TXRISK_DATABASE_URL: postgresql://txrisk:${POSTGRES_PASSWORD:-txrisk-dev}@postgres:5432/txrisk
+      TXRISK_DATABASE_URL: postgresql://txrisk:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}@postgres:5432/txrisk
       TXRISK_MODEL_BUNDLE: ${TXRISK_MODEL_BUNDLE:-}
     command: ["txrisk", "serve", "--host", "0.0.0.0", "--port", "8000"]
     ports:

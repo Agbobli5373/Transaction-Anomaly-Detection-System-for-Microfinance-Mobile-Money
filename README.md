@@ -19,6 +19,7 @@ make check             # lint, type-check and test
 The sync scoring API runs on Postgres, in Docker. The tests start their own Postgres with Testcontainers, so `make check` needs Docker running.
 
 ```bash
+# in .env: set POSTGRES_PASSWORD, e.g. to the output of `openssl rand -hex 16`
 make up                # Postgres, then the migration job, then the API on http://localhost:8000
 make seed              # loads the parties, and days 0-90 of data/generated, as history (no labels)
 curl localhost:8000/v1/ready

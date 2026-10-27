@@ -46,6 +46,7 @@ train:
 	uv run txrisk train --data data/generated --features data/features/features.parquet
 
 # The serving stack in Docker: Postgres, the migration job, then the API on :8000.
+# Needs POSTGRES_PASSWORD in .env (see .env.example).
 up:
 	docker compose up --build --detach --wait api
 

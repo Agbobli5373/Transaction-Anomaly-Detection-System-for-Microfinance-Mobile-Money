@@ -28,6 +28,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # A throwaway password for this run only; none is committed.
+      - run: echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)" >> "$GITHUB_ENV"
       - run: docker compose up --build --detach --wait api
       - run: curl --fail --silent http://127.0.0.1:8000/v1/ready
       - run: curl --fail --silent http://127.0.0.1:8000/v1/openapi.json > /dev/null

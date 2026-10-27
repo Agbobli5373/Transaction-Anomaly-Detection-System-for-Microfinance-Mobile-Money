@@ -125,6 +125,22 @@ def test_concurrent_repeats_store_one_assessment_and_one_alert(world: World, cli
     assert world.count("risk_assessments") == world.count("alerts") == 1
 
 
+def test_concurrent_different_transactions_under_one_id_store_one_and_conflict_the_rest(
+    world: World, client: TestClient
+):
+    """However the calls interleave, only one Transaction is stored under an ID; every call
+    with a different payload is a conflict, never a replay of someone else's assessment."""
+    transaction = on_app(tx(NOW))
+    bodies = [{**body(transaction), "amount": 50.0 + i} for i in range(8)]
+
+    with ThreadPoolExecutor(8) as pool:
+        responses = list(pool.map(lambda b: client.post("/v1/score", json=b), bodies))
+
+    assert sorted(r.status_code for r in responses) == [200] + [409] * 7
+    assert world.count("transactions") == len(routine()) + 1
+    assert world.count("risk_assessments") == 1
+
+
 def test_only_the_high_risk_band_raises_alerts(world: World, client: TestClient):
     usual = on_app(tx(NOW))  # the Subject wallet's daily 50 GHS Transfer to a friend
     unusual = on_app(tx(NOW + HOUR, amount=400.0, counterparty=STRANGER, balance=950.0))
@@ -283,7 +299,10 @@ def test_the_api_never_migrates_and_is_unready_until_migrated(empty_database: st
 
 
 def test_readiness_fails_when_the_database_is_unreachable():
-    unreachable = "postgresql://nobody:nothing@127.0.0.1:1/none"
+    nothing_listens = sa.URL.create(
+        "postgresql+psycopg", username="nobody", host="127.0.0.1", port=1, database="none"
+    )
+    unreachable = nothing_listens.render_as_string()
 
     with TestClient(create_app(settings(unreachable))) as client:
         response = client.get("/v1/ready")
