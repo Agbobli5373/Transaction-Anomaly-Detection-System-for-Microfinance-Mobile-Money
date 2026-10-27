@@ -1,0 +1,4 @@
+# `txrisk backup`: where the Postgres dumps go and how many to keep.
+# Both can be overridden with --out and --keep.
+directory = "backups"
+keep = 7
