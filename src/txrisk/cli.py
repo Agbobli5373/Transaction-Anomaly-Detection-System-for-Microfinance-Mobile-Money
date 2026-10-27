@@ -7,8 +7,11 @@ from pathlib import Path
 
 import pandas as pd
 
+from txrisk.evaluation import load_evaluation_config
+from txrisk.evaluation.report import evaluate
 from txrisk.features import feature_table, load_feature_config
 from txrisk.generator import generate, load_config, write_dataset
+from txrisk.scoring import RULES_ONLY, load_rules_config, score_table
 
 PSEUDONYM_KEY_ENV = "TXRISK_PSEUDONYM_KEY"
 
@@ -45,6 +48,40 @@ def _features(args: argparse.Namespace) -> int:
     return 0
 
 
+def _evaluate(args: argparse.Namespace) -> int:
+    generator = load_config(args.config)
+    features = load_feature_config(
+        args.feature_config,
+        kyc_limits={
+            tier.name: tier.single_transaction_limit for tier in generator.market.kyc_tiers
+        },
+    )
+    evaluation = load_evaluation_config(args.evaluation_config)
+    period_start = pd.Timestamp(generator.period.start, tz="UTC")
+    scores = score_table(
+        pd.read_parquet(args.data / "transactions.parquet"),
+        pd.read_parquet(args.data / "wallets.parquet"),
+        pd.read_parquet(args.data / "sim_swaps.parquet"),
+        features=features,
+        rules=load_rules_config(args.rules_config),
+        score_from=period_start + pd.Timedelta(days=evaluation.splits.evaluation.start),
+    )
+    metrics = evaluate(
+        scores,
+        args.data,
+        config=evaluation,
+        period_start=generator.period.start,
+        scorer=RULES_ONLY,
+        out=args.out,
+    )
+    high = metrics["at_high"]
+    print(
+        f"{RULES_ONLY}: {high['per_day']:.1f} High a day, precision {high['precision']}, "
+        f"recall {high['recall']}; report in {args.out}"
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="txrisk")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -66,6 +103,15 @@ def main(argv: list[str] | None = None) -> int:
     feat.add_argument("--feature-config", type=Path, default=Path("config/features.toml"))
     feat.add_argument("--out", type=Path, default=Path("data/features/features.parquet"))
     feat.set_defaults(handler=_features)
+
+    ev = commands.add_parser("evaluate", help="score the evaluation days and write a report")
+    ev.add_argument("--data", type=Path, default=Path("data/generated"))
+    ev.add_argument("--config", type=Path, default=Path("config/generator.toml"))
+    ev.add_argument("--feature-config", type=Path, default=Path("config/features.toml"))
+    ev.add_argument("--rules-config", type=Path, default=Path("config/rules.toml"))
+    ev.add_argument("--evaluation-config", type=Path, default=Path("config/evaluation.toml"))
+    ev.add_argument("--out", type=Path, default=Path("reports/rules-only"))
+    ev.set_defaults(handler=_evaluate)
 
     args = parser.parse_args(argv)
     handler = args.handler

@@ -15,7 +15,8 @@ _COUNTERPARTY_COLUMNS = ["counterparty_wallet_id", "agent_id", "merchant_id", "b
 _DTYPES = {int: "Int64", float: "Float64", bool: "boolean"}
 
 
-def _transactions(frame: pd.DataFrame) -> list[Transaction]:
+def transactions_from_frame(frame: pd.DataFrame) -> list[Transaction]:
+    """The rows of a Transactions table as the features see them, in the frame's order."""
     counterparty = functools.reduce(
         lambda found, column: found.fillna(frame[column]),
         _COUNTERPARTY_COLUMNS[1:],
@@ -59,18 +60,11 @@ def _columns(results: list[TransactionFeatures]) -> dict[str, tuple[list[object]
     return columns
 
 
-def feature_table(
-    transactions: pd.DataFrame,
-    wallets: pd.DataFrame,
-    sim_swaps: pd.DataFrame,
-    *,
-    config: FeatureConfig,
-) -> pd.DataFrame:
-    """Every feature of every Transaction, one row each in the input's order.
+def replay_history(wallets: pd.DataFrame, sim_swaps: pd.DataFrame) -> ReplayHistory:
+    """An empty replay over these Wallets, with every SIM swap known up front.
 
-    Each Transaction is scored with the clock at its own occurred-at and only then added to
-    the history, so no row can see a Transaction that happened at or after it. SIM swaps are
-    all known up front; the history only ever answers with those strictly before the clock.
+    The history only ever answers with SIM swaps strictly before the clock, so knowing them all
+    in advance leaks nothing; Transactions are recorded as the replay reaches them.
     """
     history = ReplayHistory(
         {
@@ -89,9 +83,26 @@ def feature_table(
         strict=True,
     ):
         history.record_sim_swap(wallet_id, occurred_at)
+    return history
+
+
+def feature_table(
+    transactions: pd.DataFrame,
+    wallets: pd.DataFrame,
+    sim_swaps: pd.DataFrame,
+    *,
+    config: FeatureConfig,
+) -> pd.DataFrame:
+    """Every feature of every Transaction, one row each in the input's order.
+
+    Each Transaction is scored with the clock at its own occurred-at and only then added to
+    the history, so no row can see a Transaction that happened at or after it. SIM swaps are
+    all known up front; the history only ever answers with those strictly before the clock.
+    """
+    history = replay_history(wallets, sim_swaps)
     chronological = transactions.sort_values("occurred_at", kind="stable")
     results: list[TransactionFeatures] = []
-    for transaction in _transactions(chronological):
+    for transaction in transactions_from_frame(chronological):
         results.append(
             transaction_features(transaction, history, now=transaction.occurred_at, config=config)
         )
