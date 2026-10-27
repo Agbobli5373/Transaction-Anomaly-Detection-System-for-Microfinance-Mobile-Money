@@ -26,10 +26,12 @@ class SupervisedModel:
     def raw_probability(self, inputs: pd.DataFrame) -> pd.Series:
         """The classifier's own probability, before calibration, indexed like `inputs`.
 
-        Class weighting makes fraud look far more common than it is, so this ranks well but
-        overstates the chance of fraud.
+        Class weighting tilts it towards fraud, so it ranks well but is not to be read as a
+        probability. Predicting with the booster on a plain array, in the fitted column order,
+        skips the scikit-learn wrapper's checks, which cost far more than the trees for one row.
         """
-        fraud = np.asarray(self.classifier.predict_proba(inputs))[:, 1]
+        rows = inputs[self.classifier.feature_name_].to_numpy(dtype=np.float64)
+        fraud = np.asarray(self.classifier.booster_.predict(rows))
         return pd.Series(fraud, index=inputs.index, name="raw_probability")
 
     def score(self, inputs: pd.DataFrame) -> pd.Series:
