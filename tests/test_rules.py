@@ -2,9 +2,11 @@
 
 from datetime import timedelta
 
-from scoring_helpers import DAY, HOUR, MINUTE, NOW, SUBJECT, Market, routine, tx
+from scoring_helpers import DAY, HOUR, MINUTE, NOW, RULES_CONFIG, SUBJECT, Market, routine, tx
 
-from txrisk.features import Transaction
+from txrisk.features import SubjectWalletFeatures, Transaction, TransactionFeatures
+from txrisk.scoring import load_rules_config
+from txrisk.scoring.rules import rule_hits
 
 
 def fires(code: str, market: Market, transaction: Transaction) -> bool:
@@ -168,6 +170,22 @@ def test_first_time_large_transfer_waits_until_the_wallet_is_30_days_old():
 
     assert not fires("FIRST_TIME_LARGE_TRANSFER", _new_wallet(30 * DAY - MINUTE), large)
     assert fires("FIRST_TIME_LARGE_TRANSFER", _new_wallet(30 * DAY), large)
+
+
+def test_the_usual_amount_rules_still_fire_when_the_wallets_age_is_unknown():
+    # A dataset without registration dates (PaySim) leaves the age empty.
+    subject = SubjectWalletFeatures(
+        history_count=6,
+        wallet_age_days=None,  # type: ignore[arg-type]
+        amount_to_median_30d=8.0,
+        new_counterparty=True,
+    )
+    features = TransactionFeatures(subject_wallet=subject)
+    rules = load_rules_config(RULES_CONFIG).rules
+
+    codes = [h.code for h in rule_hits(tx(amount=400.0, counterparty="w-new"), features, rules)]
+
+    assert {"FIRST_TIME_LARGE_TRANSFER", "AMOUNT_VS_MEDIAN"} <= set(codes)
 
 
 # AMOUNT_VS_MEDIAN: an outgoing amount of more than 5x the 30-day median outgoing amount.

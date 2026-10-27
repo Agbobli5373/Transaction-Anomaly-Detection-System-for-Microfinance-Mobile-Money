@@ -69,7 +69,7 @@ PaySim has no SIM swaps, devices, regions, KYC tiers, Agents, channels or regist
 | Rule `NEW_REGION` | no regions |
 | Report segments region, KYC tier, channel, wallet age | none of them exist; the report is segmented by PaySim type instead |
 
-**What remains:** the Subject wallet features (history count, velocity, amount against the Wallet's median, new Counterparty, unusual hour, night share), `receiver_fan_in_24h`, `share_of_balance_moved`, `new_counterparty_transfers_1h`, the Transaction's own amount, hour, type and direction, and four rules: `MULE_CASHOUT`, `FIRST_TIME_LARGE_TRANSFER`, `AMOUNT_VS_MEDIAN` and `ODD_HOUR`. Rule thresholds are exactly the ones in `config/rules.toml`; none was retuned for PaySim. Switching rules off is `Rules.disabled`, which is empty everywhere else.
+**What remains:** the Subject wallet features (history count, velocity, amount against the Wallet's median, new Counterparty, unusual hour, night share), `receiver_fan_in_24h`, `share_of_balance_moved`, `new_counterparty_transfers_1h`, the Transaction's own amount, hour, type and direction, and four rules: `MULE_CASHOUT`, `FIRST_TIME_LARGE_TRANSFER`, `AMOUNT_VS_MEDIAN` and `ODD_HOUR`. Rule thresholds are exactly the ones in `config/rules.toml`; none was retuned for PaySim. The 30-day Wallet age gate on `FIRST_TIME_LARGE_TRANSFER` and `AMOUNT_VS_MEDIAN` (#45) does not apply here: with no registration dates, a Wallet's age is unknown, and an unknown age never switches a rule off. Switching rules off is `Rules.disabled`, which is empty everywhere else.
 
 ## Splits, labels and the Alert budget
 
