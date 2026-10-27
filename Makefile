@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed produce schemas
+.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed produce schemas backup
 
 install:
 	uv sync
@@ -70,3 +70,8 @@ produce:
 # Rewrites the event topics' JSON Schemas in schemas/ from their models.
 schemas:
 	uv run txrisk schemas
+
+# One Postgres backup into the compose `backups` volume, pruned to config/backup.toml's count.
+# Restoring one: docs/runbooks/restore.md
+backup:
+	docker compose run --rm backup

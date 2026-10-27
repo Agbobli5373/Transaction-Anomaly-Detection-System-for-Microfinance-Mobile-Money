@@ -17,6 +17,12 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+      # The backup tests run the host's pg_dump and pg_restore against the Postgres 17 container,
+      # and the client's major version must match the server's (the runner ships 16).
+      - run: |
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y --no-install-recommends postgresql-client-17
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
       - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run ruff format --check .
@@ -47,6 +53,30 @@ jobs:
             sleep 2
           done
           exit 1
+      - if: failure()
+        run: docker compose logs
+      - if: always()
+        run: docker compose down --volumes
+
+  # A backup taken from the compose Postgres restores into a fresh database, and the restore
+  # matches its source: row counts per table and the latest migration (`--compare-with`).
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          generated=$(openssl rand -hex 16)
+          grep -v -E '^(POSTGRES_|PG)PASSWORD=' .env.example > .env
+          for key in POSTGRES_PASSWORD PGPASSWORD; do echo "$key=$generated" >> .env; done
+      - run: docker compose build migrate
+      - run: docker compose up --detach --wait postgres
+      - run: docker compose run --rm migrate
+      - run: docker compose run --rm backup
+      - run: docker compose exec -T postgres createdb --username txrisk restored
+      - run: >
+          docker compose run --rm backup txrisk restore /backups
+          --database-url postgresql://txrisk@postgres:5432/restored
+          --compare-with postgresql://txrisk@postgres:5432/txrisk
       - if: failure()
         run: docker compose logs
       - if: always()

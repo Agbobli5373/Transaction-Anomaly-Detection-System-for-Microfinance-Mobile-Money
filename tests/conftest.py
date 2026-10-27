@@ -55,7 +55,7 @@ def postgres() -> Iterator[str]:
     from testcontainers.community.postgres import PostgresContainer
 
     _require_docker()
-    with PostgresContainer("postgres:16-alpine", driver="psycopg") as container:
+    with PostgresContainer("postgres:17-alpine", driver="psycopg") as container:
         yield container.get_connection_url()
 
 
