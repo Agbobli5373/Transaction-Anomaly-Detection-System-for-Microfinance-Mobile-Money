@@ -15,6 +15,9 @@ class Dataset:
     merchants: pd.DataFrame
     billers: pd.DataFrame
     transactions: pd.DataFrame
+    sim_swaps: pd.DataFrame
+    # Which Transactions are fraudulent. Only offline evaluation may read it (ADR 0007).
+    ground_truth: pd.DataFrame
 
 
 def write_dataset(dataset: Dataset, out_dir: Path) -> None:
