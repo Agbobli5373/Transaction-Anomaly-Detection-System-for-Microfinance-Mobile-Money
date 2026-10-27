@@ -67,6 +67,16 @@ class Rules(_Frozen):
     NEAR_KYC_LIMIT: NearKycLimit
     NEW_REGION: _Rule
     ODD_HOUR: OddHour
+    # Codes of rules that are switched off because their inputs do not exist in the data being
+    # scored (the PaySim benchmark has no devices or SIM swaps). Empty in every real deployment.
+    disabled: frozenset[str] = frozenset()
+
+    @model_validator(mode="after")
+    def _known_codes(self) -> "Rules":
+        unknown = self.disabled - (set(type(self).model_fields) - {"disabled"})
+        if unknown:
+            raise ValueError(f"cannot disable unknown rules: {sorted(unknown)}")
+        return self
 
 
 class Bands(_Frozen):

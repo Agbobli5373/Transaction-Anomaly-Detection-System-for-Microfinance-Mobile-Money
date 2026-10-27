@@ -156,9 +156,11 @@ RULES: dict[str, _Check] = {
 def rule_hits(
     transaction: Transaction, features: TransactionFeatures, rules: Rules
 ) -> list[RuleHit]:
-    """Every rule that fires for this Transaction, in rule-set order."""
+    """Every rule that fires for this Transaction, in rule-set order. Disabled rules never do."""
     hits: list[RuleHit] = []
     for code, check in RULES.items():
+        if code in rules.disabled:
+            continue
         fired = check(transaction, features, rules)
         if fired is not None:
             message, value = fired

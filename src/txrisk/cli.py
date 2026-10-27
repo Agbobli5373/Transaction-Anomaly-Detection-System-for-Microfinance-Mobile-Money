@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from txrisk.benchmark import run_paysim
+from txrisk.benchmark.paysim import SCORERS as PAYSIM_SCORERS
 from txrisk.evaluation import load_evaluation_config
 from txrisk.evaluation.report import evaluate
 from txrisk.evaluation.scorers import (
@@ -170,6 +172,27 @@ def _train(args: argparse.Namespace) -> int:
     return 0
 
 
+def _paysim(args: argparse.Namespace) -> int:
+    scorers = PAYSIM_SCORERS if args.scorer == "all" else [args.scorer]
+    results = run_paysim(
+        args.csv,
+        out=args.out,
+        scorers=scorers,
+        evaluation_config=args.evaluation_config,
+        feature_config=args.feature_config,
+        rules_config=args.rules_config,
+        features_cache=args.features,
+    )
+    for scorer, metrics in results.items():
+        high = metrics["at_high"]
+        print(
+            f"{scorer}: {high['per_day']:.1f} High a day, precision {high['precision']}, "
+            f"recall {high['recall']}, PR-AUC {metrics['ranking']['pr_auc']}; "
+            f"report in {args.out / scorer}"
+        )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="txrisk")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -233,6 +256,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     tr.add_argument("--no-mlflow", action="store_true", help="save the bundle only")
     tr.set_defaults(handler=_train)
+
+    ps = commands.add_parser(
+        "paysim", help="judge the scorers on a local PaySim CSV, as an external benchmark"
+    )
+    ps.add_argument("--csv", type=Path, required=True, help="PaySim's PS_*_log.csv, from Kaggle")
+    ps.add_argument("--evaluation-config", type=Path, default=Path("config/paysim.toml"))
+    ps.add_argument("--feature-config", type=Path, default=Path("config/features.toml"))
+    ps.add_argument("--rules-config", type=Path, default=Path("config/rules.toml"))
+    ps.add_argument("--scorer", choices=[*PAYSIM_SCORERS, "all"], default="all")
+    ps.add_argument(
+        "--features",
+        type=Path,
+        help="where to keep PaySim's feature table: read if it exists, else built and saved there",
+    )
+    ps.add_argument("--out", type=Path, default=Path("reports/paysim"), help="a folder per scorer")
+    ps.set_defaults(handler=_paysim)
 
     args = parser.parse_args(argv)
     handler = args.handler

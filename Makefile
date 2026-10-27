@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train
+.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim
 
 install:
 	uv sync
@@ -44,3 +44,8 @@ evaluate-stacked:
 # (mlflow.db, mlruns/). Browse it with: uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
 train:
 	uv run txrisk train --data data/generated --features data/features/features.parquet
+
+# Judges every scorer on a local PaySim CSV (Kaggle: ealaxi/paysim1) as an external benchmark;
+# writes reports/paysim/<scorer>/. Usage: make paysim PAYSIM_CSV=path/to/PS_..._log.csv
+paysim:
+	uv run txrisk paysim --csv $(PAYSIM_CSV) --features data/features/paysim.parquet

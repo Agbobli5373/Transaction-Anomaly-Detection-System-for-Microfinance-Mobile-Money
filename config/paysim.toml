@@ -1,0 +1,21 @@
+# How the PaySim benchmark splits and judges the data (docs/evaluation/paysim.md).
+#
+# PaySim's `step` is one hour and the data spans 743 of them (about 31 days), against our 120
+# days. Our splits (config/evaluation.toml) are 37.5% train, 12.5% calibration, 25% thresholds and
+# 25% evaluation of the period; 32 days cut the same way gives whole days. PaySim has only about
+# 31 of those 32 days, so the evaluation split holds about 7.
+#
+# PaySim's labels are complete the moment a Transaction happens: there is no Fraud discovery
+# delay to wait out, so the Label maturity window is 0 (ADR 0007 does not apply to it).
+label_maturity_days = 0
+# Our budget of 100 Alerts a day is 0.56% of our ~17,800 Transactions a day. PaySim has ~205,000
+# a day, so the same share is ~1,150.
+alert_budget_per_day = 1150
+# PaySim has no registration dates, so wallet age is not measured; the report has no age segments.
+wallet_age_band_edges = [30, 180]
+
+[splits]
+train = [0, 12]
+calibration = [12, 16]
+thresholds = [16, 24]
+evaluation = [24, 32]
