@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed
+.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed backup
 
 install:
 	uv sync
@@ -61,3 +61,8 @@ down:
 # Loads the parties and days 0-90 of data/generated into the compose Postgres as history.
 seed:
 	docker compose run --rm seed
+
+# One Postgres backup into the compose `backups` volume, pruned to config/backup.toml's count.
+# Restoring one: docs/runbooks/restore.md
+backup:
+	docker compose run --rm backup
