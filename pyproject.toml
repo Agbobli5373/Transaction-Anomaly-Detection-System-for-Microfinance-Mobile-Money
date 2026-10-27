@@ -5,6 +5,7 @@ description = "Transaction risk scoring for mobile money wallets"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "lightgbm>=4.7.0",
     "matplotlib>=3.11.2",
     "numpy>=2.1",
     "pandas>=2.2",
