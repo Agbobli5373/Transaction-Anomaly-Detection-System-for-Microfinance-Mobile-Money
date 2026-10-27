@@ -73,6 +73,13 @@ def _reasons(hits: list[RuleHit], config: RulesConfig) -> tuple[Reason, ...]:
     return tuple(Reason(h.code, h.message, h.value) for _, h in ranked[: config.max_reasons])
 
 
+def combine_hits(hits: list[RuleHit], config: RulesConfig) -> tuple[float, bool]:
+    """The rules score (0-1) of these Rule hits, and whether any is a Critical rule."""
+    weights = config.severity_weights
+    score = 1 - math.prod(1 - weights[h.severity] for h in hits)
+    return score, any(h.severity == Severity.CRITICAL for h in hits)
+
+
 class ScoringService:
     def __init__(
         self,
@@ -96,10 +103,9 @@ class ScoringService:
             transaction, self._history, now=self._clock.now(), config=self._features
         )
         hits = rule_hits(transaction, features, self._rules.rules)
-        weights = self._rules.severity_weights
-        rules_score = 1 - math.prod(1 - weights[h.severity] for h in hits)
+        rules_score, critical = combine_hits(hits, self._rules)
         score = 100 * rules_score
-        if any(h.severity == Severity.CRITICAL for h in hits):
+        if critical:
             score = max(score, self._rules.critical_floor)
         risk_score = round(score)
         anomaly = supervised = None

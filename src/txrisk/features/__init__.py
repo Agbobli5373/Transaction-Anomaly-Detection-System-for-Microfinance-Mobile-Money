@@ -13,6 +13,7 @@ from txrisk.features.table import (
     FEATURE_COLUMNS,
     feature_table,
     features_frame,
+    features_from_frame,
     replay_history,
     transactions_from_frame,
 )
@@ -30,6 +31,7 @@ __all__ = [
     "Wallet",
     "feature_table",
     "features_frame",
+    "features_from_frame",
     "load_feature_config",
     "replay_history",
     "subject_wallet_features",

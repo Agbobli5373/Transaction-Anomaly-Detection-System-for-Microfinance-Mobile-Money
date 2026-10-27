@@ -77,6 +77,27 @@ def features_frame(transaction_ids: list[str], results: list[TransactionFeatures
     return table
 
 
+def _plain(value: object) -> object:
+    """A table cell as the feature dataclasses hold it: None when empty, else a Python value."""
+    if value is pd.NA or value is None or (isinstance(value, float) and value != value):
+        return None
+    return value.item() if hasattr(value, "item") else value
+
+
+def features_from_frame(table: pd.DataFrame) -> list[TransactionFeatures]:
+    """The features of each feature table row, as the feature function returned them."""
+    subject_fields = [f.name for f in fields(SubjectWalletFeatures)]
+    other_fields = [f.name for f in fields(TransactionFeatures) if f.name != "subject_wallet"]
+    results: list[TransactionFeatures] = []
+    for row in table[subject_fields + other_fields].itertuples(index=False):
+        values = dict(zip(subject_fields + other_fields, map(_plain, row), strict=True))
+        subject = SubjectWalletFeatures(**{name: values[name] for name in subject_fields})  # type: ignore[arg-type]
+        results.append(
+            TransactionFeatures(subject_wallet=subject, **{name: values[name] for name in other_fields})  # type: ignore[arg-type]
+        )
+    return results
+
+
 def replay_history(wallets: pd.DataFrame, sim_swaps: pd.DataFrame) -> ReplayHistory:
     """An empty replay over these Wallets, with every SIM swap known up front.
 

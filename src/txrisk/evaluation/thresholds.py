@@ -19,14 +19,18 @@ def _score_at_rank(descending: np.ndarray, rank: int) -> float:
     return float(descending[min(rank, len(descending)) - 1])
 
 
-def budget_thresholds(scores: pd.Series, *, days: int, budget_per_day: int) -> BandThresholds:
+def budget_thresholds(
+    scores: pd.Series, *, days: int, budget_per_day: int, already_high: int = 0
+) -> BandThresholds:
     """Thresholds that, over these `days` of scores, give the Alert budget's worth of High.
 
     High starts at the score of the budget's last Alert; Medium covers the next
-    `MEDIUM_MULTIPLE` times as many. Scores need no labels, so any recent days will do.
+    `MEDIUM_MULTIPLE` times as many. `already_high` Alerts are High regardless of score (Critical
+    rule hits) and are not among `scores`, so they use up budget first. Scores need no labels,
+    so any recent days will do.
     """
     descending = np.sort(scores.to_numpy(dtype=np.float64))[::-1]
-    alerts = budget_per_day * days
+    alerts = max(budget_per_day * days - already_high, 1)
     return BandThresholds(
         medium=_score_at_rank(descending, alerts * (1 + MEDIUM_MULTIPLE)),
         high=_score_at_rank(descending, alerts),
