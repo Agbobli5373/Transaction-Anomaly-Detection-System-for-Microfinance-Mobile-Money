@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim
+.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed
 
 install:
 	uv sync
@@ -49,3 +49,15 @@ train:
 # writes reports/paysim/<scorer>/. Usage: make paysim PAYSIM_CSV=path/to/PS_..._log.csv
 paysim:
 	uv run txrisk paysim --csv $(PAYSIM_CSV) --features data/features/paysim.parquet
+
+# The serving stack in Docker: Postgres, the migration job, then the API on :8000.
+# Reads its settings and credentials from .env (see .env.example).
+up:
+	docker compose up --build --detach --wait api
+
+down:
+	docker compose down
+
+# Loads the parties and days 0-90 of data/generated into the compose Postgres as history.
+seed:
+	docker compose run --rm seed

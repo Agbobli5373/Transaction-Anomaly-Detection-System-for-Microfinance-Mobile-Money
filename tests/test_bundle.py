@@ -1,99 +1,29 @@
 """The model bundle: both models, the stacker and the thresholds, trained and shipped together."""
 
-from dataclasses import dataclass
-from datetime import date
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
-from conftest import KEY
-from scoring_helpers import RULES_CONFIG
+from market_helpers import CONFIG, RULES, START, Market, build_market, replay_assessments, train
 
-from txrisk.evaluation import EvaluationConfig, Split, split_of
+from txrisk.evaluation import Split, split_of
 from txrisk.evaluation.thresholds import band
-from txrisk.features import FeatureConfig, feature_table, replay_history, transactions_from_frame
-from txrisk.generator import GeneratorConfig, generate
+from txrisk.generator import GeneratorConfig
 from txrisk.models import model_inputs
-from txrisk.models.bundle import ModelBundle, train_bundle
+from txrisk.models.bundle import ModelBundle
 from txrisk.models.stacked import STACK_COLUMNS
-from txrisk.scoring import (
-    FixedClock,
-    RiskAssessment,
-    ScoringService,
-    load_rules_config,
-    rule_scores_table,
-    score_table,
-)
-
-START = date(2026, 1, 1)
-CONFIG = EvaluationConfig.model_validate(
-    {
-        "label_maturity_days": 3,
-        "alert_budget_per_day": 20,
-        "wallet_age_band_edges": [30, 180],
-        "splits": {
-            "train": [0, 8],
-            "calibration": [8, 11],
-            "thresholds": [11, 14],
-            "evaluation": [14, 21],
-        },
-    }
-)
-RULES = load_rules_config(RULES_CONFIG)
-
-
-@dataclass(frozen=True)
-class Market:
-    transactions: pd.DataFrame
-    wallets: pd.DataFrame
-    sim_swaps: pd.DataFrame
-    discoveries: pd.DataFrame
-    features: pd.DataFrame
-    feature_config: FeatureConfig
+from txrisk.scoring import RiskAssessment, rule_scores_table, score_table
 
 
 @pytest.fixture(scope="module")
 def market(small_config: GeneratorConfig) -> Market:
-    config = small_config.model_copy(
-        update={
-            "population": small_config.population.model_copy(
-                update={"wallets": 800, "agents": 40, "merchants": 20}
-            ),
-            "fraud": small_config.fraud.model_copy(update={"rate": 0.03}),
-        }
-    )
-    dataset = generate(config, seed=4, key=KEY)
-    feature_config = FeatureConfig(
-        kyc_limits={tier.name: tier.single_transaction_limit for tier in config.market.kyc_tiers}
-    )
-    return Market(
-        transactions=dataset.transactions,
-        wallets=dataset.wallets,
-        sim_swaps=dataset.sim_swaps,
-        discoveries=dataset.fraud_discoveries,
-        features=feature_table(
-            dataset.transactions, dataset.wallets, dataset.sim_swaps, config=feature_config
-        ),
-        feature_config=feature_config,
-    )
+    return build_market(small_config)
 
 
 @pytest.fixture(scope="module")
 def bundle(market: Market) -> ModelBundle:
-    return _train(market)
-
-
-def _train(market: Market) -> ModelBundle:
-    return train_bundle(
-        market.transactions,
-        market.features,
-        market.discoveries,
-        rules=RULES,
-        period_start=START,
-        config=CONFIG,
-        seed=11,
-    )
+    return train(market)
 
 
 def _rows(market: Market, name: Split) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -181,7 +111,7 @@ def test_a_saved_bundle_loads_back_to_identical_scores(
 
 
 def test_the_same_training_gives_the_same_version(market: Market, bundle: ModelBundle):
-    assert _train(market).version == bundle.version
+    assert train(market).version == bundle.version
 
 
 def test_input_contributions_add_up_to_the_models_share_of_the_risk_score(
@@ -203,26 +133,6 @@ def test_input_contributions_add_up_to_the_models_share_of_the_risk_score(
     assert np.ptp(unexplained.to_numpy()) < 1e-6
 
 
-def _served(market: Market, bundle: ModelBundle, ids: set[str]) -> dict[str, RiskAssessment]:
-    """The scoring service's assessment of each of `ids`, each with every earlier Transaction
-    already in the history."""
-    history = replay_history(market.wallets, market.sim_swaps)
-    served = {}
-    chronological = market.transactions.sort_values("occurred_at", kind="stable")
-    for transaction in transactions_from_frame(chronological):
-        if transaction.transaction_id in ids:
-            service = ScoringService(
-                history,
-                FixedClock(transaction.occurred_at),
-                features=market.feature_config,
-                rules=RULES,
-                bundle=bundle,
-            )
-            served[transaction.transaction_id] = service.assess(transaction)
-        history.record(transaction)
-    return served
-
-
 @pytest.fixture(scope="module")
 def served(market: Market, bundle: ModelBundle) -> tuple[pd.Series, dict[str, RiskAssessment]]:
     """Batch Risk scores of the evaluation days, and the service's assessment of the riskiest
@@ -234,7 +144,7 @@ def served(market: Market, bundle: ModelBundle) -> tuple[pd.Series, dict[str, Ri
         *rules.index[rules["critical"]],
         *scores.sample(10, random_state=1).index,
     }
-    return scores, _served(market, bundle, ids)
+    return scores, replay_assessments(market, bundle, ids)
 
 
 def test_the_scoring_service_gives_the_bundle_s_risk_score_and_band(

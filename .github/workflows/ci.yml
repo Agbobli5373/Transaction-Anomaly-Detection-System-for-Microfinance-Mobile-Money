@@ -8,6 +8,10 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    env:
+      # The integration tests start Postgres with Testcontainers on the runner's Docker; under CI
+      # they fail rather than skip if Docker is missing.
+      CI: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -18,3 +22,21 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy
       - run: uv run pytest
+
+  # The compose stack starts: Postgres, the migration job, then an API that reports ready.
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Throwaway credentials for this run only, in the .env compose reads; none is committed.
+      - run: |
+          generated=$(openssl rand -hex 16)
+          grep -v -E '^(POSTGRES_|PG)PASSWORD=' .env.example > .env
+          for key in POSTGRES_PASSWORD PGPASSWORD; do echo "$key=$generated" >> .env; done
+      - run: docker compose up --build --detach --wait api
+      - run: curl --fail --silent http://127.0.0.1:8000/v1/ready
+      - run: curl --fail --silent http://127.0.0.1:8000/v1/openapi.json > /dev/null
+      - if: failure()
+        run: docker compose logs
+      - if: always()
+        run: docker compose down --volumes
