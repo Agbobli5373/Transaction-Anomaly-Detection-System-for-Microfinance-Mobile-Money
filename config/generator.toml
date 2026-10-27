@@ -1,0 +1,95 @@
+# Synthetic Ghana-style mobile money market used by the generator.
+# Limits and amounts are illustrative of a tiered e-money market, not a copy of any regulation.
+
+[period]
+start = "2026-01-01"
+days = 120
+
+[population]
+wallets = 10000
+agents = 300
+merchants = 200
+# Share of Wallets already registered before the period starts; the rest register during it.
+preexisting_wallet_share = 0.7
+# Wallet holders usually transact with a small circle of other Wallets.
+contacts_per_wallet = 8
+
+[market]
+currency = "GHS"
+# Ghana mobile network prefixes after the 233 country code.
+msisdn_prefixes = ["20", "23", "24", "25", "26", "27", "28", "50", "53", "54", "55", "56", "57", "59"]
+merchant_categories = ["grocery", "fuel", "pharmacy", "restaurant", "transport", "retail", "education"]
+biller_categories = ["electricity", "water", "pay_tv", "airtime", "internet", "school_fees"]
+
+# Region name = relative population weight (2021 census, millions).
+[market.regions]
+"Greater Accra" = 5.46
+"Ashanti" = 5.44
+"Eastern" = 2.93
+"Central" = 2.86
+"Northern" = 2.31
+"Western" = 2.06
+"Volta" = 1.66
+"Upper East" = 1.30
+"Bono" = 1.21
+"Bono East" = 1.20
+"Upper West" = 0.90
+"Western North" = 0.88
+"Oti" = 0.75
+"North East" = 0.66
+"Savannah" = 0.65
+"Ahafo" = 0.56
+
+[[market.kyc_tiers]]
+name = "minimum"
+share = 0.45
+single_transaction_limit = 1000
+max_balance = 2000
+
+[[market.kyc_tiers]]
+name = "medium"
+share = 0.40
+single_transaction_limit = 5000
+max_balance = 15000
+
+[[market.kyc_tiers]]
+name = "enhanced"
+share = 0.15
+single_transaction_limit = 15000
+max_balance = 50000
+
+[behaviour]
+mean_transactions_per_day = 2.0
+# Median balance (GHS) of Wallets that already exist when the period starts; new Wallets start empty.
+median_opening_balance = 150
+weekend_activity_factor = 0.85
+usd_channel_share = 0.7
+home_region_share = 0.92
+# Relative activity per hour of day, 00:00 to 23:00 local time (UTC+0).
+hourly_activity = [
+    0.15, 0.08, 0.05, 0.05, 0.10, 0.35,
+    0.80, 1.20, 1.40, 1.30, 1.20, 1.20,
+    1.30, 1.20, 1.10, 1.10, 1.20, 1.40,
+    1.50, 1.40, 1.10, 0.80, 0.50, 0.30,
+]
+
+# Per Transaction type: share of activity and the median amount in GHS.
+[behaviour.transaction_types.cash_in]
+share = 0.22
+median_amount = 150
+
+[behaviour.transaction_types.cash_out]
+share = 0.18
+median_amount = 120
+
+[behaviour.transaction_types.transfer]
+share = 0.30
+median_amount = 80
+
+[behaviour.transaction_types.payment]
+share = 0.18
+median_amount = 45
+
+[behaviour.transaction_types.bill_payment]
+share = 0.12
+median_amount = 30
