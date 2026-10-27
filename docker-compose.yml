@@ -1,0 +1,74 @@
+# The development stack: Postgres, the migration job and the scoring API.
+# Every service reads .env (copy .env.example and fill it in); no credential is written here.
+#   docker compose up --build             # Postgres, migrations, then the API on :8000
+#   docker compose run --rm seed          # load data/generated as history (after `make generate`)
+# Set TXRISK_MODEL_BUNDLE=/models/<version> in .env to score with a bundle from `make train`;
+# without it the rules alone score.
+
+x-txrisk: &txrisk
+  build: .
+  image: txrisk:dev
+  env_file: .env
+  environment:
+    # No credential in the URL: libpq reads the database password from PGPASSWORD in .env.
+    TXRISK_DATABASE_URL: postgresql://txrisk@postgres:5432/txrisk
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    # The superuser's password comes from .env, like everything secret.
+    env_file: .env
+    environment:
+      POSTGRES_USER: txrisk
+      POSTGRES_DB: txrisk
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "txrisk", "-d", "txrisk"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # Applies the schema migrations, then exits. Nothing else changes the schema.
+  migrate:
+    <<: *txrisk
+    command: ["txrisk", "migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # One-off: `docker compose run --rm seed`.
+  seed:
+    <<: *txrisk
+    profiles: ["seed"]
+    command: ["txrisk", "seed", "--data", "/data/generated"]
+    volumes:
+      - ./data:/data:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  api:
+    <<: *txrisk
+    command: ["txrisk", "serve", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/models:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v1/ready')"
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  pgdata:
