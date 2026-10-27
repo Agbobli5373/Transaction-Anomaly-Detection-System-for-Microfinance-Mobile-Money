@@ -7,7 +7,15 @@ from conftest import KEY
 
 from txrisk.generator import Dataset, GeneratorConfig, generate, write_dataset
 
-OUTPUT_FILES = ["wallets", "agents", "merchants", "billers", "transactions"]
+OUTPUT_FILES = [
+    "wallets",
+    "agents",
+    "merchants",
+    "billers",
+    "transactions",
+    "sim_swaps",
+    "ground_truth",
+]
 COUNTERPARTY_COLUMNS = {
     "counterparty_wallet_id": "wallets",
     "agent_id": "agents",
@@ -248,9 +256,11 @@ def test_channel_is_ussd_or_app_with_ussd_the_majority(dataset: Dataset):
     assert 0.5 < (channels == "ussd").mean() < 0.9
 
 
-def test_each_wallet_transacts_from_its_own_single_device(dataset: Dataset):
-    devices = dataset.transactions.groupby("subject_wallet_id")["device_id"].nunique()
-    owners = dataset.transactions.groupby("device_id")["subject_wallet_id"].nunique()
+def test_in_legitimate_activity_each_wallet_uses_its_own_single_device(dataset: Dataset):
+    tx = dataset.transactions
+    legitimate = tx[~tx["transaction_id"].isin(dataset.ground_truth["transaction_id"])]
+    devices = legitimate.groupby("subject_wallet_id")["device_id"].nunique()
+    owners = legitimate.groupby("device_id")["subject_wallet_id"].nunique()
 
     assert (devices == 1).all()
     assert (owners == 1).all()

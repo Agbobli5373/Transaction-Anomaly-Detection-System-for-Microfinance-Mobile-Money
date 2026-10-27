@@ -93,3 +93,46 @@ median_amount = 45
 [behaviour.transaction_types.bill_payment]
 share = 0.12
 median_amount = 30
+
+[fraud]
+# Target share of all Transactions that are fraudulent.
+rate = 0.002
+# Share of Wallets that get a legitimate SIM swap (new SIM, no fraud) during the period.
+legitimate_sim_swap_share = 0.02
+# Fraudsters target Wallets that usually hold at least this much (GHS).
+victim_min_median_balance = 100
+
+# Each scenario: its share of fraudulent Transactions, and [min, max] ranges that every
+# instance draws its own parameters from.
+[fraud.scenarios.sim_swap_takeover]
+share = 0.25
+delay_hours = [0.5, 12]
+transactions = [1, 3]
+drain_share = [0.6, 1.0]
+
+[fraud.scenarios.account_takeover_drain]
+share = 0.20
+burst_minutes = [10, 60]
+transactions = [3, 6]
+drain_share = [0.3, 0.7]
+
+[fraud.scenarios.mule_fan_in]
+share = 0.25
+senders = [10, 25]
+window_hours = [6, 24]
+sent_amount = [50, 500]
+cash_out_delay_hours = [0.5, 6]
+cash_outs = [1, 3]
+
+[fraud.scenarios.agent_structuring]
+share = 0.15
+cash_outs = [5, 12]
+window_hours = [4, 24]
+limit_share = [0.9, 0.995]
+
+[fraud.scenarios.social_engineering_push]
+share = 0.15
+# Told to "secure" their money, the victim first tops up by a multiple of their usual balance.
+top_up_multiple = [2, 5]
+top_up_lead_minutes = [10, 120]
+drain_share = [0.5, 0.95]

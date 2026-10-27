@@ -71,11 +71,100 @@ class Behaviour(_Frozen):
         return self
 
 
+class FraudScenario(StrEnum):
+    SIM_SWAP_TAKEOVER = "sim_swap_takeover"
+    ACCOUNT_TAKEOVER_DRAIN = "account_takeover_drain"
+    MULE_FAN_IN = "mule_fan_in"
+    AGENT_STRUCTURING = "agent_structuring"
+    SOCIAL_ENGINEERING_PUSH = "social_engineering_push"
+
+
+class Range(_Frozen):
+    """An inclusive [min, max] range an instance draws a parameter from."""
+
+    low: float
+    high: float
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_pair(cls, value: object) -> object:
+        if isinstance(value, list | tuple):
+            low, high = value
+            return {"low": low, "high": high}
+        return value
+
+    @model_validator(mode="after")
+    def _ordered(self) -> "Range":
+        if self.low > self.high:
+            raise ValueError(f"range minimum {self.low} exceeds maximum {self.high}")
+        return self
+
+    @property
+    def mean(self) -> float:
+        return (self.low + self.high) / 2
+
+
+class _Scenario(_Frozen):
+    share: float = Field(gt=0)
+
+
+class SimSwapTakeover(_Scenario):
+    delay_hours: Range
+    transactions: Range
+    drain_share: Range
+
+
+class AccountTakeoverDrain(_Scenario):
+    burst_minutes: Range
+    transactions: Range
+    drain_share: Range
+
+
+class MuleFanIn(_Scenario):
+    senders: Range
+    window_hours: Range
+    sent_amount: Range
+    cash_out_delay_hours: Range
+    cash_outs: Range
+
+
+class AgentStructuring(_Scenario):
+    cash_outs: Range
+    window_hours: Range
+    limit_share: Range
+
+
+class SocialEngineeringPush(_Scenario):
+    top_up_multiple: Range
+    top_up_lead_minutes: Range
+    drain_share: Range
+
+
+class FraudScenarios(_Frozen):
+    sim_swap_takeover: SimSwapTakeover
+    account_takeover_drain: AccountTakeoverDrain
+    mule_fan_in: MuleFanIn
+    agent_structuring: AgentStructuring
+    social_engineering_push: SocialEngineeringPush
+
+    def share(self, scenario: FraudScenario) -> float:
+        configured: _Scenario = getattr(self, scenario.value)
+        return configured.share
+
+
+class Fraud(_Frozen):
+    rate: float = Field(ge=0, lt=1)
+    legitimate_sim_swap_share: float = Field(ge=0, le=1)
+    victim_min_median_balance: float = Field(ge=0)
+    scenarios: FraudScenarios
+
+
 class GeneratorConfig(_Frozen):
     period: Period
     population: Population
     market: Market
     behaviour: Behaviour
+    fraud: Fraud
 
 
 def load_config(path: Path) -> GeneratorConfig:
