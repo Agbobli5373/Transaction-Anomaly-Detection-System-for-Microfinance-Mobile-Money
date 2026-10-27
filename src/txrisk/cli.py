@@ -9,7 +9,7 @@ import pandas as pd
 
 from txrisk.evaluation import load_evaluation_config
 from txrisk.evaluation.report import evaluate
-from txrisk.evaluation.scorers import anomaly_scores, rules_only_scores
+from txrisk.evaluation.scorers import anomaly_scores, rules_only_scores, supervised_scores
 from txrisk.features import feature_table, load_feature_config
 from txrisk.generator import generate, load_config, write_dataset
 from txrisk.scoring import RULES_ONLY, load_rules_config
@@ -50,7 +50,7 @@ def _features(args: argparse.Namespace) -> int:
 
 
 # Scorers `txrisk evaluate` can judge. LOF is an offline comparison only; it is never served.
-SCORERS = [RULES_ONLY, "anomaly", "lof"]
+SCORERS = [RULES_ONLY, "anomaly", "lof", "supervised"]
 
 
 def _evaluate(args: argparse.Namespace) -> int:
@@ -75,6 +75,15 @@ def _evaluate(args: argparse.Namespace) -> int:
             rules=load_rules_config(args.rules_config),
             evaluation=evaluation,
             period_start=period_start,
+        )
+    elif args.scorer == "supervised":
+        scores = supervised_scores(
+            *tables,
+            pd.read_parquet(args.data / "fraud_discoveries.parquet"),
+            features=features,
+            evaluation=evaluation,
+            period_start=period_start,
+            feature_rows=pd.read_parquet(args.features) if args.features else None,
         )
     else:
         scores = anomaly_scores(

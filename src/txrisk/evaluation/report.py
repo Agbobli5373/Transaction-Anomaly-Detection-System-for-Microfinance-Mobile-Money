@@ -21,7 +21,7 @@ from sklearn.metrics import precision_recall_curve, roc_curve
 
 from txrisk.evaluation.config import EvaluationConfig
 from txrisk.evaluation.labels import Split, split_of
-from txrisk.evaluation.metrics import at_threshold, precision_at_budget, ranking
+from txrisk.evaluation.metrics import at_threshold, precision_at_budget, ranking, reliability
 
 
 def _wallet_age_band(age_days: pd.Series, edges: list[int]) -> pd.Series:
@@ -77,7 +77,8 @@ def evaluate(
     """Judge `scores` (transaction_id, risk_score, risk_band) on the evaluation split.
 
     Writes metrics.json, the PR and ROC curves and the evaluated scores to `out`, and returns
-    the metrics. High is the scorer's own High Risk band.
+    the metrics. High is the scorer's own High Risk band. A scorer that also gives a calibrated
+    `fraud_probability` and its `raw_probability` gets a reliability check of both.
     """
     transactions = pd.read_parquet(data / "transactions.parquet")
     wallets = pd.read_parquet(data / "wallets.parquet")
@@ -144,6 +145,12 @@ def evaluate(
         },
         "segments": _segments(frame, high),
     }
+    if {"fraud_probability", "raw_probability"} <= set(scores.columns):
+        # Against Ground truth: how often fraud really happens at each probability.
+        metrics["reliability"] = {
+            kind: asdict(reliability(frame["fraud"], frame[column]))
+            for kind, column in (("raw", "raw_probability"), ("calibrated", "fraud_probability"))
+        }
 
     out.mkdir(parents=True, exist_ok=True)
     (out / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")

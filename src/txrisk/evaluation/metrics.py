@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 
+import numpy as np
 import pandas as pd
 from sklearn.metrics import average_precision_score, roc_auc_score
 
@@ -24,6 +25,22 @@ class RankingMetrics:
 class BudgetMetrics:
     alerts: int
     precision: float | None
+
+
+@dataclass(frozen=True)
+class ReliabilityBin:
+    lower: float
+    upper: float
+    transactions: int
+    mean_probability: float
+    fraud_rate: float
+
+
+@dataclass(frozen=True)
+class Reliability:
+    brier_score: float
+    expected_calibration_error: float  # the bins' gaps, weighted by how many Transactions each has
+    bins: list[ReliabilityBin]  # empty bins are left out
 
 
 def _share(part: int, whole: int) -> float | None:
@@ -66,4 +83,39 @@ def precision_at_budget(
     alerts = ranked.groupby("day", sort=False).head(budget_per_day)
     return BudgetMetrics(
         alerts=len(alerts), precision=_share(int(alerts["fraud"].sum()), len(alerts))
+    )
+
+
+def reliability(fraud: pd.Series, probability: pd.Series, *, bins: int = 10) -> Reliability:
+    """How closely a fraud probability matches how often fraud actually happens.
+
+    Probabilities are grouped into `bins` equal-width bins over [0, 1]; a well-calibrated
+    probability has each bin's fraud rate close to its mean probability.
+    """
+    actual = fraud.astype(float).to_numpy()
+    predicted = probability.astype(float).to_numpy()
+    edges = np.linspace(0, 1, bins + 1)
+    which = np.clip(np.digitize(predicted, edges[1:-1]), 0, bins - 1)
+    found: list[ReliabilityBin] = []
+    gap = 0.0
+    for b in range(bins):
+        inside = which == b
+        if not inside.any():
+            continue
+        mean_probability = float(predicted[inside].mean())
+        fraud_rate = float(actual[inside].mean())
+        found.append(
+            ReliabilityBin(
+                lower=float(edges[b]),
+                upper=float(edges[b + 1]),
+                transactions=int(inside.sum()),
+                mean_probability=mean_probability,
+                fraud_rate=fraud_rate,
+            )
+        )
+        gap += inside.sum() * abs(mean_probability - fraud_rate)
+    return Reliability(
+        brier_score=float(np.mean((predicted - actual) ** 2)),
+        expected_calibration_error=gap / len(predicted),
+        bins=found,
     )

@@ -10,9 +10,11 @@ from txrisk.evaluation.thresholds import band, budget_thresholds
 from txrisk.features import FeatureConfig, feature_table
 from txrisk.models import model_inputs
 from txrisk.models.anomaly import AnomalyModel
+from txrisk.models.supervised import train_supervised
 from txrisk.scoring import RulesConfig, score_table
 
 ANOMALY_SEED = 42
+SUPERVISED_SEED = 42
 
 
 def rules_only_scores(
@@ -85,5 +87,61 @@ def anomaly_scores(
             "risk_score": risk_score.to_numpy(),
             "risk_band": band(risk_score, thresholds).to_numpy(),
             "anomaly_score": anomaly.to_numpy(),
+        }
+    ).astype({"transaction_id": "string", "risk_band": "string"})
+
+
+def supervised_scores(
+    transactions: pd.DataFrame,
+    wallets: pd.DataFrame,
+    sim_swaps: pd.DataFrame,
+    discoveries: pd.DataFrame,
+    *,
+    features: FeatureConfig,
+    evaluation: EvaluationConfig,
+    period_start: date,
+    feature_rows: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """The supervised fraud probability alone: trained and calibrated on the Fraud labels known
+    when the evaluation days start, banded at the Alert budget on the threshold days, and scored
+    on the evaluation days. The Risk score is the calibrated probability x 100; the raw
+    probability comes along for the reliability check.
+
+    `feature_rows` is a feature table already built for these Transactions (`txrisk features`);
+    without one it is built here, which is the slow part of the run.
+    """
+    if feature_rows is None:
+        feature_rows = feature_table(transactions, wallets, sim_swaps, config=features)
+    model = train_supervised(
+        transactions,
+        feature_rows,
+        discoveries,
+        period_start=period_start,
+        config=evaluation,
+        seed=SUPERVISED_SEED,
+    )
+    inputs = model_inputs(transactions, feature_rows)
+    split = split_of(transactions["occurred_at"], period_start, evaluation)
+
+    def rows_in(name: Split) -> pd.DataFrame:
+        in_split: pd.DataFrame = inputs[(split == name).fillna(False).to_numpy(dtype=bool)]
+        return in_split
+
+    window = evaluation.splits.thresholds
+    thresholds = budget_thresholds(
+        model.score(rows_in(Split.THRESHOLDS)) * 100,
+        days=window.end - window.start,
+        budget_per_day=evaluation.alert_budget_per_day,
+    )
+    evaluated = rows_in(Split.EVALUATION)
+    probability = model.score(evaluated)
+    risk_score = probability * 100
+    return pd.DataFrame(
+        {
+            "transaction_id": probability.index.to_numpy(),
+            "risk_score": risk_score.to_numpy(),
+            "risk_band": band(risk_score, thresholds).to_numpy(),
+            "fraud_probability": probability.to_numpy(),
+            "raw_probability": model.raw_probability(evaluated).to_numpy(),
         }
     ).astype({"transaction_id": "string", "risk_band": "string"})

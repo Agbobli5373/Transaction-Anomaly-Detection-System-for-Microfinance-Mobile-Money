@@ -39,19 +39,30 @@ def run(small_config: GeneratorConfig, tmp_path_factory: pytest.TempPathFactory)
         "evaluation = [14, 21]\n",
         encoding="utf-8",
     )
+    _evaluate(root, "--out", str(root / "report"))
+    return root
+
+
+def _evaluate(root: Path, *options: str) -> None:
     exit_code = main(
         [
             "evaluate",
             "--data", str(root / "data"),
-            "--config", str(market),
-            "--evaluation-config", str(evaluation),
+            "--config", str(root / "generator.toml"),
+            "--evaluation-config", str(root / "evaluation.toml"),
             "--feature-config", str(REPO / "config" / "features.toml"),
             "--rules-config", str(REPO / "config" / "rules.toml"),
-            "--out", str(root / "report"),
+            *options,
         ]
     )  # fmt: skip
     assert exit_code == 0
-    return root
+
+
+@pytest.fixture(scope="module")
+def supervised(run: Path) -> Path:
+    """The same market judged by the supervised fraud probability alone."""
+    _evaluate(run, "--scorer", "supervised", "--out", str(run / "supervised"))
+    return run / "supervised"
 
 
 def _metrics(run: Path) -> dict:
@@ -111,3 +122,32 @@ def test_the_report_measures_what_fraud_operations_care_about(run: Path):
     assert set(metrics["segments"]) == SEGMENTS
     for segment in metrics["segments"].values():
         assert sum(group["transactions"] for group in segment.values()) == len(evaluated)
+
+
+def test_the_supervised_risk_score_is_the_fraud_probability_banded_at_the_alert_budget(
+    supervised: Path,
+):
+    metrics = json.loads((supervised / "metrics.json").read_text(encoding="utf-8"))
+    scores = pd.read_parquet(supervised / "scores.parquet")
+
+    assert metrics["scorer"] == "supervised"
+    assert len(scores) == metrics["transactions"]
+    assert scores["fraud_probability"].between(0, 1).all()
+    assert scores["risk_score"].equals(scores["fraud_probability"] * 100)
+    # High is set to the Alert budget (20 a day) on days 11-14, like every scorer's.
+    assert 10 <= metrics["at_high"]["per_day"] <= 40
+    high = scores.loc[scores["risk_band"] == "High", "risk_score"]
+    assert high.min() > scores.loc[scores["risk_band"] != "High", "risk_score"].max()
+
+
+def test_calibration_makes_the_probability_more_honest_than_the_raw_one(supervised: Path):
+    metrics = json.loads((supervised / "metrics.json").read_text(encoding="utf-8"))
+
+    raw, calibrated = metrics["reliability"]["raw"], metrics["reliability"]["calibrated"]
+
+    assert calibrated["brier_score"] < raw["brier_score"]
+    assert calibrated["expected_calibration_error"] < raw["expected_calibration_error"]
+
+
+def test_only_a_probability_gets_a_reliability_check(run: Path):
+    assert "reliability" not in _metrics(run)

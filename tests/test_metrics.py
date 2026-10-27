@@ -3,7 +3,7 @@
 import pandas as pd
 import pytest
 
-from txrisk.evaluation.metrics import at_threshold, precision_at_budget, ranking
+from txrisk.evaluation.metrics import at_threshold, precision_at_budget, ranking, reliability
 
 #           0     1     2     3     4     5     6     7
 FRAUD = pd.Series([1, 1, 0, 0, 0, 0, 1, 0])
@@ -37,6 +37,21 @@ def test_precision_when_reviewers_take_the_top_alerts_each_day():
 
     assert metrics.alerts == 2
     assert metrics.precision == 0.5
+
+
+def test_how_well_a_probability_matches_how_often_fraud_happens():
+    probability = SCORE / 100
+
+    metrics = reliability(FRAUD, probability, bins=2)
+
+    # Squared misses: 0.1, 0.4, 0.55, 0.1, 0.05, 0, 0.8 and 0.8.
+    assert metrics.brier_score == pytest.approx(1.765 / 8)
+    # Below 0.5: 0.1, 0.05, 0 and 0.2 average 0.0875, and one in four is fraud. From 0.5: 0.9,
+    # 0.6, 0.55 and 0.8 average 0.7125, and two in four are fraud.
+    assert [(b.lower, b.upper, b.transactions) for b in metrics.bins] == [(0, 0.5, 4), (0.5, 1, 4)]
+    assert [b.mean_probability for b in metrics.bins] == pytest.approx([0.0875, 0.7125])
+    assert [b.fraud_rate for b in metrics.bins] == pytest.approx([0.25, 0.5])
+    assert metrics.expected_calibration_error == pytest.approx(0.5 * 0.1625 + 0.5 * 0.2125)
 
 
 def test_metrics_are_empty_rather_than_misleading_when_undefined():

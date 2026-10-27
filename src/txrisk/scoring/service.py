@@ -104,7 +104,9 @@ class ScoringService:
         risk_score = round(score)
         anomaly = supervised = None
         if self._anomaly is not None or self._supervised is not None:
-            inputs = inputs_for(transaction, features)  # built once: it costs more than either model
+            inputs = inputs_for(
+                transaction, features
+            )  # built once: it costs more than either model
             if self._anomaly is not None:
                 anomaly = float(self._anomaly.score(inputs).iloc[0])
             if self._supervised is not None:
