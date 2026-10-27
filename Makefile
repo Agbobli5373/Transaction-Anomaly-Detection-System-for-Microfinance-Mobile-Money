@@ -24,4 +24,4 @@ generate:
 	uv run txrisk generate --config config/generator.toml --seed 42 --out data/generated
 
 features:
-	uv run txrisk features --data data/generated --out data/features/subject_wallet.parquet
+	uv run txrisk features --data data/generated --out data/features/features.parquet

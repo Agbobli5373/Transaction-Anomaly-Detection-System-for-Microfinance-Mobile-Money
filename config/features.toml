@@ -1,0 +1,7 @@
+# Settings for the point-in-time features. Each KYC tier's single-transaction limit is read from
+# the market config (config/generator.toml), not repeated here.
+
+# Below this many prior Transactions, history-dependent Subject wallet features are left empty.
+min_history = 5
+# A Cash-out counts as near-limit when it is at most this share below its Wallet's KYC tier limit.
+near_limit_share = 0.10

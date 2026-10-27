@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from txrisk.features import feature_table
+from txrisk.features import feature_table, load_feature_config
 from txrisk.generator import generate, load_config, write_dataset
 
 PSEUDONYM_KEY_ENV = "TXRISK_PSEUDONYM_KEY"
@@ -28,9 +28,16 @@ def _generate(args: argparse.Namespace) -> int:
 
 
 def _features(args: argparse.Namespace) -> int:
+    market = load_config(args.config).market
+    config = load_feature_config(
+        args.feature_config,
+        kyc_limits={tier.name: tier.single_transaction_limit for tier in market.kyc_tiers},
+    )
     table = feature_table(
         pd.read_parquet(args.data / "transactions.parquet"),
         pd.read_parquet(args.data / "wallets.parquet"),
+        pd.read_parquet(args.data / "sim_swaps.parquet"),
+        config=config,
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     table.to_parquet(args.out, index=False)
@@ -50,7 +57,14 @@ def main(argv: list[str] | None = None) -> int:
 
     feat = commands.add_parser("features", help="compute the feature table for a dataset")
     feat.add_argument("--data", type=Path, default=Path("data/generated"))
-    feat.add_argument("--out", type=Path, default=Path("data/features/subject_wallet.parquet"))
+    feat.add_argument(
+        "--config",
+        type=Path,
+        default=Path("config/generator.toml"),
+        help="market config holding each KYC tier's single-transaction limit",
+    )
+    feat.add_argument("--feature-config", type=Path, default=Path("config/features.toml"))
+    feat.add_argument("--out", type=Path, default=Path("data/features/features.parquet"))
     feat.set_defaults(handler=_features)
 
     args = parser.parse_args(argv)
