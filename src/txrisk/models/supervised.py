@@ -30,8 +30,9 @@ class CentredIsotonic:
     Plain isotonic regression is a step function: whole bands of raw probabilities share one
     calibrated value, which throws away the model's ranking inside each step and leaves an
     Alert budget threshold able only to take or leave a step whole. Joining the centres of the
-    steps with straight lines keeps the same fit to the labels in each step's middle while
-    staying strictly increasing between the lowest and highest centre; beyond those it is flat.
+    steps with straight lines, starting from no fraud at a raw probability of 0, keeps the same
+    fit to the labels in each step's middle while staying strictly increasing up to the highest
+    centre; above that it is flat.
     """
 
     raw: np.ndarray  # each step's centre, as a raw probability
@@ -45,7 +46,12 @@ class CentredIsotonic:
         starts = np.r_[True, np.diff(y) != 0]
         step = np.cumsum(starts) - 1
         centres = np.bincount(step, weights=x) / np.bincount(step)
-        return cls(raw=centres, probability=y[starts])
+        probability = y[starts]
+        # Without the anchor, everything below the lowest step's centre would share its value. A
+        # step with no fraud in it is dropped for the same reason: it would sit flat on the
+        # anchor's zero, and seeing no fraud there does not make fraud impossible.
+        seen = probability > 0
+        return cls(raw=np.r_[0.0, centres[seen]], probability=np.r_[0.0, probability[seen]])
 
     def predict(self, raw: np.ndarray) -> np.ndarray:
         return np.asarray(np.interp(raw, self.raw, self.probability), dtype=np.float64)

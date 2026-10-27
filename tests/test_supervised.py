@@ -163,8 +163,8 @@ def test_calibration_keeps_the_model_s_ranking(market: Market):
     model = _train(market)
     raw = model.raw_probability(market.inputs)
     calibrated = model.score(market.inputs)
-    # Beyond the lowest and highest calibration points the probability is flat.
-    inside = (calibrated > calibrated.min()) & (calibrated < calibrated.max())
+    # Above the highest calibration point the probability is flat; below it, it never is.
+    inside = calibrated < calibrated.max()
 
     ranked = calibrated[raw[inside].sort_values(kind="stable").index]
 
