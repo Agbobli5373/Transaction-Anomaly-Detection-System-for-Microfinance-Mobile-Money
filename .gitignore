@@ -11,4 +11,8 @@ build/
 # Generated data, reports and local secrets
 data/
 reports/
+# Trained model bundles and the local MLflow store (`txrisk train`)
+/models/
+mlruns/
+mlflow.db
 .env

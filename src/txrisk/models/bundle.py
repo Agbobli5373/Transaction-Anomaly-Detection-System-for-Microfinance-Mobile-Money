@@ -120,7 +120,10 @@ def train_bundle(
     period_start: date,
     config: EvaluationConfig,
     seed: int,
+    rule_scores: pd.DataFrame | None = None,
 ) -> ModelBundle:
+    """Train every part of a bundle. `rule_scores` is `rule_scores_table` of these Transactions
+    if already computed; without it it is computed here, a Python loop over every row."""
     splits = config.splits
     split = split_of(transactions["occurred_at"], period_start, config)
     inputs = model_inputs(transactions, feature_rows)
@@ -134,7 +137,9 @@ def train_bundle(
     supervised = train_supervised(
         transactions, feature_rows, discoveries, period_start=period_start, config=config, seed=seed
     )
-    rules_scores = rule_scores_table(transactions, feature_rows, rules)
+    rules_scores = (
+        rule_scores_table(transactions, feature_rows, rules) if rule_scores is None else rule_scores
+    )
 
     # The stacker learns from the calibration days, with the labels known on the day it goes live.
     cutoff = pd.Timestamp(period_start, tz="UTC") + pd.Timedelta(days=splits.evaluation.start)

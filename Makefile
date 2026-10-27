@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised
+.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train
 
 install:
 	uv sync
@@ -34,3 +34,13 @@ evaluate:
 # its fraud probability alone on the evaluation days; writes reports/supervised/.
 evaluate-supervised:
 	uv run txrisk evaluate --data data/generated --scorer supervised --out reports/supervised
+
+# Trains the model bundle as `train` does and judges its stacked Risk score on the evaluation days;
+# writes reports/stacked/.
+evaluate-stacked:
+	uv run txrisk evaluate --data data/generated --scorer stacked --out reports/stacked
+
+# Trains a model bundle into models/<version>/ and records the run in the local MLflow store
+# (mlflow.db, mlruns/). Browse it with: uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
+train:
+	uv run txrisk train --data data/generated --features data/features/features.parquet
