@@ -19,6 +19,7 @@ class Transaction:
     region: str
     subject_balance_before: float
     device_id: str = ""
+    channel: str = ""
 
 
 @dataclass(frozen=True)
