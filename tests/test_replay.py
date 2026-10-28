@@ -324,7 +324,12 @@ def test_the_replayed_discoveries_become_fraud_labels_dated_by_their_event_time(
     discoveries = {
         e.transaction_id: e for e in replayed["events"] if isinstance(e, FraudDiscovered)
     }
-    labels = FraudLabels(replayed["engine"]).known_at(day(replayed["first"] + 2))
+    # Discoveries before the replay's first day were seeded as labels with the history.
+    labels = [
+        label
+        for label in FraudLabels(replayed["engine"]).known_at(day(replayed["first"] + 2))
+        if label.discovered_at >= day(replayed["first"])
+    ]
 
     assert discoveries
     assert {label.transaction_id: (label.discovered_at, label.source) for label in labels} == {
@@ -341,7 +346,12 @@ def test_a_complaint_or_chargeback_is_not_a_label_before_its_event_time(replayed
     first, last = discoveries[0], discoveries[-1]
     assert first.discovered_at < last.discovered_at
 
-    before_first = labels.known_at(first.discovered_at - timedelta(microseconds=1))
+    # Labels seeded with the history (discovered before the replay began) are known from the start.
+    before_first = [
+        label
+        for label in labels.known_at(first.discovered_at - timedelta(microseconds=1))
+        if label.discovered_at >= day(replayed["first"])
+    ]
     at_first = labels.known_at(first.discovered_at)
     just_before_last = labels.known_at(last.discovered_at - timedelta(microseconds=1))
 
@@ -364,7 +374,8 @@ def test_the_replayed_transactions_are_scored_and_stored(replayed: dict[str, Any
     stream: Stream = replayed["stream"]
 
     assert stream.count("risk_assessments") >= replayed["published"].transactions
-    assert stream.count("fraud_labels") == replayed["published"].fraud_discoveries
+    seeded = len(FraudLabels(replayed["engine"]).known_at(day(replayed["first"])))
+    assert stream.count("fraud_labels") == seeded + replayed["published"].fraud_discoveries
 
 
 def test_a_discovery_that_breaks_its_contract_goes_to_the_dead_letter_topic(

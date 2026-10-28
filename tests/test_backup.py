@@ -81,7 +81,7 @@ def data(market: Market, tmp_path_factory: pytest.TempPathFactory) -> Path:
     """The market's parties and history on disk, without the offline-only files."""
     folder = tmp_path_factory.mktemp("generated")
     write_dataset(market.dataset, folder)
-    for name in ("ground_truth", "fraud_discoveries", "benign_anomalies"):
+    for name in ("ground_truth", "benign_anomalies"):
         (folder / f"{name}.parquet").unlink()
     return folder
 

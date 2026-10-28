@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert
 
 from txrisk.features import Transaction
-from txrisk.scoring import Reason, RiskAssessment, RiskBand
+from txrisk.scoring import Reason, RiskAssessment, RiskBand, ShadowScore
 from txrisk.store.history import select_transactions, transaction_from_row
 from txrisk.store.tables import (
     COUNTERPARTY_COLUMNS,
@@ -17,6 +17,7 @@ from txrisk.store.tables import (
     alerts,
     billers,
     cases,
+    challenger_scores,
     merchants,
     model_inputs,
     risk_assessment_history,
@@ -196,6 +197,32 @@ def save_model_inputs(
             },
         )
     )
+
+
+def save_challenger_score(
+    connection: sa.Connection, shadow: ShadowScore, *, transaction_id: str, assessed_at: datetime
+) -> bool:
+    """Keep what a Challenger model scored a Transaction, apart from the Champion's assessment;
+    False, storing nothing, if that model already scored it. Never an Alert: only the Champion's
+    High band raises one."""
+    inserted = connection.execute(
+        insert(challenger_scores)
+        .values(
+            transaction_id=transaction_id,
+            model_version=shadow.model_version,
+            risk_score=shadow.risk_score,
+            risk_band=None if shadow.risk_band is None else shadow.risk_band.value,
+            component_scores=None
+            if shadow.error is not None
+            else {k: _json_number(v) for k, v in shadow.component_scores.items()},
+            error=shadow.error,
+            latency_ms=shadow.latency_ms,
+            assessed_at=assessed_at,
+        )
+        .on_conflict_do_nothing()
+        .returning(challenger_scores.c.transaction_id)
+    ).first()
+    return inserted is not None
 
 
 def _assessment_values(assessment: RiskAssessment) -> dict[str, Any]:

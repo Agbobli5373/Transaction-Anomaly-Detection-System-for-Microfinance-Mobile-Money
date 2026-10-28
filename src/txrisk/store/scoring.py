@@ -4,6 +4,7 @@ The sync API and the stream workers both use it: whichever path scores a Transac
 stores the assessment, and every later call, from either path, gets that stored assessment back.
 """
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
@@ -23,10 +24,21 @@ from txrisk.scoring import (
     RiskBand,
     RulesConfig,
     ScoringService,
+    ShadowScore,
 )
-from txrisk.scoring.metrics import ALERTS_RESCORED, RESCORED
+from txrisk.scoring.metrics import ALERTS_RESCORED, CHALLENGER_SCORES, RESCORED
 from txrisk.store import records
 from txrisk.store.history import PostgresHistory
+
+log = logging.getLogger(__name__)
+
+
+class ChallengerSource(Protocol):
+    """Where the Challenger model comes from: `ChallengerModel`, which follows Postgres."""
+
+    def current(self) -> ModelBundle | None:
+        """The Challenger model's bundle now, or None if there is none."""
+        ...
 
 
 class HistoryCache(Protocol):
@@ -73,6 +85,7 @@ class StoredScoring:
         cache: HistoryCache | None = None,
         model_timeout: float | None = None,
         metrics: Metrics | None = None,
+        challenger: ChallengerSource | None = None,
     ) -> None:
         """A bundle is the Champion model; a `Champion` may be unavailable or slow, and then
         Transactions are scored in Degraded mode (see `ScoringService`) and queued for
@@ -82,7 +95,12 @@ class StoredScoring:
 
         With a `cache`, the features read their history through it, and every Transaction is
         added to it once stored (and again if it was already stored, which repairs an add that
-        failed earlier). Without one, history is read from Postgres itself."""
+        failed earlier). Without one, history is read from Postgres itself.
+
+        A `challenger` scores every new Transaction in shadow too, from the same features: its
+        score is stored apart from the assessment (`challenger_scores`) and never raises an
+        Alert or changes what the caller is told. It is asked for its model on every Transaction,
+        so a newly registered one starts scoring without a restart."""
         self._engine = engine
         self._features = features
         self._rules = rules
@@ -91,6 +109,7 @@ class StoredScoring:
             bundle = Champion.of(bundle, timeout=model_timeout, metrics=self.metrics)
         self._champion = bundle
         self._cache = cache
+        self._challenger = challenger
         self._more_to_rescore = False
 
     def assess(self, transaction: Transaction) -> Scored:
@@ -122,7 +141,7 @@ class StoredScoring:
                 bundle=self._champion,
                 metrics=self.metrics,
             )
-            assessment = service.assess(transaction)
+            assessment, shadow = service.assess_with_shadow(transaction, self._challenger_bundle())
 
         with span("store.save"), self._engine.begin() as connection:
             # A concurrent call may have stored a Transaction under this ID since the check
@@ -140,6 +159,8 @@ class StoredScoring:
                 )
             if first and assessment.risk_band is RiskBand.HIGH:
                 records.raise_alert(connection, transaction)
+            if first and shadow is not None:
+                self._save_shadow(connection, transaction, shadow)
             # Read back, so this answer and every replay of it are the same stored assessment.
             stored = records.stored_assessment(connection, transaction.transaction_id)
         assert stored is not None
@@ -147,6 +168,35 @@ class StoredScoring:
         with span("cache.record"), self._engine.connect() as connection:
             self._cached(connection, transaction)
         return Scored(stored, replayed=not first)
+
+    def _challenger_bundle(self) -> ModelBundle | None:
+        if self._challenger is None:
+            return None
+        try:
+            return self._challenger.current()
+        except Exception:  # the Challenger is never allowed to stop the Champion scoring
+            log.warning("could not get the Challenger model", exc_info=True)
+            return None
+
+    def _save_shadow(
+        self, connection: sa.Connection, transaction: Transaction, shadow: ShadowScore
+    ) -> None:
+        """Store the Challenger's score in a savepoint: if storing it fails, the Champion's
+        assessment, saved in the same transaction, is not lost with it."""
+        try:
+            with connection.begin_nested():
+                records.save_challenger_score(
+                    connection,
+                    shadow,
+                    transaction_id=transaction.transaction_id,
+                    assessed_at=transaction.occurred_at,
+                )
+        except sa.exc.SQLAlchemyError:
+            log.warning("could not store the Challenger score", exc_info=True)
+            return
+        self.metrics.increment(
+            CHALLENGER_SCORES, outcome="error" if shadow.error is not None else "scored"
+        )
 
     def model_health(self) -> ModelHealth:
         """Whether the Champion model is usable (without scoring anything); a rules-only

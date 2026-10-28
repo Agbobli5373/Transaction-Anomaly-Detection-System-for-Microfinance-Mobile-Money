@@ -18,8 +18,9 @@ from txrisk.store.tables import metadata
 
 DAY = timedelta(days=1)
 # What the running system may never see (ADR 0007): the generator writes these files, and no
-# trace of them may reach Postgres.
-OFFLINE_ONLY = ("ground_truth", "fraud_discoveries", "benign_anomalies")
+# trace of them may reach Postgres. Fraud discoveries are not among them: they are what the
+# operation learns, and seeding loads those made before its cutoff as Fraud labels.
+OFFLINE_ONLY = ("ground_truth", "benign_anomalies")
 
 
 @pytest.fixture(scope="module")
@@ -130,9 +131,11 @@ def test_no_ground_truth_reaches_postgres(market: Market, data: Path, database: 
 
     inspector = sa.inspect(engine)
     tables = set(inspector.get_table_names())
-    # Fraud labels are the one place a Fraud discovery lands, and only from a `fraud.discovered`
-    # event at its event time: seeding never writes them.
-    assert _count(engine, "fraud_labels") == 0
+    # Fraud labels are the one place a Fraud discovery lands. Seeding stores those discovered
+    # before its cutoff, each at its own discovery time, and nothing else about fraud.
+    cutoff = pd.Timestamp(START, tz="UTC") + 21 * DAY
+    discovered = market.dataset.fraud_discoveries["discovered_at"]
+    assert _count(engine, "fraud_labels") == (discovered < cutoff).sum() > 0
     columns = {
         c["name"] for table in tables - {"fraud_labels"} for c in inspector.get_columns(table)
     }

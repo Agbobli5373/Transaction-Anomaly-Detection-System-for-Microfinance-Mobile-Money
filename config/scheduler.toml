@@ -3,7 +3,6 @@
 # Each job runs `command` in a one-off container: a compose service run, or a Kubernetes Job.
 timezone = "UTC"
 
-# Weekly retraining is added here by the ticket that builds that command.
 [jobs.retention-purge]
 schedule = "daily"
 command = ["txrisk", "purge"]
@@ -22,6 +21,22 @@ command = ["txrisk", "rescore"]
 [jobs.model-monitor]
 schedule = "daily"
 command = ["txrisk", "monitor"]
+
+# Weekly retraining: a new bundle from the Transactions, SIM swaps and Fraud labels Postgres holds at
+# the simulated time (config/evaluation.toml's label maturity and split lengths, slid to that time),
+# registered as the Challenger model. Workers pick it up and score every Transaction in shadow.
+[jobs.retrain-weekly]
+schedule = "weekly"
+command = ["txrisk", "retrain"]
+
+# Early retraining: runs only if the monitoring job found a drift action alert (a PSI at or above
+# the action threshold) since the last retraining run, and the last one was a few days ago
+# (config/retraining.toml). Otherwise it exits at once. It sees a day's drift when the clock has
+# entered the next day, the same day `model-monitor` computes it, so it acts on the previous
+# day's findings.
+[jobs.retrain-on-drift]
+schedule = "daily"
+command = ["txrisk", "retrain", "--if-drift"]
 
 # `--launcher compose`: job containers are `docker compose run` of this service.
 [compose]

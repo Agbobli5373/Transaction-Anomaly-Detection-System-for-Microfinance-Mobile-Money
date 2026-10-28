@@ -5,11 +5,13 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Self
 
+import sqlalchemy as sa
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from txrisk.features import FeatureConfig, load_feature_config
 from txrisk.generator import load_config
 from txrisk.scoring import Champion, Metrics, RulesConfig, load_rules_config
+from txrisk.store.challenger import ChallengerModel
 from txrisk.store.redis_history import RedisHistoryCache
 
 _PREFIX = "TXRISK_"
@@ -25,6 +27,13 @@ class ApiSettings(BaseModel):
     # Degraded mode (Rule hits alone) until the bundle loads, retrying every
     # `model_retry_seconds`.
     model_bundle: Path | None = None
+    # The folder holding every bundle as `<version>/`, where `txrisk retrain` saves the Challenger
+    # model and workers load it from (TXRISK_MODELS_DIR). Defaults to the Champion bundle's parent;
+    # with neither, no Challenger model is scored in shadow.
+    models_dir: Path | None = None
+    # How often each process asks Postgres which bundle is the Challenger model, so a new one is
+    # picked up without a restart.
+    challenger_refresh_seconds: float = Field(default=5.0, ge=0)
     # One scoring call with the model may take this long (TXRISK_SCORING_TIMEOUT_MS); a slower
     # one is abandoned and the Transaction is scored in Degraded mode. The first call after a
     # load is cold (the SHAP explainers and LightGBM set up on it, a second or more on a busy
@@ -117,6 +126,16 @@ class ApiSettings(BaseModel):
             retry_after=self.model_retry_seconds,
             metrics=metrics,
         )
+
+    def challenger(self, engine: sa.Engine) -> ChallengerModel | None:
+        """The Challenger model, following the row `txrisk retrain` writes; None when no models
+        folder is known."""
+        folder = self.models_dir or (
+            None if self.model_bundle is None else self.model_bundle.parent
+        )
+        if folder is None:
+            return None
+        return ChallengerModel(engine, folder, refresh_seconds=self.challenger_refresh_seconds)
 
     def features(self) -> FeatureConfig:
         market = load_config(self.generator_config).market
