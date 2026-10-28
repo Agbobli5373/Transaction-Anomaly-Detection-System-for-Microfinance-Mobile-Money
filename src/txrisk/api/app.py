@@ -26,6 +26,7 @@ from txrisk.api.settings import ApiSettings
 from txrisk.models.bundle import ModelBundle
 from txrisk.scoring import RULES_ONLY
 from txrisk.store import (
+    SimulationClock,
     StoredScoring,
     TransactionConflict,
     UnknownParty,
@@ -48,6 +49,7 @@ def create_app(settings: ApiSettings) -> FastAPI:
     bundle = None if settings.model_bundle is None else ModelBundle.load(settings.model_bundle)
     rules = settings.rules()
     scoring = StoredScoring(engine, features=settings.features(), rules=rules, bundle=bundle)
+    clock = SimulationClock(engine)
     if bundle is None:
         active = ActiveModel(
             model_version=RULES_ONLY,
@@ -91,6 +93,8 @@ def create_app(settings: ApiSettings) -> FastAPI:
             raise HTTPException(422, f"not registered: {e}") from e
         except TransactionConflict as e:
             raise HTTPException(409, f"a different Transaction is already stored as {e}") from e
+        # The simulation clock follows the latest event time seen (ADR 0005).
+        clock.advance(transaction.occurred_at)
         if scored.replayed:
             response.headers[REPLAYED_HEADER] = "true"
         return AssessmentOut.of(scored.assessment)

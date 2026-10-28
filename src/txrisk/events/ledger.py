@@ -1,7 +1,7 @@
 """Standing in for the ledger: publishing a generated dataset's Transactions and SIM swaps.
 
-Only what the operator's systems would publish is read. Ground truth, Fraud discoveries and Benign
-anomalies are never opened (ADR 0007).
+Only what the operator's systems would publish is read. Ground truth and Benign anomalies are never
+opened (ADR 0007), and the Fraud discoveries are published only by `events.replay`.
 """
 
 from collections.abc import Iterator
@@ -39,7 +39,7 @@ class Published:
     sim_swaps: int
 
 
-def _window(frame: pd.DataFrame, since: datetime, until: datetime | None) -> pd.DataFrame:
+def in_window(frame: pd.DataFrame, since: datetime, until: datetime | None) -> pd.DataFrame:
     # Postgres keeps microseconds, and the seeded history is cut to them too.
     frame = frame.assign(occurred_at=frame["occurred_at"].dt.floor("us"))
     keep = frame["occurred_at"] >= since
@@ -57,10 +57,10 @@ def ledger_events(
     Transaction at the same moment (which it does not affect: features see only what came
     strictly before).
     """
-    transactions = _window(
+    transactions = in_window(
         pd.read_parquet(data / "transactions.parquet", columns=_TRANSACTION_COLUMNS), since, until
     ).sort_values(["occurred_at", "transaction_id"], kind="stable")
-    swaps = _window(pd.read_parquet(data / "sim_swaps.parquet"), since, until).sort_values(
+    swaps = in_window(pd.read_parquet(data / "sim_swaps.parquet"), since, until).sort_values(
         ["occurred_at", "wallet_id"], kind="stable"
     )
     swap_events = [

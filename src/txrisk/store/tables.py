@@ -100,3 +100,27 @@ COUNTERPARTY_COLUMNS = {
     "payment": "merchant_id",
     "bill_payment": "biller_id",
 }
+
+fraud_labels = sa.Table(
+    "fraud_labels",
+    metadata,
+    sa.Column("transaction_id", sa.Text, primary_key=True),
+    sa.Column("discovered_at", _TIME, nullable=False),
+    sa.Column("source", sa.Text, nullable=False),
+)
+
+simulation_clock = sa.Table(
+    "simulation_clock",
+    metadata,
+    sa.Column("singleton", sa.Boolean, primary_key=True),
+    sa.Column("at", _TIME),
+)
+
+scheduled_jobs = sa.Table(
+    "scheduled_jobs",
+    metadata,
+    sa.Column("job_name", sa.Text, primary_key=True),
+    sa.Column("period", sa.Date),
+    sa.Column("fired_at", _TIME),
+    sa.Column("launch_ref", sa.Text),
+)

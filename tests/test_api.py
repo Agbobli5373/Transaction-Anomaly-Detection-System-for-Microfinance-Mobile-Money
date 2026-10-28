@@ -14,7 +14,7 @@ from scoring_helpers import DAY, HOUR, NOW, REGISTERED, SUBJECT, routine, tx
 from txrisk.api import REPLAYED_HEADER, create_app
 from txrisk.features import ReplayHistory, Transaction, Wallet
 from txrisk.scoring import FixedClock, RiskAssessment, ScoringService
-from txrisk.store import create_engine, records
+from txrisk.store import SimulationClock, create_engine, records
 
 FRIEND = "w-friend"
 STRANGER = "w-stranger"
@@ -108,6 +108,18 @@ def test_a_high_risk_transaction_raises_one_alert_and_a_repeat_replays_the_asses
     assert [a["transaction_id"] for a in alerts] == [transaction.transaction_id]
     assert alerts[0]["raised_at"] == transaction.occurred_at.isoformat().replace("+00:00", "Z")
     assert alerts[0]["assessment"] == first.json()
+
+
+def test_scoring_moves_the_simulation_clock_to_the_latest_event_time_and_never_back(
+    world: World, client: TestClient
+):
+    clock = SimulationClock(world.engine)
+    assert clock.peek() is None
+
+    client.post("/v1/score", json=body(on_app(tx(NOW))))
+    client.post("/v1/score", json=body(on_app(tx(NOW - HOUR))))  # an older Transaction, late
+
+    assert clock.now() == NOW
 
 
 def test_concurrent_repeats_store_one_assessment_and_one_alert(world: World, client: TestClient):
