@@ -6,7 +6,7 @@ The model bundle (#11), judged on the same evaluation days (90–120 of the defa
 - **Anomaly:** the Anomaly score, 0–1.
 - **Supervised:** the supervised model's raw probability, as log-odds.
 
-The two models train on days 0–45. The stacker is fitted on days 45–60, with only the Fraud labels known on day 90 (ADR 0007, ADR 0008). The High band is set so that days 60–90 give the Alert budget of 100 a day, as for every other scorer, and Medium covers the next 3× that volume. Critical rule hits use up their share of the budget first, because they are High whatever their score.
+The two models train on days 0–45. The stacker is fitted on days 45–60, with only the Fraud labels known on day 90 (ADR 0007, ADR 0008). The High band is set so that days 60–90 give the Alert budget of 100 a day, as for every other scorer, and Medium covers the next 3× that volume. Critical rule hits use up their share of the budget first, because they are High whatever their score. On a busy day the High threshold rises with the market's spend, so that a festive season does not push the Alerts far past the budget (#47, ADR 0011; see [Festive season](#festive-season)).
 
 Reproduce with:
 
@@ -24,7 +24,7 @@ Full numbers are in [stacked/metrics.json](stacked/metrics.json).
 
 **The Risk score is the chance of discovered fraud × 100, not the chance of fraud.** The stacker learns from Fraud labels, and an undiscovered fraud counts as legitimate, so its probability inherits the same target as the supervised model's calibration. Here, only about two frauds in three are ever discovered. Correcting for that would need the discovery rate, which only Ground truth knows, and Ground truth may not reach training (ADR 0007). So no correction is applied.
 
-At a fraud rate of about 0.2%, most scores are far below 1. High starts at a Risk score of **0.17**, and Medium at 0.088. The Risk score therefore keeps two decimals; rounded to whole numbers, nearly every alert would read 0. A Critical rule hit raises the score to at least the High threshold.
+At a fraud rate of about 0.2%, most scores are far below 1. High starts at a Risk score of **0.17** on a normal day (higher when the market is busier), and Medium at 0.088. The Risk score therefore keeps two decimals; rounded to whole numbers, nearly every alert would read 0. A Critical rule hit raises the score to at least the High threshold.
 
 ## The stacker's weights
 
@@ -46,8 +46,8 @@ At a fraud rate of about 0.2%, most scores are far below 1. High starts at a Ris
 |---|---|---|---|---|
 | PR-AUC | 0.487 | 0.339 | 0.686 | **0.753** |
 | ROC-AUC | 0.891 | 0.930 | 0.892 | **0.962** |
-| High a day | 13.4 | 184 | 120 | 123 |
-| Precision / recall at High | **0.83** / 0.34 | 0.10 / 0.58 | 0.21 / 0.78 | 0.22 / **0.85** |
+| High a day | 13.4 | 184 | 120 | 100 |
+| Precision / recall at High | **0.83** / 0.34 | 0.10 / 0.58 | 0.21 / 0.78 | 0.28 / **0.85** |
 | Precision at the Alert budget (top 100 a day) | 0.205 | 0.169 | 0.248 | **0.274** |
 | Recall within the Alert budget (top 100 a day) | 0.63 | 0.52 | 0.77 | **0.84** |
 | Recall at Medium or higher | 0.70 | 0.70 | 0.86 | **0.89** |
@@ -61,9 +61,9 @@ Recall at each scorer's own High band, and within the top 100 a day.
 
 | Scenario | Fraud | Rules at High | Anomaly at High | Supervised at High | Stacked at High | Supervised, top 100 | Stacked, top 100 |
 |---|---|---|---|---|---|---|---|
-| SIM-swap takeover | 383 | 0.32 | 0.69 | 0.83 | **0.85** | 0.81 | **0.84** |
-| Account takeover drain | 180 | 0.62 | 0.74 | **0.95** | **0.95** | **0.94** | **0.94** |
-| Mule fan-in | 144 | 0.12 | 0.11 | 0.84 | **0.90** | 0.80 | **0.87** |
+| SIM-swap takeover | 383 | 0.32 | 0.69 | 0.83 | **0.84** | 0.81 | **0.84** |
+| Account takeover drain | 180 | 0.62 | 0.74 | **0.95** | 0.94 | **0.94** | **0.94** |
+| Mule fan-in | 144 | 0.12 | 0.11 | 0.84 | **0.88** | 0.80 | **0.87** |
 | Social-engineering push | 138 | 0.10 | 0.85 | 0.94 | **0.97** | 0.94 | **0.98** |
 | Reversal scam | 81 | 0.48 | 0.02 | 0.06 | **0.51** | 0.09 | **0.51** |
 | Agent structuring | 48 | 0.58 | **0.67** | 0.38 | 0.65 | 0.25 | **0.65** |
@@ -247,6 +247,59 @@ The remaining 49 new-Wallet false positives have few Rule hits (12 of 49). They 
 
 **One caveat about the synthetic market.** Fraud victims are drawn from Wallets that already exist, so no fraud here starts in a Wallet's first month. Real mule Wallets are often new. The rules that catch mules (`MULE_CASHOUT`, `NEW_DEVICE_BURST`) still fire on them, and so do both models. If new-Wallet fraud appears in Fraud labels, `min_wallet_age_days` should be revisited.
 
+## Festive season
+
+The first stacked bundle raised 213–269 High Alerts a day over Easter (days 92–95, 3–6 April), against an Alert budget of 100: 269, 223, 213 and 248, an average of 238. On the other 26 evaluation days it raised 67–160, averaging 106. The festive season is a Benign anomaly by design, so the surplus was legitimate Transactions, on exactly the days Analysts are busiest (#47).
+
+**What drives it.** Evidence from the bundle before #47, on the evaluation days:
+
+- **The whole market spends more, not any one Wallet.** Over Easter the market makes 1.27× the Transactions of the other days (21.8k against 17.2k a day), the median amount is 1.28× (100.7 GHS against 78.5), and the spend is 1.58× (3.39M GHS against 2.15M).
+- **Almost all of the surplus is legitimate.** Legitimate Transactions at High rose from 77 a day to 215, while the fraud among the Alerts did not rise (23 a day against 28).
+- **Rules and the supervised model each account for about half of it; the Anomaly score for a little.** Replacing one component's festive values, Transaction type by Transaction type, with its distribution on the other days, at the same High threshold: the rules take the Easter average from 238 to 175, the supervised model to 178, and the Anomaly score to 218. Against the other days' 106, that is about 64, 60 and 20 of the 132 extra.
+- **The rules fire on amounts.** `AMOUNT_VS_MEDIAN` fires 1,071 times a day over Easter against 461 (2.3×), `FIRST_TIME_LARGE_TRANSFER` 62 against 39, and `NEAR_KYC_LIMIT` 48 against 33. Each compares an amount with something that did not grow with the festive spending: the Wallet's 30-day median, or a limit. `SIM_SWAP_DRAIN` (Critical, so always High) fires 14 times a day against 3; it compares the amount with the balance.
+- **The models see the same thing.** The amount inputs all shift: `amount_to_median_30d` has a median of 1.56 against 1.19, `velocity_amount_24h` 257 GHS against 152, `agent_cash_out_amount_24h` 2,366 GHS against 1,568, `amount_to_kyc_limit` 0.035 against 0.027. The count inputs move less (`velocity_count_24h` averages 2.32 against 1.85). The inputs behind a legitimate festive High are the same as on other days, within 0.06 in log-odds: no one input is to blame.
+- **Deflating the amounts is not enough.** Dividing the amount inputs by the market's amount level cut the Easter average only from 238 to 171–181 (on the saved bundle, without retraining), and dividing the count inputs changed nothing (239). A market 1.27× as busy raises 1.27× the Alerts at a fixed threshold whatever the scores, and the Alert budget is a number a day.
+
+**What was done.** The High threshold now rises with a **market spend index**, a feature of the shared feature function: the market's spend in the last 6 and the last 24 complete hours over the same hours on each of the previous 7 days, whichever ratio is larger. Over Easter it averaged 1.54 (1.36–1.75), and 1.01 on the other days. On a day with index `i`, High is set as if the Alert budget were `i^1.5` times smaller, from the threshold days' scores (never more than 3 times). Medium does not move, so what leaves High lands on the Medium watch list, and Critical rule hits stay High. The models are unchanged: the index is not an input to them. See ADR 0011 for why not a cap or the amounts.
+
+How the options compared on the evaluation days (the alternatives are applied to the same scores):
+
+| Option | Most a day | Average | Recall at High |
+|---|---|---|---|
+| Before: a fixed High threshold | 269 | 123.3 | 0.852 |
+| Cap of 130 a day, counted as Alerts are raised | 138 | 108.0 | 0.809 |
+| Cap of 140 | 147 | 110.0 | 0.820 |
+| Cap of 150 | 157 | 111.8 | 0.833 |
+| Keep each day's top 140 (needs the day's later scores) | 140 | 109.4 | 0.851 |
+| High rises with the market spend, elasticity 1.25 | 145 | 102.2 | 0.849 |
+| **High rises with the market spend, elasticity 1.5** | **133** | **99.6** | **0.847** |
+
+A cap works by refusing the day's later Alerts, whatever their score, so it loses fraud (Social-engineering push falls from 0.97 to 0.88 at a cap of 140). Keeping the top 140 of each day shows how little the surplus is worth: it is the lowest-scoring Alerts. The rising threshold removes the same kind of Alert in advance.
+
+**The result on the evaluation days:**
+
+| | Before | After |
+|---|---|---|
+| High a day, average | 123.3 | **99.6** |
+| High a day, most (day) | 269 (3 April) | **133** (6 April) |
+| High a day, Easter (3, 4, 5, 6 April) | 269, 223, 213, 248 | 116, 100, 108, 133 |
+| High a day, other days | 67–160 | 63–129 |
+| Recall at High | 0.852 | 0.847 (−0.005) |
+| Recall at High, worst Fraud scenario | | Mule fan-in, 0.896 → 0.882 (−0.014) |
+| Precision at High | 0.224 | 0.276 |
+| False positive rate at High | 0.54% | 0.41% |
+
+![High Alerts a day against the Alert budget](stacked/daily_high.png)
+
+The other Fraud scenarios lose at most 0.006 (Account takeover drain 0.950 to 0.944, SIM-swap takeover 0.846 to 0.841), and Social-engineering push, the Reversal scam and Agent structuring lose nothing. Recall at Medium or higher (0.89) and against discovered labels (0.90) do not change. The false positive rate falls in every region, KYC tier, Channel and Wallet age band, so none rises against #45's limit.
+
+**What this does not do.**
+
+- **The elasticity was chosen on the evaluation days.** They hold the only festive season outside training: the other, New Year, is days 0–1, in the training days, where the models have seen it. Elasticities of 1.25 and 1.5 both meet the criteria; 1.5 was kept for the wider margin (133 a day against 145). It should be revisited when the data holds another festive season.
+- **A quiet market does not raise High.** An index under 1 leaves the threshold where it is. After a festive season the previous week's baseline includes it, so the index reads 0.74–0.77 on the days after (8–10 April) and a second busy spell soon after would be understated.
+- **A fraud surge that comes with a busy market is damped too.** Critical rule hits are exempt, the largest rise is 3 times, and what leaves High lands on the Medium watch list.
+- **The index needs a week of history.** Without one it is empty and High does not move.
+
 ## Training and scoring time
 
 Measured in one cloud container with nothing else heavy running:
@@ -267,12 +320,12 @@ Of the stacked time, about 15 ms goes on building the one-row model inputs, 14 m
 
 ## What this says
 
-- **Stacking adds most where the components disagree.** PR-AUC rises from the supervised model's 0.686 to 0.753, and ROC-AUC from 0.892 to 0.962. High holds 85% of the fraud on 123 Alerts a day.
+- **Stacking adds most where the components disagree.** PR-AUC rises from the supervised model's 0.686 to 0.753, and ROC-AUC from 0.892 to 0.962. High holds 85% of the fraud on 100 Alerts a day.
 - **Agent structuring and the Reversal scam now come from rules.** No label exists for either, so neither model can learn them. Recall at High is 0.65 on Agent structuring and 0.51 on the Reversal scam, against 0.42 and 0.38 before #46; see [Agent structuring and the Reversal scam](#agent-structuring-and-the-reversal-scam).
-- **Mule fan-in gains most from the new inputs:** 0.90 against 0.74. A mule's money arrives by Transfer, so its Cash-out is typically 3× its largest Cash-in of the last 30 days, against 0.2× for a legitimate Cash-out (`amount_to_largest_cash_in_30d`).
-- **SIM-swap takeover, Account takeover drain and Social-engineering push lose a little:** 0.85 against 0.87, 0.95 against 0.99, and 0.97 against 1.00. The models changed with their new inputs, and the High threshold rose slightly (0.168 against 0.164).
-- **It still over-alerts at Easter.** High averages 123 a day, but it reaches 213–269 a day on days 92–95 (3–6 April), the busier, spendier festive season. Outside it, the daily count stays between 67 and 160.
+- **Mule fan-in gains most from the new inputs:** 0.88 against 0.74. A mule's money arrives by Transfer, so its Cash-out is typically 3× its largest Cash-in of the last 30 days, against 0.2× for a legitimate Cash-out (`amount_to_largest_cash_in_30d`).
+- **SIM-swap takeover, Account takeover drain and Social-engineering push lose a little:** 0.84 against 0.87, 0.94 against 0.99, and 0.97 against 1.00. The models changed with their new inputs, and the High threshold rose slightly (0.168 against 0.164); the festive-season threshold of #47 costs another 0.005 or less.
+- **Easter no longer over-alerts.** High averages 100 a day and never passes 133, where it reached 213–269 a day on days 92–95 (3–6 April), the busier, spendier festive season, before #47; see [Festive season](#festive-season).
 - **Segments:**
-  - The false positive rate at High is 0.41–0.66% across regions, tiers and channels.
-  - For Wallets under 30 days old it is 0.22%, against 1.11% before #45 and 0.13% after it; see [New Wallets](#new-wallets).
-  - Recall is lowest on the enhanced tier (0.63). USSD and the App are close (0.84 and 0.86).
+  - The false positive rate at High is 0.29–0.50% across regions, tiers and channels.
+  - For Wallets under 30 days old it is 0.17%, against 1.11% before #45 and 0.13% after it; see [New Wallets](#new-wallets).
+  - Recall is lowest on the enhanced tier (0.63). USSD and the App are close (0.83 and 0.86).

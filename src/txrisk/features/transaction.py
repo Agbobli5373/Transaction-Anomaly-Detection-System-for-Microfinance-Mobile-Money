@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 from txrisk.features.config import FeatureConfig
 from txrisk.features.history import HistoryProvider, Transaction
+from txrisk.features.market import market_spend_index
 from txrisk.features.subject_wallet import SubjectWalletFeatures, subject_wallet_features
 
 _DAY = timedelta(days=1)
@@ -36,6 +37,10 @@ class TransactionFeatures:
     new_counterparty_transfers_1h: int = 0
     # Amount over the Subject wallet's KYC tier single-transaction limit.
     amount_to_kyc_limit: float = 0.0
+    # How busy and how large the whole market's spending is, against the same hours on the
+    # previous days (1 is a normal day). Not a model input: it only sets the High threshold on a
+    # festive day (ADR 0011). Empty until the market has history to compare with.
+    market_spend_index: float | None = None
 
 
 def _fan_in(wallet_id: str, history: HistoryProvider, now: datetime) -> int:
@@ -118,4 +123,5 @@ def transaction_features(
         device_age_seconds=_device_age(transaction, past, now),
         new_counterparty_transfers_1h=_new_counterparty_transfers(past, now),
         amount_to_kyc_limit=transaction.amount / limit,
+        market_spend_index=market_spend_index(history, now, config=config),
     )

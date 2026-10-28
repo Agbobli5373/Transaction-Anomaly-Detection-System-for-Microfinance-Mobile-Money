@@ -67,6 +67,10 @@ FEATURE_COLUMNS = [f.name for f in fields(SubjectWalletFeatures)] + [
 ]
 
 
+# Features that are not model inputs: the models never see them (see models/inputs.py).
+BANDING_COLUMNS = ["market_spend_index"]
+
+
 def features_frame(transaction_ids: list[str], results: list[TransactionFeatures]) -> pd.DataFrame:
     """Feature table rows for these Transactions: transaction_id, then every feature column."""
     columns = _columns(results)

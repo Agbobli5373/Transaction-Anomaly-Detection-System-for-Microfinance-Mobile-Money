@@ -5,13 +5,13 @@ sees nothing at or after `before`, so served features equal the features trainin
 """
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import sqlalchemy as sa
 
 from txrisk.features import SubjectHistory, Transaction, Wallet
 from txrisk.observability.tracing import traced
-from txrisk.store.tables import sim_swaps, transactions, wallets
+from txrisk.store.tables import market_hours, sim_swaps, transactions, wallets
 
 _t = transactions.c
 # Columns in the order `Transaction` takes them; the Counterparty is whichever column is set.
@@ -124,3 +124,14 @@ class PostgresHistory:
             )
         ).scalar_one()
         return latest
+
+    @traced("history.postgres.market_hourly_spend")
+    def market_hourly_spend(self, since: datetime, before: datetime) -> list[float]:
+        rows = self._connection.execute(
+            sa.select(market_hours.c.hour, sa.func.sum(market_hours.c.amount))
+            .where(market_hours.c.hour >= since, market_hours.c.hour < before)
+            .group_by(market_hours.c.hour)
+        )
+        spend = {hour: float(amount) for hour, amount in rows}
+        hours = int((before - since) / timedelta(hours=1))
+        return [spend.get(since + timedelta(hours=h), 0.0) for h in range(hours)]

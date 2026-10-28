@@ -31,6 +31,8 @@ GRANTS: dict[str, tuple[str, ...]] = {
     "billers": ("SELECT", "INSERT"),
     "sim_swaps": ("SELECT", "INSERT"),
     "transactions": ("SELECT", "INSERT"),
+    # Kept by a trigger that runs as the owner (migration 0010); the application only reads it.
+    "market_hours": ("SELECT",),
     # UPDATE is for re-scoring after Degraded mode (the API and workers do it once the model
     # recovers); a trigger (migration 0005) refuses any update but replacing a degraded assessment.
     "risk_assessments": ("SELECT", "INSERT", "UPDATE"),

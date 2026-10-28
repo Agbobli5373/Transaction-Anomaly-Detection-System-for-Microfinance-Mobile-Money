@@ -8,7 +8,13 @@ disagree about a model's inputs.
 import numpy as np
 import pandas as pd
 
-from txrisk.features import FEATURE_COLUMNS, Transaction, TransactionFeatures, features_frame
+from txrisk.features import (
+    BANDING_COLUMNS,
+    FEATURE_COLUMNS,
+    Transaction,
+    TransactionFeatures,
+    features_frame,
+)
 
 TRANSACTION_TYPES = ["cash_in", "cash_out", "transfer", "payment", "bill_payment"]
 CONTEXT_COLUMNS = [
@@ -18,7 +24,9 @@ CONTEXT_COLUMNS = [
     "is_incoming",
     *[f"type_{t}" for t in TRANSACTION_TYPES],
 ]
-INPUT_COLUMNS = [*FEATURE_COLUMNS, *CONTEXT_COLUMNS]
+# The market spend index sets the High threshold; the models never see it.
+MODEL_FEATURE_COLUMNS = [c for c in FEATURE_COLUMNS if c not in BANDING_COLUMNS]
+INPUT_COLUMNS = [*MODEL_FEATURE_COLUMNS, *CONTEXT_COLUMNS]
 
 
 def model_inputs(transactions: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
@@ -27,12 +35,12 @@ def model_inputs(transactions: pd.DataFrame, features: pd.DataFrame) -> pd.DataF
     Booleans become 0 or 1; features that are empty (cold start, no SIM swap) stay NaN, and each
     model decides how to treat them.
     """
-    missing = [c for c in FEATURE_COLUMNS if c not in features.columns]
+    missing = [c for c in MODEL_FEATURE_COLUMNS if c not in features.columns]
     if missing:
         raise ValueError(f"missing feature columns: {missing}")
     rows = transactions[["transaction_id"]].merge(features, on="transaction_id", how="left")
     inputs = pd.DataFrame(index=pd.Index(transactions["transaction_id"], name="transaction_id"))
-    for column in FEATURE_COLUMNS:
+    for column in MODEL_FEATURE_COLUMNS:
         inputs[column] = rows[column].astype("Float64").to_numpy(dtype=np.float64, na_value=np.nan)
     inputs["log_amount"] = np.log1p(transactions["amount"].to_numpy(dtype=np.float64))
     inputs["hour_of_day"] = transactions["occurred_at"].dt.hour.to_numpy(dtype=np.float64)

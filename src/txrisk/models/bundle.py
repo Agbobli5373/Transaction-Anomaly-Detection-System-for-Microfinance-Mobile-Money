@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 from txrisk.evaluation import EvaluationConfig, Split, split_of, training_labels
-from txrisk.evaluation.thresholds import BandThresholds, budget_thresholds
+from txrisk.evaluation.thresholds import BandThresholds, band, budget_thresholds
 from txrisk.models.anomaly import AnomalyModel
 from txrisk.models.card import build_card, write_card
 from txrisk.models.inputs import INPUT_COLUMNS, model_inputs
@@ -92,13 +92,33 @@ class ModelBundle:
         critical = rules["critical"].loc[inputs.index].to_numpy(dtype=bool)
         return scores.where(~critical, np.maximum(scores, self.thresholds.high))
 
+    def bands(
+        self,
+        risk_scores: pd.Series,
+        rules: pd.DataFrame,
+        market_index: pd.Series | None = None,
+    ) -> pd.Series:
+        """The Risk band of each Risk score. High starts at the threshold for the Transaction's
+        market spend index (the plain High threshold where there is none), and a Critical rule
+        hit is High whatever the market."""
+        return band(
+            risk_scores,
+            self.thresholds,
+            market_index=market_index,
+            critical=rules["critical"].loc[risk_scores.index],
+        )
+
     def save(self, folder: Path) -> None:
         folder.mkdir(parents=True, exist_ok=True)
         (folder / _MODEL_FILE).write_bytes(pickle.dumps(self))
         manifest = {
             "version": self.version,
             "fitted_on": self.fitted_on,
-            "thresholds": {"medium": self.thresholds.medium, "high": self.thresholds.high},
+            "thresholds": {
+                "medium": self.thresholds.medium,
+                "high": self.thresholds.high,
+                "surge": None if self.thresholds.surge is None else asdict(self.thresholds.surge),
+            },
             "stacker": {"weights": self.stacker.weights, "intercept": self.stacker.intercept},
             "input_columns": self.input_columns,
             "metrics": self.metrics,
@@ -186,6 +206,8 @@ def train_bundle(
         days=splits.thresholds.end - splits.thresholds.start,
         budget_per_day=config.alert_budget_per_day,
         already_high=int(critical.sum()),
+        surge_elasticity=config.surge_elasticity,
+        surge_max_divisor=config.surge_max_divisor,
     )
 
     fitted_on = {
