@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 import sqlalchemy as sa
-from api_helpers import as_json, body, settings
+from api_helpers import as_json, body, issue_key, settings, with_key
 from fastapi.testclient import TestClient
 from scoring_helpers import DAY, HOUR, NOW, REGISTERED, SUBJECT, routine, tx
 
@@ -79,8 +79,10 @@ def world(database: str) -> World:
 
 
 @pytest.fixture
-def client(world: World) -> Iterator[TestClient]:
-    with TestClient(create_app(world.settings)) as client:
+def client(world: World, database: str) -> Iterator[TestClient]:
+    """A calling service, with an API key for every scope."""
+    headers = with_key(issue_key(database))
+    with TestClient(create_app(world.settings), headers=headers) as client:
         yield client
 
 
@@ -281,6 +283,9 @@ def test_health_readiness_and_the_openapi_spec_are_under_v1(client: TestClient):
         "/v1/transactions/{transaction_id}",
         "/v1/alerts",
         "/v1/models/active",
+        "/v1/api-keys",
+        "/v1/api-keys/{key_id}",
+        "/v1/api-keys/{key_id}/rotate",
         "/v1/health",
         "/v1/ready",
     }

@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://txrisk.example/schemas/fraud.discovered.v1.json",
+  "additionalProperties": false,
+  "description": "A Fraud discovery: the moment a past Transaction became known to be fraudulent, through a\ncustomer complaint, a chargeback or a Case closed as fraud. It is the only source of Fraud\nlabels; Ground truth is never published (ADR 0007).",
+  "properties": {
+    "transaction_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Transaction Id",
+      "type": "string"
+    },
+    "discovered_at": {
+      "description": "When the fraud became known, with a UTC offset.",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$",
+      "title": "Discovered At",
+      "type": "string"
+    },
+    "source": {
+      "enum": [
+        "complaint",
+        "chargeback",
+        "case"
+      ],
+      "title": "Source",
+      "type": "string"
+    }
+  },
+  "required": [
+    "transaction_id",
+    "discovered_at",
+    "source"
+  ],
+  "title": "fraud.discovered",
+  "type": "object"
+}

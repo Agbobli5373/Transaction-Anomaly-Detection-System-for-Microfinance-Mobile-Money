@@ -1,4 +1,5 @@
-# The txrisk image: the API, the migration job, the seed and the backup, each a `txrisk` command.
+# The txrisk image: the API, the scoring worker, the migration job, and the seed, produce
+# and backup commands, each a `txrisk` command.
 
 FROM python:3.12-slim AS build
 RUN pip install --no-cache-dir uv==0.11.32
