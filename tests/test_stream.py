@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 import sqlalchemy as sa
-from api_helpers import settings
+from api_helpers import as_app_role, settings
 from confluent_kafka import Consumer
 from scoring_helpers import DAY, HOUR, NOW, REGISTERED, SUBJECT, routine, tx
 
@@ -57,7 +57,7 @@ class Stream:
     def scoring(self) -> StoredScoring:
         api = settings(self.database)
         return StoredScoring(
-            create_engine(self.database), features=api.features(), rules=api.rules()
+            create_engine(as_app_role(self.database)), features=api.features(), rules=api.rules()
         )
 
     def worker(self, scoring: Any = None, *, group: str = "workers") -> ScoringWorker:

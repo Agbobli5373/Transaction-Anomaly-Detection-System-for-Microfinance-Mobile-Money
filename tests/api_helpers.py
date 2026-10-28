@@ -1,22 +1,37 @@
 """Calling the /v1 API in tests: settings, request bodies and expected responses."""
 
+import secrets
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+import sqlalchemy as sa
 
 from txrisk.api import API_KEY_HEADER, ApiSettings
 from txrisk.api.auth import SCOPES
 from txrisk.features import Transaction
 from txrisk.scoring import RiskAssessment
-from txrisk.store import api_keys, create_engine
+from txrisk.store import APP_ROLE, api_keys, create_engine
 from txrisk.store.tables import COUNTERPARTY_COLUMNS
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
+# The application role's login for this test run, generated, never written down.
+APP_CREDENTIAL = secrets.token_hex(16)
+
+
+def as_app_role(database: str) -> str:
+    """The URL of the same database, connecting as the least-privilege application role the
+    API and workers run as (the `migrated_template` fixture provisions it)."""
+    url = sa.make_url(database).set(username=APP_ROLE, password=APP_CREDENTIAL)
+    return url.render_as_string(hide_password=False)
+
+
 def settings(database: str, bundle: Path | None = None, **options: Any) -> ApiSettings:
+    """API settings over `database`, connecting as the application role, as in production."""
     return ApiSettings(
-        database_url=database,
+        database_url=as_app_role(database),
         model_bundle=bundle,
         generator_config=ROOT / "config" / "generator.toml",
         feature_config=ROOT / "config" / "features.toml",

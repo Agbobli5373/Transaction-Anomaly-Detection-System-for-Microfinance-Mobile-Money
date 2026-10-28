@@ -31,6 +31,7 @@ import sqlalchemy as sa
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 
+from txrisk.api.audit import AuditedRoute, Auditor
 from txrisk.api.hardening import RateLimiter, retry_after
 from txrisk.store import api_keys
 
@@ -70,7 +71,10 @@ READ_MODELS = Permission("read the active model", frozenset(Role), "models:read"
 # No scope: an API key can never issue another, so a leaked key cannot mint more.
 MANAGE_API_KEYS = Permission("issue, rotate and revoke API keys", frozenset({Role.ADMIN}), None)
 
-PERMISSIONS = (SCORE, READ_TRANSACTIONS, READ_ALERTS, READ_MODELS, MANAGE_API_KEYS)
+# People only, and Admins only: the audit log is read by whoever is accountable for access.
+READ_AUDIT = Permission("read the audit log", frozenset({Role.ADMIN}), None)
+
+PERMISSIONS = (SCORE, READ_TRANSACTIONS, READ_ALERTS, READ_MODELS, MANAGE_API_KEYS, READ_AUDIT)
 # Every scope an API key may carry.
 SCOPES = tuple(sorted(p.scope for p in PERMISSIONS if p.scope is not None))
 
@@ -295,11 +299,29 @@ def authenticated(
     return principal
 
 
-def require(permission: Permission) -> Callable[[Principal], Principal]:
-    """A dependency giving the caller if they hold `permission`, and a 403 if they do not."""
+def require(
+    permission: Permission, audited: AuditedRoute | None = None
+) -> Callable[[Request, Principal], Principal]:
+    """A dependency giving the caller if they hold `permission`, and a 403 if they do not.
 
-    def permitted(principal: Annotated[Principal, Depends(authenticated)]) -> Principal:
+    A route that names itself in `audited` writes the refusal to the audit log first, so denied
+    attempts on sensitive routes are on record (the endpoint records its own successes).
+    """
+
+    def permitted(
+        request: Request, principal: Annotated[Principal, Depends(authenticated)]
+    ) -> Principal:
         if not principal.can(permission):
+            if audited is not None:
+                auditor: Auditor = request.app.state.auditor
+                auditor.record_alone(
+                    principal,
+                    audited.action,
+                    object_type=audited.object_type,
+                    object_id=request.path_params.get(audited.object_param or ""),
+                    outcome="denied",
+                    detail={"needed": permission.action},
+                )
             raise HTTPException(403, f"not permitted to {permission.action}")
         return principal
 

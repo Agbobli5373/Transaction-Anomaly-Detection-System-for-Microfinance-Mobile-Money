@@ -12,11 +12,12 @@ from typing import TYPE_CHECKING
 
 import pytest
 import sqlalchemy as sa
+from api_helpers import APP_CREDENTIAL
 from idp_helpers import LocalIdentityProvider, serve_identity_provider
 
 from txrisk.api.signin import demo_signin_env
 from txrisk.generator import GeneratorConfig, load_config
-from txrisk.store import create_engine, migrate
+from txrisk.store import create_engine, migrate, provision_app_role
 
 if TYPE_CHECKING:
     from testcontainers.core.container import DockerContainer
@@ -106,10 +107,15 @@ _databases = itertools.count()
 
 @pytest.fixture(scope="session")
 def migrated_template(postgres: str) -> str:
-    """A migrated database to copy, so each test starts from a fresh schema in milliseconds."""
+    """A migrated database to copy, so each test starts from a fresh schema in milliseconds.
+
+    It has the least-privilege application role provisioned, as `txrisk migrate` does, and the
+    copies keep its grants.
+    """
     url = create_database(postgres, "migrated_template")
     engine = create_engine(url)
     migrate(engine)
+    provision_app_role(engine, APP_CREDENTIAL)
     engine.dispose()  # a template cannot be copied while anyone is connected to it
     return "migrated_template"
 

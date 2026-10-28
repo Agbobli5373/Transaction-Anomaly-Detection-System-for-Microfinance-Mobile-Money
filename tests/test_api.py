@@ -283,6 +283,7 @@ def test_health_readiness_and_the_openapi_spec_are_under_v1(client: TestClient):
         "/v1/transactions/{transaction_id}",
         "/v1/alerts",
         "/v1/models/active",
+        "/v1/audit",
         "/v1/api-keys",
         "/v1/api-keys/{key_id}",
         "/v1/api-keys/{key_id}/rotate",

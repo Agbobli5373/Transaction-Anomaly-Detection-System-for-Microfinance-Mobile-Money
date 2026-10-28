@@ -111,6 +111,10 @@ _Avoid_: History, baseline
 
 ## Review
 
+**Audit log**:
+The append-only record of who viewed, changed, issued or exported what, and when. The application can add to it and read it, never alter or delete an entry.
+_Avoid_: Activity log, history (a Wallet's history is its past Transactions)
+
 **Alert**:
 A Transaction whose Risk band reached High, queued for a person to review.
 _Avoid_: Flag, suspicious transaction
