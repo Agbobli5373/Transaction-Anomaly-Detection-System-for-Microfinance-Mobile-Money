@@ -1,0 +1,117 @@
+# Sign-in for people, for development only (see deploy/keycloak/start-dev.sh): the txrisk realm
+# imported from config/keycloak at startup, with each demo user's sign-in value substituted from
+# the keycloak Secret. Dev mode keeps no state between restarts.
+{{- $keycloak := dict "root" . "component" "keycloak" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-realm
+  labels:
+    {{- include "txrisk.labels" $keycloak | nindent 4 }}
+data:
+  {{- range $path, $_ := .Files.Glob "files/keycloak/*.json" }}
+  {{ base $path }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-start
+  labels:
+    {{- include "txrisk.labels" $keycloak | nindent 4 }}
+data:
+  start-dev.sh: |
+    {{- .Files.Get "files/keycloak-start/start-dev.sh" | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  labels:
+    {{- include "txrisk.labels" $keycloak | nindent 4 }}
+spec:
+  selector:
+    {{- include "txrisk.selector" $keycloak | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  labels:
+    {{- include "txrisk.labels" $keycloak | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "txrisk.selector" $keycloak | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "txrisk.labels" $keycloak | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: keycloak
+          image: {{ .Values.image.keycloak }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [bash, /opt/txrisk/start-dev.sh]
+          env:
+            - name: KC_HOSTNAME
+              value: {{ .Values.signIn.keycloakHostname | quote }}
+            - name: KC_HOSTNAME_BACKCHANNEL_DYNAMIC
+              value: "true"
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+          envFrom:
+            - secretRef:
+                name: {{ .Values.settingsFrom.keycloak }}
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 9000
+          startupProbe:
+            httpGet:
+              path: /health/ready
+              port: management
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: management
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: management
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          securityContext:
+            {{- include "txrisk.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.keycloak.resources | nindent 12 }}
+          volumeMounts:
+            - name: realm
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+            - name: start
+              mountPath: /opt/txrisk
+              readOnly: true
+      volumes:
+        - name: realm
+          configMap:
+            name: keycloak-realm
+        - name: start
+          configMap:
+            name: keycloak-start

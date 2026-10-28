@@ -369,6 +369,36 @@ def test_the_kubernetes_job_takes_its_environment_from_a_secret_by_name_only():
     assert "env" not in container
 
 
+def test_the_kubernetes_job_carries_plain_settings_the_models_volume_and_a_user():
+    settings = KubernetesSettings(
+        env_from="txrisk-env",
+        env={"TXRISK_MODELS_DIR": "/models", "TXRISK_REDIS_URL": "redis://redis:6379/0"},
+        models_claim="models",
+        run_as_user=10001,
+    )
+
+    pod = job_manifest(settings, RETRAIN, date(2026, 4, 6))["spec"]["template"]["spec"]
+
+    [container] = pod["containers"]
+    assert container["env"] == [
+        {"name": "TXRISK_MODELS_DIR", "value": "/models"},
+        {"name": "TXRISK_REDIS_URL", "value": "redis://redis:6379/0"},
+    ]
+    assert container["volumeMounts"] == [{"name": "models", "mountPath": "/models"}]
+    assert pod["volumes"][0]["persistentVolumeClaim"] == {"claimName": "models"}
+    assert pod["securityContext"] == {"runAsNonRoot": True, "runAsUser": 10001, "fsGroup": 10001}
+
+
+def test_a_deployments_kubernetes_table_replaces_the_one_in_the_job_config(tmp_path: Path):
+    deployment = tmp_path / "kubernetes.toml"
+    deployment.write_text('[kubernetes]\nnamespace = "txrisk"\nimage = "txrisk:ci"\n')
+
+    config = load_scheduler_config(SCHEDULER_CONFIG, deployment)
+
+    assert (config.kubernetes.namespace, config.kubernetes.image) == ("txrisk", "txrisk:ci")
+    assert config.jobs == load_scheduler_config(SCHEDULER_CONFIG).jobs
+
+
 class FakeKubernetes:
     def __init__(self) -> None:
         self.jobs: dict[str, dict[str, Any]] = {}

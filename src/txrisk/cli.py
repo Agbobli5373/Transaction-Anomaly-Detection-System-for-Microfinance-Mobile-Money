@@ -597,7 +597,7 @@ def _scheduler(args: argparse.Namespace) -> int:
     url = _database_url(args)
     if url is None:
         return 2
-    config = load_scheduler_config(args.config)
+    config = load_scheduler_config(args.config, args.kubernetes_config)
     # The scheduler only reads the clock and records what it fired, so it runs as the application
     # role; the jobs it launches run in the `job` container, as the owner.
     engine = create_app_engine(url)
@@ -1174,6 +1174,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     sc.add_argument("--database-url", help=f"default: ${DATABASE_URL_ENV}")
     sc.add_argument("--config", type=Path, default=Path("config/scheduler.toml"))
+    sc.add_argument(
+        "--kubernetes-config",
+        type=Path,
+        help="a TOML file whose [kubernetes] table replaces the one in --config",
+    )
     sc.add_argument(
         "--launcher",
         choices=["compose", "kubernetes"],

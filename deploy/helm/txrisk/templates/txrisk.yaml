@@ -1,0 +1,417 @@
+# The txrisk image's services: migrations, the scoring API, the scoring workers (autoscaled), the
+# outbox publisher and the scheduler. Each connects as the least-privilege txrisk_app role except
+# the migration job, which owns the schema.
+{{- $migrate := dict "root" . "component" "migrate" }}
+# Applies the schema migrations and provisions the txrisk_app role, then exits. It is named for the
+# release revision because a Job's pod template cannot change in place: each upgrade makes a new one.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate-{{ .Release.Revision }}
+  labels:
+    {{- include "txrisk.labels" $migrate | nindent 4 }}
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        {{- include "txrisk.labels" $migrate | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      enableServiceLinks: false
+      securityContext:
+        {{- include "txrisk.podSecurity" . | nindent 8 }}
+      initContainers:
+        - name: wait-for-postgres
+          image: {{ include "txrisk.image" .Values.image.txrisk }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [sh, -c, "until pg_isready -h postgres -U txrisk -d txrisk; do sleep 2; done"]
+          securityContext:
+            {{- include "txrisk.containerSecurity" . | nindent 12 }}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 128Mi}
+      containers:
+        - name: migrate
+          image: {{ include "txrisk.image" .Values.image.txrisk }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [txrisk, migrate]
+          env:
+            {{- include "txrisk.ownerDatabase" . | nindent 12 }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.settingsFrom.database }}
+          securityContext:
+            {{- include "txrisk.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migrate.resources | nindent 12 }}
+{{- $api := dict "root" . "component" "api" "port" 9101 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  labels:
+    {{- include "txrisk.labels" $api | nindent 4 }}
+spec:
+  selector:
+    {{- include "txrisk.selector" $api | nindent 4 }}
+  ports:
+    - name: http
+      port: 8000
+---
+# /metrics is on a port of its own, and a headless Service gives Prometheus every replica.
+{{ include "txrisk.metricsService" $api }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  labels:
+    {{- include "txrisk.labels" $api | nindent 4 }}
+spec:
+  replicas: {{ .Values.api.replicas }}
+  selector:
+    matchLabels:
+      {{- include "txrisk.selector" $api | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "txrisk.labels" $api | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        {{- include "txrisk.podSecurity" . | nindent 8 }}
+      initContainers:
+        {{- include "txrisk.waitForMigration" . | nindent 8 }}
+      containers:
+        - name: api
+          image: {{ include "txrisk.image" .Values.image.txrisk }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [txrisk, serve, --host, 0.0.0.0, --port, "8000"]
+          env:
+            {{- include "txrisk.environment" . | nindent 12 }}
+            {{- include "txrisk.appDatabase" . | nindent 12 }}
+            - name: TXRISK_METRICS_PORT
+              value: "9101"
+          envFrom:
+            - secretRef:
+                name: {{ .Values.settingsFrom.app }}
+          ports:
+            - name: http
+              containerPort: 8000
+            - name: metrics
+              containerPort: 9101
+          startupProbe:
+            httpGet:
+              path: /v1/ready
+              port: http
+            periodSeconds: 3
+            failureThreshold: 40
+          readinessProbe:
+            httpGet:
+              path: /v1/ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          securityContext:
+            {{- include "txrisk.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "txrisk.modelsMount" . | nindent 12 }}
+      volumes:
+        {{- include "txrisk.modelsVolume" . | nindent 8 }}
+{{- $worker := dict "root" . "component" "worker" "port" 9100 }}
+---
+{{ include "txrisk.metricsService" $worker }}
+---
+# Scores transaction.created into score.produced. A worker that stops leaves its uncommitted batch
+# to be redelivered, so Kubernetes simply restarts it; the replicas share the topic's partitions.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  labels:
+    {{- include "txrisk.labels" $worker | nindent 4 }}
+spec:
+  {{- if not .Values.worker.autoscaling.enabled }}
+  replicas: {{ .Values.worker.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "txrisk.selector" $worker | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "txrisk.labels" $worker | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        {{- include "txrisk.podSecurity" . | nindent 8 }}
+      initContainers:
+        {{- include "txrisk.waitForMigration" . | nindent 8 }}
+      containers:
+        - name: worker
+          image: {{ include "txrisk.image" .Values.image.txrisk }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [txrisk, worker]
+          env:
+            {{- include "txrisk.environment" . | nindent 12 }}
+            {{- include "txrisk.appDatabase" . | nindent 12 }}
+            - name: TXRISK_METRICS_PORT
+              value: "9100"
+          envFrom:
+            - secretRef:
+                name: {{ .Values.settingsFrom.app }}
+          ports:
+            - name: metrics
+              containerPort: 9100
+          # The metrics port answers once the worker has started; a hung worker stops answering.
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          securityContext:
+            {{- include "txrisk.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "txrisk.modelsMount" . | nindent 12 }}
+      volumes:
+        {{- include "txrisk.modelsVolume" . | nindent 8 }}
+{{- with .Values.worker.autoscaling }}
+{{- if .enabled }}
+---
+# Scoring workers scale on load: CPU is what scoring spends. Scaling in waits five minutes, so a
+# burst's workers are not dropped between waves (and a rebalance of the consumer group costs a
+# moment each time).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: worker
+  labels:
+    {{- include "txrisk.labels" $worker | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: worker
+  minReplicas: {{ .minReplicas }}
+  maxReplicas: {{ .maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .targetCPUUtilizationPercentage }}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+{{- end }}
+{{- end }}
+{{- $outbox := dict "root" . "component" "outbox" "port" 9102 }}
+---
+{{ include "txrisk.metricsService" $outbox }}
+---
+# Publishes the transactional outbox (the Fraud discoveries of Cases closed as fraud) to
+# fraud.discovered. At-least-once: a crash republishes, and the Fraud label store is idempotent.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: outbox
+  labels:
+    {{- include "txrisk.labels" $outbox | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "txrisk.selector" $outbox | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "txrisk.labels" $outbox | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        {{- include "txrisk.podSecurity" . | nindent 8 }}
+      initContainers:
+        {{- include "txrisk.waitForMigration" . | nindent 8 }}
+      containers:
+        - name: outbox
+          image: {{ include "txrisk.image" .Values.image.txrisk }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [txrisk, outbox]
+          env:
+            {{- include "txrisk.environment" . | nindent 12 }}
+            {{- include "txrisk.appDatabase" . | nindent 12 }}
+            - name: TXRISK_METRICS_PORT
+              value: "9102"
+          envFrom:
+            - secretRef:
+                name: {{ .Values.settingsFrom.app }}
+          ports:
+            - name: metrics
+              containerPort: 9102
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          securityContext:
+            {{- include "txrisk.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.outbox.resources | nindent 12 }}
+{{- if .Values.scheduler.enabled }}
+{{- $scheduler := dict "root" . "component" "scheduler" "port" 9103 }}
+---
+# The scheduler's Kubernetes launcher: this release's [kubernetes] table replaces the one in
+# config/scheduler.toml, whose jobs the scheduler runs as they are. It creates one Job per
+# scheduled job and simulated period.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: scheduler
+  labels:
+    {{- include "txrisk.labels" $scheduler | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scheduler
+  labels:
+    {{- include "txrisk.labels" $scheduler | nindent 4 }}
+rules:
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create, get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scheduler
+  labels:
+    {{- include "txrisk.labels" $scheduler | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: scheduler
+subjects:
+  - kind: ServiceAccount
+    name: scheduler
+---
+{{ include "txrisk.metricsService" $scheduler }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scheduler-config
+  labels:
+    {{- include "txrisk.labels" $scheduler | nindent 4 }}
+data:
+  kubernetes.toml: |
+    [kubernetes]
+    namespace = {{ .Release.Namespace | quote }}
+    image = {{ include "txrisk.image" .Values.image.txrisk | quote }}
+    env_from = {{ .Values.settingsFrom.database | quote }}
+    models_claim = "models"
+    run_as_user = {{ .Values.podSecurity.runAsUser }}
+    [kubernetes.env]
+    TXRISK_DATABASE_URL = "postgresql://txrisk@postgres:5432/txrisk"
+    TXRISK_KAFKA_BOOTSTRAP_SERVERS = "redpanda:9092"
+    TXRISK_REDIS_URL = "redis://redis:6379/0"
+    TXRISK_PUSHGATEWAY_URL = "http://pushgateway:9091"
+    TXRISK_MODELS_DIR = "/models"
+    TXRISK_MLFLOW_URI = "sqlite:////models/mlflow.db"
+    TXRISK_MLFLOW_ARTIFACTS = "/models/mlruns"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler
+  labels:
+    {{- include "txrisk.labels" $scheduler | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "txrisk.selector" $scheduler | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "txrisk.labels" $scheduler | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      serviceAccountName: scheduler
+      securityContext:
+        {{- include "txrisk.podSecurity" . | nindent 8 }}
+      initContainers:
+        {{- include "txrisk.waitForMigration" . | nindent 8 }}
+      containers:
+        - name: scheduler
+          image: {{ include "txrisk.image" .Values.image.txrisk }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [txrisk, scheduler, --launcher, kubernetes, --kubernetes-config, /etc/txrisk/kubernetes.toml, --metrics-port, "9103"]
+          env:
+            {{- include "txrisk.appDatabase" . | nindent 12 }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.settingsFrom.app }}
+          ports:
+            - name: metrics
+              containerPort: 9103
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 6
+          securityContext:
+            {{- include "txrisk.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.scheduler.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/txrisk
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: scheduler-config
+{{- end }}

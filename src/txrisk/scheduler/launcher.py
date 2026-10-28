@@ -136,9 +136,22 @@ def job_manifest(settings: KubernetesSettings, job: JobSpec, period: date) -> di
         "image": settings.image,
         "command": list(job.command),
     }
+    if settings.env:
+        container["env"] = [{"name": k, "value": v} for k, v in sorted(settings.env.items())]
     if settings.env_from:
         container["envFrom"] = [{"secretRef": {"name": settings.env_from}}]
     pod: dict[str, Any] = {"restartPolicy": "Never", "containers": [container]}
+    if settings.models_claim:
+        container["volumeMounts"] = [{"name": "models", "mountPath": "/models"}]
+        pod["volumes"] = [
+            {"name": "models", "persistentVolumeClaim": {"claimName": settings.models_claim}}
+        ]
+    if settings.run_as_user:
+        pod["securityContext"] = {
+            "runAsNonRoot": True,
+            "runAsUser": settings.run_as_user,
+            "fsGroup": settings.run_as_user,
+        }
     if settings.service_account:
         pod["serviceAccountName"] = settings.service_account
     return {
