@@ -70,6 +70,10 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
     other: seedCases(`e2eo${SUFFIX}`, [
       ...["--count", "1", "--assignee-id", "sub-another-analyst", "--assignee-name", "Another Analyst"],
     ]).cases,
+    // Assigned to the demo Analyst: closed as fraud, drafted and exported by the report test.
+    reports: seedCases(`e2er${SUFFIX}`, [
+      ...["--count", "1", "--assignee-id", analystId, "--assignee-name", "Demo Analyst"],
+    ]).cases,
     // Thirty Medium Transactions across regions and types: more than a page.
     watch: seedCases(`e2ew${SUFFIX}`, ["--count", "0", "--medium", "30"]).cases,
   };

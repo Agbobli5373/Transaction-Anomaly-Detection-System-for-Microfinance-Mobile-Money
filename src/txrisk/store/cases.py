@@ -256,7 +256,7 @@ def events(connection: sa.Connection, case_id: int) -> list[CaseEvent]:
     return [CaseEvent(**{k: v for k, v in row._mapping.items() if k != "case_id"}) for row in rows]
 
 
-def _event_time(connection: sa.Connection, case_id: int) -> datetime:
+def event_time(connection: sa.Connection, case_id: int) -> datetime:
     """When an action on the Case happens: the simulation clock's reading, and never before the
     Case's latest Alert."""
     reading = connection.execute(sa.select(simulation_clock.c.at)).scalar_one_or_none()
@@ -270,12 +270,12 @@ def _event_time(connection: sa.Connection, case_id: int) -> datetime:
 
 
 @dataclass(frozen=True)
-class _Locked:
+class Locked:
     status: str
     assignee_id: str | None
 
 
-def _lock(connection: sa.Connection, case_id: int) -> _Locked:
+def lock(connection: sa.Connection, case_id: int) -> Locked:
     """The Case's status and assignee, locked until the transaction ends, so concurrent
     actions on one Case happen one after the other."""
     row = connection.execute(
@@ -285,7 +285,7 @@ def _lock(connection: sa.Connection, case_id: int) -> _Locked:
     ).one_or_none()
     if row is None:
         raise CaseNotFound(case_id)
-    return _Locked(row.status, row.assignee_id)
+    return Locked(row.status, row.assignee_id)
 
 
 def _record_event(
@@ -316,7 +316,7 @@ def _record_event(
     )
 
 
-def _check_may_work(assignee_id: str | None, *, actor_id: str, supervisor: bool) -> None:
+def check_may_work(assignee_id: str | None, *, actor_id: str, supervisor: bool) -> None:
     if not supervisor and assignee_id != actor_id:
         raise NotPermitted("only the assigned Analyst or a Supervisor may work this Case")
 
@@ -332,10 +332,10 @@ def assign(
 ) -> None:
     """Assign (or reassign) the Case to an Analyst. The caller has checked the actor is a
     Supervisor. Raises `CaseNotFound`, or `CaseClosed` for a closed Case."""
-    locked = _lock(connection, case_id)
+    locked = lock(connection, case_id)
     if locked.status in _CLOSED:
         raise CaseClosed(case_id)
-    at = _event_time(connection, case_id)
+    at = event_time(connection, case_id)
     connection.execute(
         sa.update(cases)
         .where(cases.c.case_id == case_id)
@@ -363,15 +363,15 @@ def add_note(
 ) -> None:
     """Add a note, as the assigned Analyst or a Supervisor. Raises `CaseNotFound`,
     `NotPermitted` or `CaseClosed`."""
-    locked = _lock(connection, case_id)
-    _check_may_work(locked.assignee_id, actor_id=actor_id, supervisor=supervisor)
+    locked = lock(connection, case_id)
+    check_may_work(locked.assignee_id, actor_id=actor_id, supervisor=supervisor)
     if locked.status in _CLOSED:
         raise CaseClosed(case_id)
     _record_event(
         connection,
         case_id,
         "note",
-        at=_event_time(connection, case_id),
+        at=event_time(connection, case_id),
         actor_id=actor_id,
         actor_name=actor_name,
         body=text,
@@ -394,11 +394,11 @@ def transition(
     Closing as fraud discovers the Case's Transactions at the closing time; see the module
     docstring.
     """
-    locked = _lock(connection, case_id)
-    _check_may_work(locked.assignee_id, actor_id=actor_id, supervisor=supervisor)
+    locked = lock(connection, case_id)
+    check_may_work(locked.assignee_id, actor_id=actor_id, supervisor=supervisor)
     if to not in TRANSITIONS.get(locked.status, ()):
         raise InvalidTransition(locked.status, to)
-    at = _event_time(connection, case_id)
+    at = event_time(connection, case_id)
     values: dict[str, object] = {"status": to}
     if to in _CLOSED:
         values |= {"closed_at": at, "closed_by_id": actor_id, "closed_by_name": actor_name}

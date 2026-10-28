@@ -198,6 +198,72 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/cases/{case_id}/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Draft Report
+         * @description Draft the Suspicious transaction report of a Case closed as fraud, or rewrite its
+         *     draft: the assigned Analyst or a Supervisor (403 for any other Analyst). 409 for a Case
+         *     that is not closed as fraud, or whose report is already approved. Audited.
+         */
+        post: operations["draft_report_v1_cases__case_id__report_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/cases/{case_id}/report/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve Report
+         * @description Approve a Case's drafted report. Supervisors only: an Analyst, an Admin or an API key
+         *     gets 403. Approval is final, and makes the report exportable. Audited.
+         */
+        post: operations["approve_report_v1_cases__case_id__report_approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/cases/{case_id}/report/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Report
+         * @description The approved Suspicious transaction report as a file: the Case's Transactions with
+         *     their Reasons, its notes and the summary, with Wallets by pseudonymised ID and phone
+         *     numbers masked. Supervisors only, and only once approved (409 for a draft). Audited; the
+         *     system never files the report.
+         */
+        get: operations["export_report_v1_cases__case_id__report_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/cases/{case_id}/transition": {
         parameters: {
             query?: never;
@@ -535,6 +601,7 @@ export interface components {
             events: components["schemas"]["CaseEventOut"][];
             /** Recent Transactions */
             recent_transactions: components["schemas"]["TransactionView"][];
+            report: components["schemas"]["ReportOut"] | null;
         };
         /** CaseEventOut */
         CaseEventOut: {
@@ -599,6 +666,47 @@ export interface components {
             /** Next Before */
             next_before: number | null;
         };
+        /** ExportedCase */
+        ExportedCase: {
+            /** Case Id */
+            case_id: number;
+            /**
+             * Closed At
+             * Format: date-time
+             */
+            closed_at: string;
+            /** Closed By Name */
+            closed_by_name: string;
+            /**
+             * Opened At
+             * Format: date-time
+             */
+            opened_at: string;
+            /** Subject Wallet Id */
+            subject_wallet_id: string;
+        };
+        /** ExportedNote */
+        ExportedNote: {
+            /** Author */
+            author: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "note" | "transition";
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /** Text */
+            text: string;
+        };
+        /** ExportedTransaction */
+        ExportedTransaction: {
+            assessment: components["schemas"]["AssessmentOut"];
+            transaction: components["schemas"]["TransactionOut"];
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -648,6 +756,72 @@ export interface components {
             message: string;
             /** Value */
             value: number | string | null;
+        };
+        /** ReportDraftIn */
+        ReportDraftIn: {
+            /** Summary */
+            summary: string;
+        };
+        /**
+         * ReportExport
+         * @description The Suspicious transaction report as a file, for the institution to file through its own
+         *     channel. Wallets appear only by pseudonymised ID, and phone numbers in free text are masked.
+         */
+        ReportExport: {
+            /**
+             * Approved At
+             * Format: date-time
+             */
+            approved_at: string;
+            /** Approved By */
+            approved_by: string;
+            case: components["schemas"]["ExportedCase"];
+            /**
+             * Drafted At
+             * Format: date-time
+             */
+            drafted_at: string;
+            /** Drafted By */
+            drafted_by: string;
+            /**
+             * Format Version
+             * @default 1
+             * @constant
+             */
+            format_version: 1;
+            /** Notes */
+            notes: components["schemas"]["ExportedNote"][];
+            /** Report Id */
+            report_id: number;
+            /** Summary */
+            summary: string;
+            /** Transactions */
+            transactions: components["schemas"]["ExportedTransaction"][];
+        };
+        /** ReportOut */
+        ReportOut: {
+            /** Approved At */
+            approved_at: string | null;
+            /** Approved By Name */
+            approved_by_name: string | null;
+            /** Case Id */
+            case_id: number;
+            /**
+             * Drafted At
+             * Format: date-time
+             */
+            drafted_at: string;
+            /** Drafted By Name */
+            drafted_by_name: string;
+            /** Report Id */
+            report_id: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "draft" | "approved";
+            /** Summary */
+            summary: string;
         };
         /** RotationIn */
         RotationIn: {
@@ -1352,6 +1526,188 @@ export interface operations {
                 content?: never;
             };
             /** @description The Case is closed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    draft_report_v1_cases__case_id__report_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReportDraftIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportOut"];
+                };
+            };
+            /** @description No credential, or an invalid, expired or revoked one */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller's roles do not permit this */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such Case, or no report */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The Case is not closed as fraud, or the report is not in a state for this */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_report_v1_cases__case_id__report_approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportOut"];
+                };
+            };
+            /** @description No credential, or an invalid, expired or revoked one */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller's roles do not permit this */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such Case, or no report */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The Case is not closed as fraud, or the report is not in a state for this */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_report_v1_cases__case_id__report_export_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The report as a JSON file download */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportExport"];
+                };
+            };
+            /** @description No credential, or an invalid, expired or revoked one */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller's roles do not permit this */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such Case, or no report */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The report is still a draft */
             409: {
                 headers: {
                     [name: string]: unknown;

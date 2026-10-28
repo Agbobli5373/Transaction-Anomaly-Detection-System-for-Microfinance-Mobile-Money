@@ -1,0 +1,9 @@
+# `txrisk retrain`: weekly retraining on the simulation clock (ADR 0005), and early retraining
+# when the daily monitoring job (config/monitoring.toml) reports drift that needs action.
+
+[drift]
+# A drift action alert (a PSI at or above [psi] action in config/monitoring.toml, on a model input,
+# the Risk score or the Alerts' inputs) retrains early, but never within this many days of the last
+# retraining run: until a Challenger model is promoted the Champion's baseline keeps drifting, and
+# retraining every day would only produce the same Challenger again.
+min_days_between_runs = 3

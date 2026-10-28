@@ -44,11 +44,13 @@ def log_bundle(
     tracking_uri: str,
     artifacts: Path,
     params: dict[str, Any],
+    alias: str | None = None,
 ) -> str:
     """Record one training run of `bundle`, saved in `folder`, and register it as a new version
     of the model. Returns that version's number.
 
     `artifacts` is where a new experiment stores run artifacts; an existing one keeps its own.
+    With an `alias` (e.g. `challenger`) the new version takes that alias from whichever had it.
     """
     mlflow.set_tracking_uri(tracking_uri)
     client = MlflowClient()
@@ -69,4 +71,6 @@ def log_bundle(
             run_id=run.info.run_id,
             tags={"bundle_version": bundle.version},
         )
+        if alias is not None:
+            client.set_registered_model_alias(MODEL_NAME, alias, version.version)
     return str(version.version)

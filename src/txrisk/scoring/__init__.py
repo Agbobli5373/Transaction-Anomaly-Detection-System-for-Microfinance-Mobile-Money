@@ -13,6 +13,7 @@ from txrisk.scoring.service import (
     RiskAssessment,
     RiskBand,
     ScoringService,
+    ShadowScore,
     combine_hits,
 )
 from txrisk.scoring.table import rule_scores_table
@@ -35,6 +36,7 @@ __all__ = [
     "RulesConfig",
     "ScoringService",
     "Severity",
+    "ShadowScore",
     "combine_hits",
     "load_rules_config",
     "rule_hits",

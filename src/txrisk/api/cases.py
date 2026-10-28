@@ -35,6 +35,7 @@ from txrisk.api.schemas import (
     CasePage,
     CaseStatusName,
     NoteIn,
+    ReportOut,
     TransactionOut,
     TransactionType,
     TransactionView,
@@ -42,7 +43,7 @@ from txrisk.api.schemas import (
     WatchlistItem,
     WatchlistPage,
 )
-from txrisk.store import cases, watchlist
+from txrisk.store import cases, reports, watchlist
 from txrisk.store.audit import Outcome
 
 _DENIED: dict[int | str, dict[str, Any]] = {
@@ -86,6 +87,7 @@ def _parse_cursor(cursor: str) -> tuple[datetime, str]:
 
 def _detail(connection: sa.Connection, case: cases.CaseSummary) -> CaseDetail:
     outcome = cases.disposition(case.status)
+    report = reports.get_report(connection, case.case_id)
     return CaseDetail(
         case=CaseOut.of(case),
         alerts=[
@@ -110,6 +112,7 @@ def _detail(connection: sa.Connection, case: cases.CaseSummary) -> CaseDetail:
         events=[
             CaseEventOut.model_validate(e.__dict__) for e in cases.events(connection, case.case_id)
         ],
+        report=None if report is None else ReportOut.of(report),
     )
 
 

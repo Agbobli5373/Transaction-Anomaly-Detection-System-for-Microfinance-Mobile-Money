@@ -7,9 +7,11 @@ vi.mock("@/app/cases/actions", () => ({
   addNote: vi.fn(),
   moveCase: vi.fn(),
   assignCase: vi.fn(),
+  draftReport: vi.fn(),
+  approveReport: vi.fn(),
 }));
 
-import { MoveForm, NoteForm } from "./CaseForms";
+import { ApproveReportForm, MoveForm, NoteForm, ReportDraftForm } from "./CaseForms";
 import { nextMoves } from "@/lib/permissions";
 
 afterEach(cleanup);
@@ -46,5 +48,20 @@ describe("the Case forms", () => {
       <MoveForm caseId={7} moves={nextMoves("closed_fraud")} disabledReason="closed" />,
     );
     expect(container.innerHTML).toBe("");
+  });
+
+  it("disables approval, with the reason, for a person who cannot approve", () => {
+    render(<ApproveReportForm caseId={7} disabledReason="Only a Supervisor can approve a report." />);
+    expect(button("Approve report").disabled).toBe(true);
+    expect(screen.getByTestId("approve-blocked").textContent).toMatch(/Only a Supervisor/);
+    cleanup();
+    render(<ApproveReportForm caseId={7} disabledReason={null} />);
+    expect(button("Approve report").disabled).toBe(false);
+  });
+
+  it("offers the current draft for rewriting", () => {
+    render(<ReportDraftForm caseId={7} current="Takeover after a SIM swap." />);
+    expect(field("Summary").value).toBe("Takeover after a SIM swap.");
+    expect(screen.getByRole("heading", { name: "Rewrite the draft" })).toBeTruthy();
   });
 });

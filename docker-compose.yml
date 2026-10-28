@@ -213,8 +213,13 @@ services:
       TXRISK_DATABASE_URL: postgresql://txrisk@postgres:5432/txrisk
       # `txrisk monitor` pushes its metrics here (see the pushgateway service).
       TXRISK_PUSHGATEWAY_URL: http://pushgateway:9091
+      # `txrisk retrain` saves each new bundle in /models, where the workers and the API (which
+      # mount it read-only) load the Challenger model from, and tracks its runs in MLflow there.
+      TXRISK_MODELS_DIR: /models
+      TXRISK_MLFLOW_URI: sqlite:////models/mlflow.db
+      TXRISK_MLFLOW_ARTIFACTS: /models/mlruns
     volumes:
-      - ./models:/models:ro
+      - ./models:/models
       - ./data:/data:ro
 
   # One-off: `docker compose run --rm backup` writes a timestamped pg_dump into the `backups` volume

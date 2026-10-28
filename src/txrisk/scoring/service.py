@@ -64,6 +64,23 @@ class RiskAssessment:
     model_inputs: dict[str, float] | None = field(default=None, compare=False, repr=False)
 
 
+@dataclass(frozen=True)
+class ShadowScore:
+    """What a Challenger model scored a Transaction, in shadow: recorded, never acted on.
+
+    A scoring that failed has an `error` and no score, so a Challenger's failures are counted
+    rather than hidden or passed on to the Champion's path.
+    """
+
+    model_version: str
+    # Risk score and band on the Challenger's own stacked scale and thresholds.
+    risk_score: float | None
+    risk_band: RiskBand | None
+    component_scores: dict[str, float | None]
+    latency_ms: float
+    error: str | None = None
+
+
 class Clock(Protocol):
     """The simulation clock (ADR 0005): business logic never reads the wall clock."""
 
@@ -125,6 +142,18 @@ class ScoringService:
         self._metrics = metrics
 
     def assess(self, transaction: Transaction) -> RiskAssessment:
+        return self.assess_with_shadow(transaction, None)[0]
+
+    def assess_with_shadow(
+        self, transaction: Transaction, challenger: "ModelBundle | None"
+    ) -> tuple[RiskAssessment, ShadowScore | None]:
+        """The Champion's assessment, and what the `challenger` model scored the same Transaction
+        in shadow, from the same features.
+
+        The shadow score is only returned, never part of the assessment: it has no say in the Risk
+        band, the Reasons or any Alert. Whatever the Challenger does (raise, run slowly) cannot
+        change or fail the assessment. None without a `challenger`, or when it is the very model
+        that made the assessment."""
         with span("features.compute"):
             features = transaction_features(
                 transaction, self._history, now=self._clock.now(), config=self._features
@@ -132,10 +161,60 @@ class ScoringService:
         hits = rule_hits(transaction, features, self._rules.rules)
         rules_score, critical = combine_hits(hits, self._rules)
         if self._champion is not None:
-            return self._with_champion(
+            assessment = self._with_champion(
                 self._champion, transaction, features, hits, rules_score, critical
             )
-        return self._rules_only(transaction, features, hits, rules_score, critical)
+        else:
+            assessment = self._rules_only(transaction, features, hits, rules_score, critical)
+        shadow = None
+        if challenger is not None and challenger.version != assessment.model_version:
+            shadow = self._shadow(challenger, transaction, features, rules_score, critical)
+        return assessment, shadow
+
+    def _shadow(
+        self,
+        bundle: "ModelBundle",
+        transaction: Transaction,
+        features: TransactionFeatures,
+        rules_score: float,
+        critical: bool,
+    ) -> ShadowScore:
+        """Score with the Challenger: its components and Risk score and band only, without the
+        Reasons, which cost most of a stacked assessment and nobody reads in shadow. Held to the
+        Champion's timeout, so a slow Challenger cannot slow scoring more than that."""
+        from txrisk.observability.metrics import stopwatch  # which imports this package
+
+        elapsed = stopwatch()
+
+        def score() -> tuple[float, dict[str, float | None]]:
+            inputs = inputs_for(transaction, features)
+            rules = pd.DataFrame(
+                {"rules_score": [rules_score], "critical": [critical]}, inputs.index
+            )
+            components = bundle.components(inputs, rules)
+            return float(bundle.risk_scores(inputs, rules, components).iloc[0]), {
+                "rules": rules_score,
+                "anomaly": float(components["anomaly"].iloc[0]),
+                "supervised": float(components["fraud_probability"].iloc[0]),
+            }
+
+        timeout = None if self._champion is None else self._champion.timeout
+        try:
+            with span("model.shadow", model_version=bundle.version):
+                value, components = Champion.of(bundle, timeout=timeout).call(score)
+        except Exception as e:  # nothing the Challenger does may reach the Champion's path
+            log.warning(
+                "shadow scoring %s with %s failed",
+                transaction.transaction_id,
+                bundle.version,
+                exc_info=True,
+            )
+            return ShadowScore(
+                bundle.version, None, None, {}, elapsed() * 1000, f"{type(e).__name__}: {e}"
+            )
+        thresholds = bundle.thresholds
+        band = _band(value, medium=thresholds.medium, high=thresholds.high)
+        return ShadowScore(bundle.version, round(value, 2), band, components, elapsed() * 1000)
 
     def _with_champion(
         self,

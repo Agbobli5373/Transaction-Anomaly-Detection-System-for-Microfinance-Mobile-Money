@@ -2,7 +2,13 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { BandBadge, StatusBadge } from "@/components/Badges";
-import { AssignForm, MoveForm, NoteForm } from "@/components/CaseForms";
+import {
+  ApproveReportForm,
+  AssignForm,
+  MoveForm,
+  NoteForm,
+  ReportDraftForm,
+} from "@/components/CaseForms";
 import { api, attempt, type Schemas } from "@/lib/api";
 import {
   formatAmount,
@@ -16,7 +22,10 @@ import { requireCaseUser } from "@/lib/guards";
 import {
   STATUS_LABELS,
   canAssign,
+  canDraftReport,
+  canExportReport,
   nextMoves,
+  whyNotApprovable,
   whyNotWorkable,
 } from "@/lib/permissions";
 
@@ -120,7 +129,7 @@ export default async function CaseView({ params }: { params: Params }) {
   if (!result.ok) {
     return <Missing message={result.message} />;
   }
-  const { case: c, alerts, recent_transactions: transactions, events } = result.data;
+  const { case: c, alerts, recent_transactions: transactions, events, report } = result.data;
   const moves = nextMoves(c.status);
   const blocked = whyNotWorkable(user, c);
 
@@ -225,6 +234,54 @@ export default async function CaseView({ params }: { params: Params }) {
           </>
         ) : null}
       </section>
+
+      {c.status === "closed_fraud" ? (
+        <section aria-labelledby="report-heading" className="work">
+          <h2 id="report-heading">Suspicious transaction report</h2>
+          {report ? (
+            <dl className="facts">
+              <div>
+                <dt>Status</dt>
+                <dd data-testid="report-status">{report.status === "approved" ? "Approved" : "Draft"}</dd>
+              </div>
+              <div>
+                <dt>Drafted</dt>
+                <dd>
+                  {report.drafted_by_name}, <time dateTime={report.drafted_at}>{formatDateTime(report.drafted_at)}</time>
+                </dd>
+              </div>
+              {report.approved_at ? (
+                <div>
+                  <dt>Approved</dt>
+                  <dd>
+                    {report.approved_by_name}, <time dateTime={report.approved_at}>{formatDateTime(report.approved_at)}</time>
+                  </dd>
+                </div>
+              ) : null}
+            </dl>
+          ) : (
+            <p>No report has been drafted for this Case yet.</p>
+          )}
+          {report ? (
+            <p className="note" data-testid="report-summary">
+              {maskPhoneNumbers(report.summary)}
+            </p>
+          ) : null}
+          {canDraftReport(user, c, report) ? (
+            <ReportDraftForm caseId={c.case_id} current={report?.summary ?? null} />
+          ) : null}
+          {report ? (
+            <ApproveReportForm caseId={c.case_id} disabledReason={whyNotApprovable(user, report)} />
+          ) : null}
+          {canExportReport(user, report) ? (
+            <p>
+              <a href={`/cases/${c.case_id}/report/export`} download>
+                Export the report file
+              </a>
+            </p>
+          ) : null}
+        </section>
+      ) : null}
 
       <section aria-labelledby="history-heading">
         <h2 id="history-heading">Notes and history</h2>

@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from txrisk.store.clock import SimulationClock
 from txrisk.store.tables import (
     alerts,
+    challenger_scores,
     fraud_labels,
     model_inputs,
     monitoring_metrics,
@@ -39,6 +40,8 @@ class RetentionDays(BaseModel):
     # What monitoring reads: the inputs a day's drift is measured on, and its computed history.
     model_inputs: int = Field(default=30, ge=1)
     monitoring_metrics: int = Field(default=365, ge=1)
+    # What Challenger models scored: the shadow gate looks at the last days of it.
+    challenger_scores: int = Field(default=30, ge=1)
     # Days of real time, and at least a year: the database refuses less (see migration 0004).
     audit_log: int = Field(ge=365)
 
@@ -58,6 +61,7 @@ class RetentionDays(BaseModel):
             self.fraud_labels,
             self.model_inputs,
             self.monitoring_metrics,
+            self.challenger_scores,
         )
         if self.audit_log <= others:
             raise ValueError(f"audit_log must be kept longer than every other table ({others})")
@@ -84,6 +88,7 @@ _PURGED = (
     (sim_swaps, sim_swaps.c.occurred_at, "sim_swaps"),
     (fraud_labels, fraud_labels.c.discovered_at, "fraud_labels"),
     (model_inputs, model_inputs.c.assessed_at, "model_inputs"),
+    (challenger_scores, challenger_scores.c.assessed_at, "challenger_scores"),
     (
         monitoring_metrics,
         sa.cast(monitoring_metrics.c.day, sa.DateTime(timezone=True)),

@@ -161,6 +161,10 @@ _Avoid_: Production model, live model
 A candidate model version that scores the same Transactions in shadow, with its scores recorded but never acted on.
 _Avoid_: Candidate, test model
 
+**Retraining**:
+Training a new bundle from the Transactions and Fraud labels known at the simulated time, honouring the Label maturity window, and registering it as the Challenger model. It runs weekly, or early on a drift action alert.
+_Avoid_: Refresh, update
+
 **Promotion**:
 Making a Challenger model the Champion model, allowed only when it passes its promotion gates.
 _Avoid_: Deployment, release

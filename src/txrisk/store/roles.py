@@ -53,6 +53,9 @@ GRANTS: dict[str, tuple[str, ...]] = {
     # A Case moves through its states, and is assigned, in place; nothing is ever deleted.
     "cases": ("SELECT", "INSERT", "UPDATE"),
     "case_events": ("SELECT", "INSERT"),
+    # A draft is rewritten and then approved in place; a trigger (migration 0008) freezes it once
+    # approved. Never deleted.
+    "suspicious_transaction_reports": ("SELECT", "INSERT", "UPDATE"),
     # Events awaiting publication: inserted with the change, marked published by the publisher.
     "outbox": ("SELECT", "INSERT", "UPDATE"),
     # Append-only: no UPDATE, DELETE, TRUNCATE. Aged entries leave only through audit_log_purge,
@@ -63,6 +66,11 @@ GRANTS: dict[str, tuple[str, ...]] = {
     "model_inputs": ("SELECT", "INSERT", "UPDATE"),
     # Written and read by the monitoring job, which runs as the owner; the application only reads.
     "monitoring_metrics": ("SELECT",),
+    # Retraining (`txrisk retrain`, the owner) writes the runs and moves the Challenger model; the
+    # application only reads which one it is. It stores what a Challenger scored, append-only.
+    "retraining_runs": ("SELECT",),
+    "challenger_model": ("SELECT",),
+    "challenger_scores": ("SELECT", "INSERT"),
 }
 
 

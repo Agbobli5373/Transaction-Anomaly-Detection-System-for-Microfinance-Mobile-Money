@@ -527,13 +527,24 @@
             },
             "title": "Recent Transactions",
             "type": "array"
+          },
+          "report": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReportOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "case",
           "alerts",
           "recent_transactions",
-          "events"
+          "events",
+          "report"
         ],
         "title": "CaseDetail",
         "type": "object"
@@ -769,6 +780,93 @@
         "title": "CasePage",
         "type": "object"
       },
+      "ExportedCase": {
+        "additionalProperties": false,
+        "properties": {
+          "case_id": {
+            "title": "Case Id",
+            "type": "integer"
+          },
+          "closed_at": {
+            "format": "date-time",
+            "title": "Closed At",
+            "type": "string"
+          },
+          "closed_by_name": {
+            "title": "Closed By Name",
+            "type": "string"
+          },
+          "opened_at": {
+            "format": "date-time",
+            "title": "Opened At",
+            "type": "string"
+          },
+          "subject_wallet_id": {
+            "title": "Subject Wallet Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "case_id",
+          "subject_wallet_id",
+          "opened_at",
+          "closed_at",
+          "closed_by_name"
+        ],
+        "title": "ExportedCase",
+        "type": "object"
+      },
+      "ExportedNote": {
+        "additionalProperties": false,
+        "properties": {
+          "author": {
+            "title": "Author",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "note",
+              "transition"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "occurred_at",
+          "author",
+          "text"
+        ],
+        "title": "ExportedNote",
+        "type": "object"
+      },
+      "ExportedTransaction": {
+        "additionalProperties": false,
+        "properties": {
+          "assessment": {
+            "$ref": "#/components/schemas/AssessmentOut"
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/TransactionOut"
+          }
+        },
+        "required": [
+          "transaction",
+          "assessment"
+        ],
+        "title": "ExportedTransaction",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -899,6 +997,159 @@
           "value"
         ],
         "title": "ReasonOut",
+        "type": "object"
+      },
+      "ReportDraftIn": {
+        "additionalProperties": false,
+        "properties": {
+          "summary": {
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary"
+        ],
+        "title": "ReportDraftIn",
+        "type": "object"
+      },
+      "ReportExport": {
+        "additionalProperties": false,
+        "description": "The Suspicious transaction report as a file, for the institution to file through its own\nchannel. Wallets appear only by pseudonymised ID, and phone numbers in free text are masked.",
+        "properties": {
+          "approved_at": {
+            "format": "date-time",
+            "title": "Approved At",
+            "type": "string"
+          },
+          "approved_by": {
+            "title": "Approved By",
+            "type": "string"
+          },
+          "case": {
+            "$ref": "#/components/schemas/ExportedCase"
+          },
+          "drafted_at": {
+            "format": "date-time",
+            "title": "Drafted At",
+            "type": "string"
+          },
+          "drafted_by": {
+            "title": "Drafted By",
+            "type": "string"
+          },
+          "format_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Format Version",
+            "type": "integer"
+          },
+          "notes": {
+            "items": {
+              "$ref": "#/components/schemas/ExportedNote"
+            },
+            "title": "Notes",
+            "type": "array"
+          },
+          "report_id": {
+            "title": "Report Id",
+            "type": "integer"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "transactions": {
+            "items": {
+              "$ref": "#/components/schemas/ExportedTransaction"
+            },
+            "title": "Transactions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "report_id",
+          "case",
+          "summary",
+          "drafted_by",
+          "drafted_at",
+          "approved_by",
+          "approved_at",
+          "transactions",
+          "notes"
+        ],
+        "title": "ReportExport",
+        "type": "object"
+      },
+      "ReportOut": {
+        "additionalProperties": false,
+        "properties": {
+          "approved_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved At"
+          },
+          "approved_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved By Name"
+          },
+          "case_id": {
+            "title": "Case Id",
+            "type": "integer"
+          },
+          "drafted_at": {
+            "format": "date-time",
+            "title": "Drafted At",
+            "type": "string"
+          },
+          "drafted_by_name": {
+            "title": "Drafted By Name",
+            "type": "string"
+          },
+          "report_id": {
+            "title": "Report Id",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "draft",
+              "approved"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "report_id",
+          "case_id",
+          "status",
+          "summary",
+          "drafted_at",
+          "drafted_by_name",
+          "approved_at",
+          "approved_by_name"
+        ],
+        "title": "ReportOut",
         "type": "object"
       },
       "RotationIn": {
@@ -2281,6 +2532,212 @@
         "summary": "Add Note",
         "tags": [
           "cases"
+        ]
+      }
+    },
+    "/v1/cases/{case_id}/report": {
+      "post": {
+        "description": "Draft the Suspicious transaction report of a Case closed as fraud, or rewrite its\ndraft: the assigned Analyst or a Supervisor (403 for any other Analyst). 409 for a Case\nthat is not closed as fraud, or whose report is already approved. Audited.",
+        "operationId": "draft_report_v1_cases__case_id__report_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "title": "Case Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportDraftIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles do not permit this"
+          },
+          "404": {
+            "description": "No such Case, or no report"
+          },
+          "409": {
+            "description": "The Case is not closed as fraud, or the report is not in a state for this"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Draft Report",
+        "tags": [
+          "reports"
+        ]
+      }
+    },
+    "/v1/cases/{case_id}/report/approve": {
+      "post": {
+        "description": "Approve a Case's drafted report. Supervisors only: an Analyst, an Admin or an API key\ngets 403. Approval is final, and makes the report exportable. Audited.",
+        "operationId": "approve_report_v1_cases__case_id__report_approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "title": "Case Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles do not permit this"
+          },
+          "404": {
+            "description": "No such Case, or no report"
+          },
+          "409": {
+            "description": "The Case is not closed as fraud, or the report is not in a state for this"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Approve Report",
+        "tags": [
+          "reports"
+        ]
+      }
+    },
+    "/v1/cases/{case_id}/report/export": {
+      "get": {
+        "description": "The approved Suspicious transaction report as a file: the Case's Transactions with\ntheir Reasons, its notes and the summary, with Wallets by pseudonymised ID and phone\nnumbers masked. Supervisors only, and only once approved (409 for a draft). Audited; the\nsystem never files the report.",
+        "operationId": "export_report_v1_cases__case_id__report_export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "title": "Case Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportExport"
+                }
+              }
+            },
+            "description": "The report as a JSON file download",
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles do not permit this"
+          },
+          "404": {
+            "description": "No such Case, or no report"
+          },
+          "409": {
+            "description": "The report is still a draft"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Export Report",
+        "tags": [
+          "reports"
         ]
       }
     },
