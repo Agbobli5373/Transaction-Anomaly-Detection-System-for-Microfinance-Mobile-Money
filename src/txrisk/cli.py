@@ -6,8 +6,10 @@ import logging
 import os
 import signal
 import sys
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -23,7 +25,9 @@ from txrisk.evaluation.scorers import (
     supervised_scores,
 )
 from txrisk.events import (
+    DEFAULT_SECONDS_PER_DAY,
     EVENTS,
+    Pacer,
     Publisher,
     ScoringWorker,
     Topics,
@@ -32,24 +36,39 @@ from txrisk.events import (
     json_schema,
     ledger_events,
     publish_ledger,
+    replay,
+    replay_events,
     schema_file,
 )
 from txrisk.features import FeatureConfig, feature_table, load_feature_config
 from txrisk.generator import generate, load_config, write_dataset
 from txrisk.models.bundle import ModelBundle, train_bundle
 from txrisk.models.registry import MODEL_NAME, log_bundle
+from txrisk.scheduler import (
+    ComposeLauncher,
+    JobLauncher,
+    KubernetesLauncher,
+    RestKubernetesApi,
+    Scheduler,
+    SchedulerConfig,
+    load_scheduler_config,
+)
 from txrisk.scoring import RULES_ONLY, load_rules_config
 from txrisk.store import (
     BackupError,
+    FraudLabels,
     RedisHistoryCache,
+    SimulationClock,
     StoredScoring,
     backup,
     check_restore,
     create_engine,
     latest_backup,
     load_backup_config,
+    load_retention_config,
     migrate,
     pending_migrations,
+    purge,
     restore,
     seed,
 )
@@ -393,6 +412,87 @@ def _produce(args: argparse.Namespace) -> int:
     return 0
 
 
+def _replay(args: argparse.Namespace) -> int:
+    servers = args.bootstrap_servers or os.environ.get(KAFKA_ENV)
+    if not servers:
+        print(f"error: pass --bootstrap-servers or set {KAFKA_ENV}", file=sys.stderr)
+        return 2
+    if args.seconds_per_day < 0:
+        print("error: --seconds-per-day cannot be negative", file=sys.stderr)
+        return 2
+    from_day = _evaluation_start(args) if args.from_day is None else args.from_day
+    since = _day_start(args, from_day)
+    until = None if args.until_day is None else _day_start(args, args.until_day)
+    topics = Topics(args.topic_prefix)
+    ensure_topics(servers, topics, partitions=args.partitions)
+    replayed = replay(
+        Publisher(servers),
+        topics,
+        replay_events(args.data, since=since, until=until),
+        Pacer(args.seconds_per_day),
+        limit=args.limit,
+    )
+    print(
+        f"replayed {replayed.transactions:,} Transactions, {replayed.sim_swaps:,} SIM swaps and "
+        f"{replayed.fraud_discoveries:,} Fraud discoveries from day {from_day}, "
+        f"at {args.seconds_per_day:g} s per simulated day"
+    )
+    return 0
+
+
+def _purge(args: argparse.Namespace) -> int:
+    url = _database_url(args)
+    if url is None:
+        return 2
+    engine = create_engine(url)
+    purged = purge(engine, SimulationClock(engine), load_retention_config(args.config))
+    if purged is None:
+        print("nothing purged: the simulation clock has not started")
+        return 0
+    deleted = ", ".join(f"{n:,} {table}" for table, n in purged.deleted.items())
+    print(f"purged at {purged.at:%Y-%m-%d %H:%M}: {deleted}")
+    return 0
+
+
+def _launcher(config: SchedulerConfig, kind: str) -> JobLauncher:
+    if kind == "kubernetes":
+        return KubernetesLauncher(config.kubernetes, RestKubernetesApi.in_cluster(os.environ))
+    return ComposeLauncher(config.compose)
+
+
+def _scheduler(args: argparse.Namespace) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    url = _database_url(args)
+    if url is None:
+        return 2
+    config = load_scheduler_config(args.config)
+    engine = create_engine(url)
+    with engine.connect() as connection:
+        pending = pending_migrations(connection)
+    if pending:
+        print(f"error: run `txrisk migrate` first; pending: {', '.join(pending)}", file=sys.stderr)
+        return 1
+    scheduler = Scheduler(
+        engine,
+        SimulationClock(engine),
+        _launcher(config, args.launcher),
+        config.jobs,
+        timezone=ZoneInfo(config.timezone),
+    )
+    if args.once:
+        for fired in scheduler.tick():
+            print(f"fired {fired.job} for {fired.period} as {fired.launch_ref}")
+        return 0
+    stop = threading.Event()
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signum, lambda received, _: stop.set())
+    logging.getLogger(__name__).info("scheduling %s", ", ".join(job.name for job in config.jobs))
+    # `stop.wait` is the wait between ticks, so a signal ends it at once.
+    scheduler.run(stop.is_set, stop.wait, poll_seconds=args.poll_seconds)
+    engine.dispose()
+    return 0
+
+
 def _worker(args: argparse.Namespace) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     settings = WorkerSettings.from_env()
@@ -419,6 +519,8 @@ def _worker(args: argparse.Namespace) -> int:
         topics=topics,
         group_id=settings.consumer_group,
         batch_size=settings.batch_size,
+        clock=SimulationClock(engine),
+        labels=FraudLabels(engine),
     )
     stopping: list[int] = []
     for signum in (signal.SIGINT, signal.SIGTERM):
@@ -612,6 +714,62 @@ def main(argv: list[str] | None = None) -> int:
         "--partitions", type=int, default=3, help="partitions for topics it has to create"
     )
     prod.set_defaults(handler=_produce)
+
+    rp = commands.add_parser(
+        "replay",
+        help=(
+            "replay the live days (Transactions, SIM swaps, Fraud discoveries) through the "
+            "stream at a set pace, in event-time order"
+        ),
+    )
+    rp.add_argument("--data", type=Path, default=Path("data/generated"))
+    rp.add_argument("--bootstrap-servers", help=f"default: ${KAFKA_ENV}")
+    rp.add_argument("--config", type=Path, default=Path("config/generator.toml"))
+    rp.add_argument("--evaluation-config", type=Path, default=Path("config/evaluation.toml"))
+    rp.add_argument(
+        "--seconds-per-day",
+        type=float,
+        default=DEFAULT_SECONDS_PER_DAY,
+        help="wall-clock seconds per simulated day; 0 publishes as fast as possible "
+        "(default: %(default)g, a day a minute). Event times are never changed.",
+    )
+    rp.add_argument(
+        "--from-day",
+        type=int,
+        help="replay from this day on (default: the evaluation start, where `seed` stops)",
+    )
+    rp.add_argument("--until-day", type=int, help="replay only before this day")
+    rp.add_argument("--limit", type=int, help="stop after this many Transactions")
+    rp.add_argument("--topic-prefix", default="")
+    rp.add_argument(
+        "--partitions", type=int, default=3, help="partitions for topics it has to create"
+    )
+    rp.set_defaults(handler=_replay)
+
+    pg = commands.add_parser(
+        "purge", help="delete data older than its retention period, by simulation clock"
+    )
+    pg.add_argument("--database-url", help=f"default: ${DATABASE_URL_ENV}")
+    pg.add_argument("--config", type=Path, default=Path("config/retention.toml"))
+    pg.set_defaults(handler=_purge)
+
+    sc = commands.add_parser(
+        "scheduler",
+        help="fire the scheduled jobs as the simulation clock crosses their schedule",
+    )
+    sc.add_argument("--database-url", help=f"default: ${DATABASE_URL_ENV}")
+    sc.add_argument("--config", type=Path, default=Path("config/scheduler.toml"))
+    sc.add_argument(
+        "--launcher",
+        choices=["compose", "kubernetes"],
+        default="compose",
+        help="how a job runs: a one-off compose container, or a Kubernetes Job (in a cluster)",
+    )
+    sc.add_argument(
+        "--poll-seconds", type=float, default=2.0, help="wall-clock seconds between clock checks"
+    )
+    sc.add_argument("--once", action="store_true", help="check the clock once and exit")
+    sc.set_defaults(handler=_scheduler)
 
     wk = commands.add_parser(
         "worker",
