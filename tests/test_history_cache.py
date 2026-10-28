@@ -13,12 +13,15 @@ from api_helpers import settings
 from conftest import create_database
 from redis.backoff import NoBackoff
 from redis.retry import Retry
-from scoring_helpers import DAY, HOUR, NOW, REGISTERED, SUBJECT, tx
+from scoring_helpers import DAY, FEATURES, HOUR, NOW, REGISTERED, SUBJECT, tx
 
 from txrisk.api import ApiSettings
 from txrisk.features import (
     FeatureConfig,
+    ReplayHistory,
     Transaction,
+    TransactionFeatures,
+    Wallet,
     transaction_features,
     transactions_from_frame,
 )
@@ -241,6 +244,90 @@ def test_without_a_redis_url_there_is_no_cache(database: str):
     assert settings(database).history_cache() is None
     configured = ApiSettings(database_url=database, redis_url="redis://localhost:6379/0")
     assert isinstance(configured.history_cache(), RedisHistoryCache)
+
+
+def features_three_ways(
+    engine: sa.Engine, cache: RedisHistoryCache, history: list[Transaction], scored: Transaction
+) -> TransactionFeatures:
+    """The scored Transaction's features from the cache, Postgres and the offline replay, which
+    must all be equal; the cache's are returned."""
+    replay = ReplayHistory(
+        {w: Wallet(registered_at=REGISTERED, kyc_tier="minimum") for w in (SUBJECT, FRIEND)}
+    )
+    for t in history:
+        replay.record(t)
+    now = scored.occurred_at
+    with engine.connect() as connection:
+        online = transaction_features(scored, cache.history(connection), now=now, config=FEATURES)
+        postgres = transaction_features(
+            scored, PostgresHistory(connection), now=now, config=FEATURES
+        )
+    assert online == postgres
+    assert online == transaction_features(scored, replay, now=now, config=FEATURES)
+    return online
+
+
+def sent_by_friend(at: datetime, amount: float) -> Transaction:
+    return on_app(tx(at, amount=amount, wallet=FRIEND, counterparty=SUBJECT))
+
+
+def test_money_received_from_a_counterparty_is_the_same_from_a_cache_hit(
+    engine: sa.Engine, cache: RedisHistoryCache
+):
+    # 40 days of Transfers in: the set is trimmed, but its watermark covers the last day.
+    history = [
+        *(sent_by_friend(NOW - DAY * d - HOUR, 10.0) for d in range(40, 0, -1)),
+        sent_by_friend(NOW - 3 * HOUR, 30.0),
+        sent_by_friend(NOW - 2 * HOUR, 20.0),
+        *daily(6),
+    ]
+    store(engine, cache, *history)
+    cache.reads.clear()
+
+    features = features_three_ways(engine, cache, history, on_app(tx(counterparty=FRIEND)))
+
+    assert features.received_from_counterparty_24h == 50.0  # 30 + 20; the daily 10s are older
+    assert cache.reads["hit"] >= 1
+
+
+def test_money_received_from_a_counterparty_is_the_same_when_the_window_is_partial(
+    engine: sa.Engine, cache: RedisHistoryCache
+):
+    # Transfers in run 40 days past the moment scored, so the set's watermark is later than
+    # the day the feature asks for: the read must fall back to Postgres, not answer partially.
+    history = [
+        sent_by_friend(NOW - 2 * HOUR, 25.0),
+        *(sent_by_friend(NOW + DAY * d, 10.0) for d in range(1, 41)),
+        *daily(6),
+    ]
+    store(engine, cache, *history)
+    cache.reads.clear()
+
+    features = features_three_ways(engine, cache, history, on_app(tx(counterparty=FRIEND)))
+
+    assert features.received_from_counterparty_24h == 25.0
+    assert cache.reads["fallback"] >= 1
+
+
+@pytest.mark.parametrize("days", [20, 40])
+def test_the_largest_cash_in_of_30_days_is_the_same_from_a_complete_or_trimmed_wallet(
+    engine: sa.Engine, cache: RedisHistoryCache, days: int
+):
+    # 20 days: the whole history is in Redis (a hit); 40 days: trimmed, so Postgres answers.
+    history = [
+        *daily(days),
+        on_app(tx(NOW - (days - 0.5) * DAY, "cash_in", amount=500.0, counterparty=AGENT)),
+        on_app(tx(NOW - 10.5 * DAY, "cash_in", amount=100.0, counterparty=AGENT)),
+    ]
+    store(engine, cache, *history)
+    cache.reads.clear()
+
+    scored = on_app(tx(transaction_type="cash_in", amount=950.0, counterparty=AGENT))
+    features = features_three_ways(engine, cache, history, scored)
+
+    # At 40 days the 500 GHS Cash-in is outside the 30-day window.
+    assert features.subject_wallet.amount_to_largest_cash_in_30d == (1.9 if days == 20 else 9.5)
+    assert cache.reads["hit" if days == 20 else "fallback"] >= 1
 
 
 # A market long enough for Wallets and Agents to outlive the 30-day window.

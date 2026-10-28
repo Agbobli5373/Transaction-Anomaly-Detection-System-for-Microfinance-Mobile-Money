@@ -30,6 +30,8 @@ class SubjectWalletFeatures:
     velocity_count_7d: int | None = None
     velocity_amount_7d: float | None = None
     amount_to_median_30d: float | None = None
+    # Amount over the largest Cash-in of the last 30 days; empty when there was none.
+    amount_to_largest_cash_in_30d: float | None = None
     seconds_since_last_transaction: float | None = None
     new_counterparty: bool | None = None
     unusual_hour: bool | None = None
@@ -67,6 +69,7 @@ def subject_wallet_features(
     last_week = _since(past, now - 7 * _DAY)
     profile = _since(past, now - _PROFILE_WINDOW)
     outgoing = [t.amount for t in profile if t.direction == "out"]
+    cash_ins = [t.amount for t in profile if t.transaction_type == "cash_in"]
     hour = transaction.occurred_at.hour
     nearby_hours = {(hour + offset) % 24 for offset in (-1, 0, 1)}
     return SubjectWalletFeatures(
@@ -79,6 +82,9 @@ def subject_wallet_features(
         velocity_count_7d=len(last_week),
         velocity_amount_7d=sum(t.amount for t in last_week),
         amount_to_median_30d=transaction.amount / statistics.median(outgoing) if outgoing else None,
+        amount_to_largest_cash_in_30d=(
+            transaction.amount / max(cash_ins) if cash_ins and max(cash_ins) > 0 else None
+        ),
         seconds_since_last_transaction=(now - past[-1].occurred_at).total_seconds(),
         new_counterparty=all(t.counterparty_id != transaction.counterparty_id for t in past),
         unusual_hour=all(t.occurred_at.hour not in nearby_hours for t in profile),

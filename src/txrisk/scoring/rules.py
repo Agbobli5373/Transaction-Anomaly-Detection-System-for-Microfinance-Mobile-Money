@@ -86,6 +86,41 @@ def _younger_than(f: TransactionFeatures, days: float) -> bool:
     return age is not None and age < days
 
 
+def _near_limit_cash_in(
+    t: Transaction, f: TransactionFeatures, rules: Rules
+) -> tuple[str, float | str] | None:
+    params = rules.NEAR_LIMIT_CASH_IN
+    ratio = f.subject_wallet.amount_to_largest_cash_in_30d
+    if t.transaction_type != "cash_in" or ratio is None:  # None: cold start or no Cash-in
+        return None
+    if f.amount_to_kyc_limit < params.min_share_of_limit:
+        return None
+    if ratio <= params.above_largest_multiple:
+        return None
+    if _younger_than(f, params.min_wallet_age_days):
+        return None
+    return (
+        f"Cash-in of {f.amount_to_kyc_limit:.0%} of the KYC tier limit, {ratio:.1f}x this "
+        "Wallet's largest Cash-in in 30 days",
+        ratio,
+    )
+
+
+def _return_to_new_sender(
+    t: Transaction, f: TransactionFeatures, rules: Rules
+) -> tuple[str, float | str] | None:
+    received = f.received_from_counterparty_24h
+    if t.transaction_type != "transfer" or not received:  # None or 0: nothing came in
+        return None
+    if not f.subject_wallet.new_counterparty:  # also None in cold start
+        return None
+    ratio = t.amount / received
+    return (
+        f"Sends a first-time recipient {ratio:.1f}x what they sent this Wallet in 24 hours",
+        ratio,
+    )
+
+
 def _first_time_large_transfer(
     t: Transaction, f: TransactionFeatures, rules: Rules
 ) -> tuple[str, float | str] | None:
@@ -152,6 +187,8 @@ RULES: dict[str, _Check] = {
     "NEW_DEVICE_BURST": _new_device_burst,
     "MULE_CASHOUT": _mule_cash_out,
     "AGENT_STRUCTURING": _agent_structuring,
+    "NEAR_LIMIT_CASH_IN": _near_limit_cash_in,
+    "RETURN_TO_NEW_SENDER": _return_to_new_sender,
     "FIRST_TIME_LARGE_TRANSFER": _first_time_large_transfer,
     "AMOUNT_VS_MEDIAN": _amount_vs_median,
     "NEAR_KYC_LIMIT": _near_kyc_limit,

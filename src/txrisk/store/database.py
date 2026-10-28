@@ -4,23 +4,40 @@ Migrations are plain SQL files applied in name order by a dedicated job (`txrisk
 API and workers only check that the schema is current, and never change it.
 """
 
+import os
+from collections.abc import Mapping
 from importlib import resources
 
 import sqlalchemy as sa
+
+from txrisk.store.roles import APP_ROLE, app_role_password
 
 # Serialises concurrent migration jobs; any constant unique to this application will do.
 _MIGRATION_LOCK = 7_281_245_001
 _VERSIONS = sa.table("schema_migrations", sa.column("version", sa.Text))
 
 
-def create_engine(url: str) -> sa.Engine:
+def create_engine(url: str | sa.URL) -> sa.Engine:
     """An engine for a `postgresql://` URL, on psycopg, with every session in UTC.
 
     The features read the hour of day from timestamps, so they must come back in UTC.
     """
-    if url.startswith(("postgresql://", "postgres://")):
-        url = "postgresql+psycopg://" + url.split("://", 1)[1]
-    return sa.create_engine(url, connect_args={"options": "-c timezone=UTC"}, pool_pre_ping=True)
+    parsed = sa.make_url(url)
+    if parsed.drivername in ("postgresql", "postgres"):
+        parsed = parsed.set(drivername="postgresql+psycopg")
+    return sa.create_engine(parsed, connect_args={"options": "-c timezone=UTC"}, pool_pre_ping=True)
+
+
+def create_app_engine(url: str, environ: Mapping[str, str] = os.environ) -> sa.Engine:
+    """The engine the API and workers use. When `url` names the application role without a
+    credential, its password comes from the environment (`TXRISK_APP_DB_PASSWORD`), not from the
+    URL, so no credential is written in configuration; libpq's own `PGPASSWORD` stays the owner's,
+    for the migration job and the other jobs."""
+    parsed = sa.make_url(url)
+    supplied = app_role_password(environ)
+    if parsed.username == APP_ROLE and parsed.password is None and supplied is not None:
+        parsed = parsed.set(password=supplied)
+    return create_engine(parsed)
 
 
 def migrations() -> dict[str, str]:

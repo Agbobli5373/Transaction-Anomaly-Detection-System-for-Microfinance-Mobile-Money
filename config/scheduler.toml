@@ -8,6 +8,13 @@ timezone = "UTC"
 schedule = "daily"
 command = ["txrisk", "purge"]
 
+# Re-scores Transactions scored in Degraded mode once the Champion model is healthy; a no-op when
+# none are waiting. Exits 3 while the model is still down. It runs as the owner like any job
+# (the API and workers re-score too, as `txrisk_app`, which may only replace degraded assessments).
+[jobs.rescore-degraded]
+schedule = "daily"
+command = ["txrisk", "rescore"]
+
 # `--launcher compose`: job containers are `docker compose run` of this service.
 [compose]
 file = "docker-compose.yml"

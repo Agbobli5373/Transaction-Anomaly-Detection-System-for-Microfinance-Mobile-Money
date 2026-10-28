@@ -23,3 +23,24 @@ CREATE TABLE risk_assessment_history (
 
 CREATE INDEX risk_assessment_history_by_transaction
     ON risk_assessment_history (transaction_id, history_id);
+
+-- The application role may UPDATE risk_assessments (the API and workers re-score after the model
+-- recovers) but only to replace a degraded assessment, and never to move it to another
+-- Transaction or time: any other update is refused, whoever asks.
+CREATE FUNCTION risk_assessments_replace_degraded_only() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+BEGIN
+    IF NOT OLD.degraded THEN
+        RAISE EXCEPTION 'only a degraded assessment can be replaced';
+    END IF;
+    IF NEW.transaction_id IS DISTINCT FROM OLD.transaction_id
+        OR NEW.assessed_at IS DISTINCT FROM OLD.assessed_at THEN
+        RAISE EXCEPTION 're-scoring keeps the assessment''s Transaction and time';
+    END IF;
+    RETURN NEW;
+END
+$$;
+
+CREATE TRIGGER risk_assessments_replace_degraded_only
+    BEFORE UPDATE ON risk_assessments
+    FOR EACH ROW EXECUTE FUNCTION risk_assessments_replace_degraded_only();

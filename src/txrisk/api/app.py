@@ -11,7 +11,7 @@ reports unready until it has.
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import sqlalchemy as sa
 from fastapi import (
@@ -25,11 +25,14 @@ from fastapi import (
     Response,
 )
 from fastapi.responses import JSONResponse
+from pydantic import AwareDatetime
 
+from txrisk.api.audit import AuditedRoute, Auditor, AuditorDep
 from txrisk.api.auth import (
     API_KEY_HEADER,
     MANAGE_API_KEYS,
     READ_ALERTS,
+    READ_AUDIT,
     READ_MODELS,
     READ_TRANSACTIONS,
     SCORE,
@@ -46,6 +49,8 @@ from txrisk.api.schemas import (
     ApiKeyIn,
     ApiKeyOut,
     AssessmentOut,
+    AuditEntryOut,
+    AuditPage,
     IssuedApiKeyOut,
     Readiness,
     RotationIn,
@@ -62,7 +67,8 @@ from txrisk.store import (
     TransactionConflict,
     UnknownParty,
     api_keys,
-    create_engine,
+    audit,
+    create_app_engine,
     pending_migrations,
     records,
 )
@@ -81,6 +87,16 @@ _DENIED: dict[int | str, dict[str, Any]] = {
 }
 
 
+# How each sensitive route is named in the audit log. Scoring is not here: see txrisk.api.audit.
+VIEW_TRANSACTION = AuditedRoute("transaction.view", "transaction", "transaction_id")
+LIST_ALERTS = AuditedRoute("alert.list", "alert")
+ISSUE_API_KEY = AuditedRoute("api_key.issue", "api_key")
+LIST_API_KEYS = AuditedRoute("api_key.list", "api_key")
+ROTATE_API_KEY = AuditedRoute("api_key.rotate", "api_key", "key_id")
+REVOKE_API_KEY = AuditedRoute("api_key.revoke", "api_key", "key_id")
+READ_AUDIT_LOG = AuditedRoute("audit.read", "audit_log")
+
+
 def _utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -88,6 +104,7 @@ def _utc_now() -> datetime:
 def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _utc_now) -> FastAPI:
     """The API over the database and model bundle in `settings`.
 
+<<<<<<< HEAD
     The Champion model bundle is loaded here if it can be, and again whenever it is needed and
     not loaded. One that is missing, corrupt, slow or failing does not stop the API: it scores in
     Degraded mode (Rule hits alone, marked degraded) and reports `degraded` on `/v1/ready`, until
@@ -96,6 +113,15 @@ def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _u
     Transaction's event time (ADR 0005).
     """
     engine = create_engine(settings.database_url)
+=======
+    The bundle is loaded once, here; a configured bundle that cannot be loaded stops the API from
+    starting rather than letting it score with something other than what was configured.
+    `wall_clock` is real time, used only for API key expiry, rate limits and the time of audit
+    entries; scoring runs on each Transaction's event time (ADR 0005).
+    """
+    engine = create_app_engine(settings.database_url)
+    bundle = None if settings.model_bundle is None else ModelBundle.load(settings.model_bundle)
+>>>>>>> origin/main
     rules = settings.rules()
     metrics = InMemoryMetrics()
     scoring = StoredScoring(
@@ -139,6 +165,7 @@ def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _u
         redoc_url=None,
         lifespan=lifespan,
     )
+    app.state.auditor = Auditor(engine, wall_clock)
     app.state.authenticator = Authenticator(
         engine, verifier=verifier, limiter=RateLimiter(wall_clock), wall_clock=wall_clock
     )
@@ -187,17 +214,34 @@ def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _u
         "/transactions/{transaction_id}",
         response_model=TransactionView,
         tags=["transactions"],
-        dependencies=[Depends(require(READ_TRANSACTIONS))],
         responses={**_DENIED, 404: {"description": "No such Transaction"}},
     )
-    def get_transaction(transaction_id: str) -> TransactionView:
+    def get_transaction(
+        transaction_id: str,
+        principal: Annotated[Principal, Depends(require(READ_TRANSACTIONS, VIEW_TRANSACTION))],
+        auditor: AuditorDep,
+    ) -> TransactionView:
         """A stored Transaction and its Risk assessment, if it was scored. For Analysts and
-        Supervisors, or the `transactions:read` scope."""
-        with engine.connect() as connection:
+        Supervisors, or the `transactions:read` scope. Audited."""
+        with engine.begin() as connection:
             transaction = records.stored_transaction(connection, transaction_id)
-            if transaction is None:
-                raise HTTPException(404, "no such Transaction")
-            assessment = records.stored_assessment(connection, transaction_id)
+            assessment = (
+                None
+                if transaction is None
+                else records.stored_assessment(connection, transaction_id)
+            )
+            # Recorded with the read, so a view that cannot be audited returns nothing.
+            auditor.record(
+                connection,
+                principal,
+                VIEW_TRANSACTION.action,
+                object_type=VIEW_TRANSACTION.object_type,
+                object_id=transaction_id,
+                outcome="success" if transaction is not None else "failed",
+                detail=None if transaction is not None else {"reason": "no such Transaction"},
+            )
+        if transaction is None:
+            raise HTTPException(404, "no such Transaction")
         return TransactionView(
             transaction=TransactionOut.of(transaction),
             assessment=None if assessment is None else AssessmentOut.of(assessment),
@@ -207,18 +251,32 @@ def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _u
         "/alerts",
         response_model=AlertPage,
         tags=["alerts"],
-        dependencies=[Depends(require(READ_ALERTS))],
         responses=_DENIED,
     )
     def get_alerts(
+        principal: Annotated[Principal, Depends(require(READ_ALERTS, LIST_ALERTS))],
+        auditor: AuditorDep,
         limit: Annotated[int, Query(ge=1, le=500)] = 50,
         before: Annotated[int | None, Query(description="next_before of the previous page")] = None,
         subject_wallet_id: str | None = None,
     ) -> AlertPage:
-        """Alerts, newest first. For Analysts and Supervisors, or the `alerts:read` scope."""
-        with engine.connect() as connection:
+        """Alerts, newest first. For Analysts and Supervisors, or the `alerts:read` scope.
+        Audited."""
+        with engine.begin() as connection:
             found = records.list_alerts(
                 connection, limit=limit, before_id=before, subject_wallet_id=subject_wallet_id
+            )
+            auditor.record(
+                connection,
+                principal,
+                LIST_ALERTS.action,
+                object_type=LIST_ALERTS.object_type,
+                detail={
+                    "limit": limit,
+                    "before": before,
+                    "subject_wallet_id": subject_wallet_id,
+                    "returned": len(found),
+                },
             )
         return AlertPage(
             alerts=[
@@ -260,6 +318,61 @@ def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _u
 
     _add_api_key_routes(v1, engine, settings, wall_clock)
 
+    @v1.get("/audit", response_model=AuditPage, tags=["audit"], responses=_DENIED)
+    def get_audit(
+        principal: Annotated[Principal, Depends(require(READ_AUDIT, READ_AUDIT_LOG))],
+        auditor: AuditorDep,
+        actor: Annotated[str | None, Query(description="actor_id: a subject ID or key ID")] = None,
+        actor_type: Literal["person", "service", "operator"] | None = None,
+        action: Annotated[str | None, Query(description="e.g. transaction.view")] = None,
+        object_type: str | None = None,
+        object_id: str | None = None,
+        outcome: Literal["success", "denied", "failed"] | None = None,
+        since: Annotated[AwareDatetime | None, Query(description="inclusive")] = None,
+        until: Annotated[AwareDatetime | None, Query(description="exclusive")] = None,
+        limit: Annotated[int, Query(ge=1, le=500)] = 50,
+        before: Annotated[int | None, Query(description="next_before of the previous page")] = None,
+    ) -> AuditPage:
+        """The audit log, newest first, matching every filter given. Admins only. Reading it is
+        itself audited, with the filters used."""
+        filters = {
+            "actor": actor,
+            "actor_type": actor_type,
+            "action": action,
+            "object_type": object_type,
+            "object_id": object_id,
+            "outcome": outcome,
+            "since": None if since is None else since.isoformat(),
+            "until": None if until is None else until.isoformat(),
+            "before": before,
+            "limit": limit,
+        }
+        with engine.begin() as connection:
+            found = audit.query(
+                connection,
+                actor_id=actor,
+                actor_type=actor_type,
+                action=action,
+                object_type=object_type,
+                object_id=object_id,
+                outcome=outcome,
+                since=since,
+                until=until,
+                before_id=before,
+                limit=limit,
+            )
+            auditor.record(
+                connection,
+                principal,
+                READ_AUDIT_LOG.action,
+                object_type=READ_AUDIT_LOG.object_type,
+                detail={"filters": {k: v for k, v in filters.items() if v is not None}},
+            )
+        return AuditPage(
+            entries=[AuditEntryOut.of(entry) for entry in found],
+            next_before=found[-1].audit_id if len(found) == limit else None,
+        )
+
     @v1.get("/health", response_model=Status, tags=["operations"])
     def health() -> Status:
         """Liveness: the process is up. It does not touch the database. Open to all."""
@@ -297,8 +410,16 @@ def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _u
 def _add_api_key_routes(
     v1: APIRouter, engine: sa.Engine, settings: ApiSettings, wall_clock: Callable[[], datetime]
 ) -> None:
-    """Issuing, listing, rotating and revoking API keys: for Admins signed in, never for a key."""
-    admin = Annotated[Principal, Depends(require(MANAGE_API_KEYS))]
+    """Issuing, listing, rotating and revoking API keys: for Admins signed in, never for a key.
+
+    Each is audited with the key it concerns, never the key itself. An Admin can issue themselves
+    a key that reads Transactions: the audit entry for the issue (who, which key, its scopes) and
+    the entries the key then writes under its own key ID are how that is traced.
+    """
+
+    def admin(route: AuditedRoute) -> Any:
+        return Depends(require(MANAGE_API_KEYS, route))
+
     unknown: dict[int | str, dict[str, Any]] = {404: {"description": "No such API key"}}
 
     @v1.post(
@@ -308,29 +429,52 @@ def _add_api_key_routes(
         tags=["api keys"],
         responses=_DENIED,
     )
-    def issue_api_key(wanted: ApiKeyIn, principal: admin) -> IssuedApiKeyOut:
+    def issue_api_key(
+        wanted: ApiKeyIn,
+        principal: Annotated[Principal, admin(ISSUE_API_KEY)],
+        auditor: AuditorDep,
+    ) -> IssuedApiKeyOut:
         """Issue a key for a service. The key is in this response only: just its hash is
-        stored."""
+        stored. Audited."""
         now = wall_clock()
+        limit = wanted.rate_limit_per_minute or settings.api_key_rate_limit
         with engine.begin() as connection:
             issued = api_keys.issue(
                 connection,
                 name=wanted.name,
                 scopes=wanted.scopes,
-                rate_limit_per_minute=wanted.rate_limit_per_minute or settings.api_key_rate_limit,
+                rate_limit_per_minute=limit,
                 created_by=principal.name,
                 now=now,
                 expires_at=wanted.expires_at,
             )
+            auditor.record(
+                connection,
+                principal,
+                ISSUE_API_KEY.action,
+                object_type=ISSUE_API_KEY.object_type,
+                object_id=issued.record.key_id,
+                detail=_key_detail(issued.record),
+            )
         return IssuedApiKeyOut(key=issued.key, api_key=ApiKeyOut.of(issued.record, now))
 
     @v1.get("/api-keys", response_model=list[ApiKeyOut], tags=["api keys"], responses=_DENIED)
-    def list_api_keys(_: admin) -> list[ApiKeyOut]:
+    def list_api_keys(
+        principal: Annotated[Principal, admin(LIST_API_KEYS)], auditor: AuditorDep
+    ) -> list[ApiKeyOut]:
         """Every key ever issued, revoked and expired ones included, oldest first. Never the
-        keys themselves."""
+        keys themselves. Audited."""
         now = wall_clock()
-        with engine.connect() as connection:
-            return [ApiKeyOut.of(record, now) for record in api_keys.list_keys(connection)]
+        with engine.begin() as connection:
+            found = api_keys.list_keys(connection)
+            auditor.record(
+                connection,
+                principal,
+                LIST_API_KEYS.action,
+                object_type=LIST_API_KEYS.object_type,
+                detail={"returned": len(found)},
+            )
+        return [ApiKeyOut.of(record, now) for record in found]
 
     @v1.post(
         "/api-keys/{key_id}/rotate",
@@ -344,15 +488,29 @@ def _add_api_key_routes(
         },
     )
     def rotate_api_key(
-        key_id: str, principal: admin, rotation: Annotated[RotationIn | None, Body()] = None
+        key_id: str,
+        principal: Annotated[Principal, admin(ROTATE_API_KEY)],
+        auditor: AuditorDep,
+        rotation: Annotated[RotationIn | None, Body()] = None,
     ) -> IssuedApiKeyOut:
         """Issue a replacement with the same name, scopes, rate limit and expiry. The old key
         keeps working for the overlap (a day by default), so the service switches without
-        downtime. A key is rotated once; rotate its replacement next time."""
+        downtime. A key is rotated once; rotate its replacement next time. Audited."""
         minutes = None if rotation is None else rotation.overlap_minutes
         if minutes is None:
             minutes = settings.api_key_rotation_overlap_minutes
         now = wall_clock()
+
+        def failed(reason: str) -> None:
+            auditor.record_alone(
+                principal,
+                ROTATE_API_KEY.action,
+                object_type=ROTATE_API_KEY.object_type,
+                object_id=key_id,
+                outcome="failed",
+                detail={"reason": reason},
+            )
+
         try:
             with engine.begin() as connection:
                 issued = api_keys.rotate(
@@ -362,11 +520,22 @@ def _add_api_key_routes(
                     created_by=principal.name,
                     now=now,
                 )
+                auditor.record(
+                    connection,
+                    principal,
+                    ROTATE_API_KEY.action,
+                    object_type=ROTATE_API_KEY.object_type,
+                    object_id=key_id,
+                    detail={"overlap_minutes": minutes, **_key_detail(issued.record)},
+                )
         except api_keys.UnknownApiKey as e:
+            failed("no such API key")
             raise HTTPException(404, "no such API key") from e
         except api_keys.InactiveApiKey as e:
+            failed("the API key is revoked or expired")
             raise HTTPException(409, "the API key is revoked or expired; issue a new one") from e
         except api_keys.AlreadyRotated as e:
+            failed("the API key has already been rotated")
             raise HTTPException(
                 409, "the API key has already been rotated; rotate its replacement"
             ) from e
@@ -378,15 +547,44 @@ def _add_api_key_routes(
         tags=["api keys"],
         responses={**_DENIED, **unknown},
     )
-    def revoke_api_key(key_id: str, _: admin) -> ApiKeyOut:
-        """Revoke a key at once, as after a leak."""
+    def revoke_api_key(
+        key_id: str, principal: Annotated[Principal, admin(REVOKE_API_KEY)], auditor: AuditorDep
+    ) -> ApiKeyOut:
+        """Revoke a key at once, as after a leak. Audited."""
         now = wall_clock()
         try:
             with engine.begin() as connection:
                 record = api_keys.revoke(connection, key_id, now=now)
+                auditor.record(
+                    connection,
+                    principal,
+                    REVOKE_API_KEY.action,
+                    object_type=REVOKE_API_KEY.object_type,
+                    object_id=key_id,
+                    detail={"name": record.name},
+                )
         except api_keys.UnknownApiKey as e:
+            auditor.record_alone(
+                principal,
+                REVOKE_API_KEY.action,
+                object_type=REVOKE_API_KEY.object_type,
+                object_id=key_id,
+                outcome="failed",
+                detail={"reason": "no such API key"},
+            )
             raise HTTPException(404, "no such API key") from e
         return ApiKeyOut.of(record, now)
+
+
+def _key_detail(record: api_keys.ApiKeyRecord) -> dict[str, Any]:
+    """What an audit entry says about a key: who holds it and what it may do, never the key."""
+    return {
+        "name": record.name,
+        "scopes": sorted(record.scopes),
+        "rate_limit_per_minute": record.rate_limit_per_minute,
+        "expires_at": None if record.expires_at is None else record.expires_at.isoformat(),
+        "replaces": record.replaces,
+    }
 
 
 def _unavailable(detail: str) -> JSONResponse:

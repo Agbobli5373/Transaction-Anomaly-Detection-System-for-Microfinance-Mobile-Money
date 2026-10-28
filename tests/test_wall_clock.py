@@ -4,7 +4,7 @@ fails on any use that is not in `OPERATIONAL`.
 
 `OPERATIONAL` is the documentation: each entry is a use that is about running the system, not about
 what the data means, with the reason. Adding to it is a decision a reviewer should see. The audit
-log's timestamps (#15) will belong here too.
+log's timestamps (#15) belong here too.
 """
 
 import ast
@@ -68,14 +68,19 @@ OPERATIONAL: dict[tuple[str, str], str] = {
     ),
     ("events/replay.py", "time.sleep"): "waits between published events to keep the replay's pace",
     ("api/app.py", "datetime.datetime.now"): (
-        "the wall clock handed to API key expiry and per-key rate limits: keys expire and "
-        "requests are limited in real time, while scoring runs on the Transaction's event time"
+        "the wall clock handed to API key expiry, per-key rate limits and the time of audit "
+        "entries (an API request has no event time): keys expire, requests are limited and "
+        "audits are stamped in real time, while scoring runs on the Transaction's event time"
     ),
     ("api/auth.py", "time.monotonic"): (
         "when the Keycloak signing keys were last fetched, to decide when to refresh them"
     ),
     ("cli.py", "datetime.datetime.now"): (
-        "stamps a newly issued API key's creation and expiry in real time"
+        "stamps a newly issued API key's creation and expiry, and its audit entry, in real time"
+    ),
+    ("store/migrations/0004_audit_log.sql", "clock_timestamp()"): (
+        "the audit log's retention measures an entry's age on the wall clock, the clock its "
+        "entries are stamped with: the purge's cutoff and the trigger's one-year floor"
     ),
     ("store/database.py", "now()"): (
         "schema_migrations.applied_at records when a migration ran; not read by any logic"

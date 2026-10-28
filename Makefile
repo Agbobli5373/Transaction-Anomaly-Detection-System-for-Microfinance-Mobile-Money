@@ -78,7 +78,7 @@ replay:
 # Runs the scheduler against the compose Postgres: it fires the jobs in config/scheduler.toml, as
 # one-off compose containers, once per simulated period as the replay advances the clock.
 scheduler:
-	set -a && . ./.env && set +a && TXRISK_DATABASE_URL=postgresql://txrisk@localhost:5432/txrisk uv run txrisk scheduler
+	set -a && . ./.env && set +a && TXRISK_DATABASE_URL=postgresql://txrisk_app@localhost:5432/txrisk uv run txrisk scheduler
 
 # Deletes data older than config/retention.toml allows, measured on the simulation clock.
 purge:

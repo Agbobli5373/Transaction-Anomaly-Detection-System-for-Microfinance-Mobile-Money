@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
-from api_helpers import ROOT, body, issue_key, settings, with_key
+from api_helpers import ROOT, as_app_role, body, issue_key, settings, with_key
 from degraded_helpers import Monotonic, StubBundle, drain, on_app, populate
 from fastapi.testclient import TestClient
 from market_helpers import Market, build_market, train
@@ -51,7 +51,7 @@ class Scoring:
         self.stub = stub
         self.clock = Monotonic()
         self.metrics = InMemoryMetrics()
-        self.engine = create_engine(database)
+        self.engine = create_engine(as_app_role(database))
         self.champion = Champion.of(
             stub, timeout=timeout, retry_after=30, metrics=self.metrics, monotonic=self.clock
         )
@@ -371,3 +371,16 @@ def test_the_rescore_command_replaces_degraded_assessments_and_fails_while_the_m
 
 def _unavailable() -> ModelBundle:
     raise FileNotFoundError("no bundle")
+
+
+def test_the_application_role_may_only_replace_degraded_assessments(world: str):
+    scoring = Scoring(world, StubBundle())
+    healthy = scoring.assess(on_app(tx(NOW, amount=40.0)))
+    assert not healthy.degraded
+
+    with scoring.engine.begin() as connection:
+        with pytest.raises(sa.exc.DBAPIError, match="only a degraded assessment"):
+            connection.execute(sa.text("UPDATE risk_assessments SET risk_score = 99"))
+    with scoring.engine.begin() as connection:
+        with pytest.raises(sa.exc.DBAPIError, match="permission denied"):
+            connection.execute(sa.text("DELETE FROM risk_assessments"))

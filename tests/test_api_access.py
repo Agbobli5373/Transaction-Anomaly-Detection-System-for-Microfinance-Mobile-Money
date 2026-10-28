@@ -23,6 +23,7 @@ ENDPOINTS: dict[str, tuple[str, str, dict[str, Any] | None]] = {
     "read a transaction": ("GET", "/v1/transactions/T-none", None),
     "read alerts": ("GET", "/v1/alerts", None),
     "read the active model": ("GET", "/v1/models/active", None),
+    "read the audit log": ("GET", "/v1/audit", None),
     "list api keys": ("GET", "/v1/api-keys", None),
     "issue an api key": ("POST", "/v1/api-keys", {"name": "svc", "scopes": ["alerts:read"]}),
     "rotate an api key": ("POST", "/v1/api-keys/k-none/rotate", None),
@@ -31,14 +32,17 @@ ENDPOINTS: dict[str, tuple[str, str, dict[str, Any] | None]] = {
 # The clients compose allows: the workbench and the dev-only command-line sign-in.
 COMPOSE_CLIENTS = ("txrisk-workbench", "txrisk-demo-cli")
 API_KEYS = {"list api keys", "issue an api key", "rotate an api key", "revoke an api key"}
+# What no API key scope reaches: only people, and only Admins.
+ADMIN_ONLY = {*API_KEYS, "read the audit log"}
 
 # What each role may do; nothing else.
 ROLE_ACCESS = {
     "analyst": {"read a transaction", "read alerts", "read the active model"},
     "supervisor": {"read a transaction", "read alerts", "read the active model"},
-    "admin": {"read the active model", *API_KEYS},
+    "admin": {"read the active model", *ADMIN_ONLY},
 }
-# What each API key scope allows; nothing else. No scope reaches the API key endpoints.
+# What each API key scope allows; nothing else. No scope reaches the API key endpoints or the
+# audit log.
 SCOPE_ACCESS = {
     "score:write": {"score"},
     "transactions:read": {"read a transaction"},
@@ -68,9 +72,9 @@ def client(database: str, keycloak: Keycloak) -> Iterator[TestClient]:
         yield client
 
 
-def test_the_scopes_cover_every_endpoint_but_key_management():
+def test_the_scopes_cover_every_endpoint_but_the_admin_only_ones():
     assert set(SCOPE_ACCESS) == set(SCOPES)
-    assert set().union(*SCOPE_ACCESS.values()) == set(ENDPOINTS) - API_KEYS
+    assert set().union(*SCOPE_ACCESS.values()) == set(ENDPOINTS) - ADMIN_ONLY
 
 
 @pytest.mark.parametrize("role", sorted(ROLE_ACCESS))

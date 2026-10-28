@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import (
     AfterValidator,
@@ -18,6 +18,7 @@ from txrisk.api.auth import SCOPES
 from txrisk.features import Transaction
 from txrisk.scoring import RiskAssessment
 from txrisk.store.api_keys import ApiKeyRecord
+from txrisk.store.audit import AuditRecord
 from txrisk.store.tables import COUNTERPARTY_COLUMNS
 
 TransactionType = Literal["cash_in", "cash_out", "transfer", "payment", "bill_payment"]
@@ -271,3 +272,31 @@ class IssuedApiKeyOut(_Body):
     # The whole key, to send in the X-API-Key header. Shown this once: only its hash is stored.
     key: str
     api_key: ApiKeyOut
+
+
+class AuditEntryOut(_Body):
+    audit_id: int
+    # When it happened: the operational wall clock at the request.
+    occurred_at: datetime
+    actor_type: Literal["person", "service", "operator"]
+    # Keycloak's subject ID, the API key ID, or the command.
+    actor_id: str
+    actor_name: str
+    actor_roles: list[str]
+    # A stable dotted code, e.g. transaction.view or api_key.issue.
+    action: str
+    object_type: str | None
+    object_id: str | None
+    # success; denied (a 403); failed (permitted, but no such object or a conflict).
+    outcome: Literal["success", "denied", "failed"]
+    detail: dict[str, Any]
+
+    @classmethod
+    def of(cls, record: AuditRecord) -> "AuditEntryOut":
+        return cls.model_validate({**record.__dict__, "actor_roles": list(record.actor_roles)})
+
+
+class AuditPage(_Body):
+    entries: list[AuditEntryOut]
+    # Pass as `before` for the next (older) page; null on the last page.
+    next_before: int | None

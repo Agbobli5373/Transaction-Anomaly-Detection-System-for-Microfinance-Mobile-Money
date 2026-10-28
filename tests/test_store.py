@@ -50,7 +50,12 @@ def test_migrate_applies_each_migration_once(empty_database: str):
     second = migrate(engine)
 
     assert first == list(migrations())
-    assert first[:3] == ["0001_initial", "0002_api_keys", "0003_clock_scheduler_labels"]
+    assert first[:4] == [
+        "0001_initial",
+        "0002_api_keys",
+        "0003_clock_scheduler_labels",
+        "0004_audit_log",
+    ]
     assert second == []
     with engine.connect() as connection:
         assert pending_migrations(connection) == []

@@ -28,6 +28,7 @@ curl localhost:8000/v1/ready
 - `POST /v1/score` scores a Transaction and stores it with its Risk assessment. It is idempotent on `transaction_id`: a repeat returns the stored assessment (with an `Idempotent-Replayed: true` header) and never raises a second Alert. Only the High Risk band raises an Alert.
 - `GET /v1/transactions/{id}`, `GET /v1/alerts`, `GET /v1/models/active`, `GET /v1/health` (liveness) and `GET /v1/ready` (database reachable and migrated; also whether scoring is degraded).
 - `POST /v1/api-keys`, `GET /v1/api-keys`, `POST /v1/api-keys/{key_id}/rotate` and `DELETE /v1/api-keys/{key_id}` manage API keys.
+- `GET /v1/audit` reads the audit log (Admins only; see below).
 - The OpenAPI spec is at `/v1/openapi.json`, and interactive docs at `/v1/docs`.
 
 Each Transaction is scored with the clock at its own `occurred_at` (ADR 0005), against the history stored strictly before it, so the API gives exactly the offline scores. Set `TXRISK_MODEL_BUNDLE=/models/<version>` in `.env` to score with a bundle from `make train` (`./models` is mounted at `/models`); without one the rules alone score. Schema changes are plain SQL files in `src/txrisk/store/migrations/`, applied only by `txrisk migrate`, which compose runs as its own job before the API starts. Ground truth and Benign anomalies are never loaded into Postgres, and `seed` loads no Fraud discoveries: Fraud labels arrive only through `fraud.discovered` events (ADR 0007).
@@ -42,7 +43,7 @@ Counters (`txrisk_degraded_assessments_total{reason}`, `txrisk_rescored_total`, 
 
 `make backup` takes a Postgres backup into the compose `backups` volume (a one-off job for a scheduler or host cron, pruned to the retention count in `config/backup.toml`); CI restores one into a fresh database and checks it against its source. Restore procedure: `docs/runbooks/restore.md`.
 
-Outside Docker, `txrisk migrate`, `txrisk seed` and `txrisk serve` read the database from `TXRISK_DATABASE_URL`.
+Outside Docker, `txrisk migrate`, `txrisk seed` and `txrisk serve` read the database from `TXRISK_DATABASE_URL`. `txrisk migrate` also creates the `txrisk_app` database role (see Audit log below) when `TXRISK_APP_DB_PASSWORD` is set; the API and workers connect as that role, the migration job, `seed` and `backup` as the owner. After restoring a backup, run `txrisk migrate` again to restore the role's grants (a restore skips them, so it works on a cluster without the role).
 
 ### Who may call what
 
@@ -55,6 +56,7 @@ People sign in through Keycloak (OIDC) and call with its access token, `Authoriz
 | `GET /v1/alerts` | yes | yes | | `alerts:read` |
 | `GET /v1/models/active` | yes | yes | yes | `models:read` |
 | `/v1/api-keys` (issue, list, rotate, revoke) | | | yes | none: a key can never manage keys |
+| `GET /v1/audit` | | | yes | none |
 | `/v1/health`, `/v1/ready`, `/v1/openapi.json`, `/v1/docs` | open | open | open | open |
 
 Scoring is for services only. The roles are Keycloak realm roles (`analyst`, `supervisor`, `admin`); a person with several holds the permissions of each.
@@ -75,6 +77,18 @@ curl -H "X-API-Key: $ISSUED" -H 'Content-Type: application/json' -d @transaction
 **API keys** read `txrisk_<key_id>_<random part>` and are shown once, when issued. Only a SHA-256 digest is stored, so a database leak does not leak them. Each carries scopes and a rate limit (600 requests a minute unless issued with another). To rotate one without downtime, an Admin calls `POST /v1/api-keys/{key_id}/rotate`: it returns a new key with the same name, scopes, limit and expiry (rotation replaces a key, it does not extend its life), and the old key keeps working for the overlap (`{"overlap_minutes": ...}`, a day by default, `TXRISK_API_KEY_ROTATION_OVERLAP_MINUTES`). Deploy the new key to the service within the overlap; after it the old key is refused. A key is rotated once (a second rotation is refused with 409), so there is only ever one live successor; next time, rotate the successor. After a leak, `DELETE /v1/api-keys/{key_id}` revokes a key at once.
 
 **Hardening.** A key over its rate limit gets `429` with `Retry-After`; limits are counted per API process, so behind several replicas a key's effective limit is that many times its own. Bodies over `TXRISK_MAX_REQUEST_BYTES` (64 KiB) get `413`. Only the origins in `TXRISK_CORS_ORIGINS` may call from a browser (no wildcard, no cookies). Every response carries `nosniff`, `DENY` framing, `no-referrer`, HSTS, `no-store` and a `default-src 'none'` content security policy (relaxed on `/v1/docs` just enough to load Swagger UI). Without `TXRISK_OIDC_ISSUER` the API accepts API keys only.
+
+### Audit log
+
+Every sensitive action appends an entry to the append-only `audit_log` table: who (a person's Keycloak subject and roles, or a service's API key ID, or the operator command), what (`transaction.view`, `alert.list`, `api_key.issue`, `api_key.list`, `api_key.rotate`, `api_key.revoke`, `audit.read`), which object (type and ID), when, and the outcome: `success`, `denied` (a 403 on an audited route) or `failed` (permitted, but no such object or a conflict). The time is the wall clock at the request, because an API request has no event time (ADR 0005 keeps scoring off the wall clock). An entry holds identifiers and small facts only (an issued key's name, scopes and ID), never a token, an API key or a raw MSISDN; an object ID a caller typed that is not a known identifier, or that looks like a phone number, is stored as `[redacted]`.
+
+- **Not audited, by design:** `POST /v1/score` (a high-volume service call), health and readiness, `GET /v1/models/active`, and 401s (there is no caller to name, and an unauthenticated flood would only fill the log). Later features (Cases, model Promotion, report export) record through the same helper, `txrisk.api.audit` (`require(permission, AuditedRoute(...))` for refusals, `Auditor.record(...)` inside the action's own transaction), so an action that cannot be audited does not happen.
+- **Append-only to the application.** The API and workers connect as `txrisk_app`, which can only SELECT and INSERT on `audit_log`, owns no table (so it cannot alter or drop one or its triggers), and cannot create objects; its grants for every table are listed in `txrisk.store.roles.GRANTS`, and a new table without a decision there stops `txrisk migrate`. Triggers on `audit_log` also refuse UPDATE, DELETE and TRUNCATE for everyone until the owner deliberately disables them. The owner role, which runs migrations, is for the migration job and operators, never the API.
+- **Retention: the one way an entry leaves.** `txrisk purge` calls the database function `audit_log_purge(retention)` (migration 0004), which only the owner can execute: it deletes entries older than the configured period (`audit_log` in `config/retention.toml`, days of wall-clock time) and refuses a period under 365 days. The DELETE trigger lets a row go only inside that function (it sets a transaction-local flag) and only when the row is older than a one-year floor, so a forged flag still cannot remove a recent entry; no DELETE of any age works without the flag, and `txrisk_app` has neither DELETE nor EXECUTE. A superuser or the table's owner can still disable the triggers outright; that is a deliberate, visible act outside the application, not a path the application has.
+- **Roles by job.** `txrisk_app`: the API, workers and the scheduler (SELECT/INSERT/UPDATE only where each table needs it: the simulation clock is UPDATE, `fraud_labels` INSERT, `scheduled_jobs` UPDATE). The owner: `migrate`, `seed`, `backup`, `purge` and anything the scheduler launches in the `job` service (later, retraining and monitoring), because those jobs are not the request path.
+- **Reading it.** `GET /v1/audit` (Admins) filters by `actor` (subject or key ID), `actor_type`, `action`, `object_type`, `object_id`, `outcome` and a `since`/`until` range, newest first, and pages with `before` = the previous page's `next_before`. Reading the log is itself audited, with the filters used.
+- **Known risk: an Admin can issue themselves a read key.** `api_key.issue` records who issued which key with which scopes, and every call the key then makes is recorded under its key ID, so the trail runs from the Admin to what the key read. Admins are the accountable role for this, so the log should be reviewed.
+- **Credentials.** The role's password is `TXRISK_APP_DB_PASSWORD` in the gitignored `.env`, a different random value from the owner's; the migration job sends libpq's SCRAM hash of it, never the plain value, and the API reads it from the environment. Re-running `txrisk migrate` with a new value rotates it.
 
 ## Event stream
 
@@ -119,7 +133,7 @@ make purge                        # one retention purge now
 
 - **Replay** (`txrisk replay`, after `make seed`) publishes the live days in event-time order. `--seconds-per-day` (default 60) only paces the publishing: every event keeps its event time. Fraud discoveries come from `fraud_discoveries.parquet` and are published when the replay reaches their event time; Ground truth is never opened.
 - **Scheduler** (`txrisk scheduler`, `config/scheduler.toml`) fires each named job once per simulated day or week as the clock crosses it, so a replayed week fires the weekly jobs within minutes. The last period fired is kept in Postgres (`scheduled_jobs`), so restarts and a second scheduler never fire a period twice; periods the clock jumped over are not made up. A job runs as a detached one-off compose container (`--launcher compose`, `docker compose run` of the `job` service) or as a Kubernetes Job (`--launcher kubernetes`, in a cluster, named for the job and period).
-- **Retention** (`txrisk purge`, `config/retention.toml`) deletes rows older than each table's period, measured on the simulation clock, and the scheduler runs it daily. The audit log is configured to be kept longest (a validated rule) but does not exist yet (#15), so `purge` does not touch it.
+- **Retention** (`txrisk purge`, `config/retention.toml`) deletes rows older than each table's period, measured on the simulation clock, and the scheduler runs it daily. The audit log is kept longest (a validated rule, and at least 365 days), but by wall-clock age, because its entries are stamped with the wall clock; see Audit log. `purge` deletes, so it runs as the owner role (compose's `job` service, which the scheduler launches, uses the owner; `txrisk purge` refuses `txrisk_app`).
 
 ## CI/CD
 

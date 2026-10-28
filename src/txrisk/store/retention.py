@@ -1,8 +1,10 @@
 """The retention purge: delete what is older than its configured retention period.
 
 Ages are measured in event time, from the simulation clock (ADR 0005), never the wall clock, so a
-replayed month ages data as a month. The audit log is kept longest; it does not exist yet (#15),
-so its period is configuration only and `purge` leaves it alone.
+replayed month ages data as a month. The audit log is kept longest and is the exception to both
+rules: its entries are stamped with the wall clock, so their age is measured on the wall clock
+too, by the database (`audit_log_purge`, migration 0004), and no configuration can keep them less
+than a year. The purge must run as the owner role: the application role has no DELETE anywhere.
 """
 
 import tomllib
@@ -32,7 +34,8 @@ class RetentionDays(BaseModel):
     alerts: int = Field(ge=1)
     sim_swaps: int = Field(ge=1)
     fraud_labels: int = Field(ge=1)
-    audit_log: int = Field(ge=1)
+    # Days of real time, and at least a year: the database refuses less (see migration 0004).
+    audit_log: int = Field(ge=365)
 
     @model_validator(mode="after")
     def _ordered(self) -> Self:
@@ -88,7 +91,8 @@ def purge(engine: sa.Engine, clock: SimulationClock, config: RetentionConfig) ->
     """Delete every row older than its table's retention period before the clock's reading.
 
     A row exactly one period old is kept. Returns None, deleting nothing, before the clock has a
-    reading. Everything is deleted in one transaction, so a failure purges nothing.
+    reading. Everything is deleted in one transaction, so a failure purges nothing. Audit entries
+    older than their period go too, by wall-clock age, through `audit_log_purge`.
     """
     at = clock.peek()
     if at is None:
@@ -99,4 +103,10 @@ def purge(engine: sa.Engine, clock: SimulationClock, config: RetentionConfig) ->
             cutoff = at - timedelta(days=getattr(config.days, name))
             result = connection.execute(sa.delete(table).where(column < cutoff))
             deleted[name] = result.rowcount
+        # The audit log's only deletion path: a function the owner runs, which keeps what is
+        # younger than the period and refuses a period under a year.
+        deleted["audit_log"] = connection.execute(
+            sa.text("SELECT audit_log_purge(make_interval(days => :days))"),
+            {"days": config.days.audit_log},
+        ).scalar_one()
     return Purged(at=at, deleted=deleted)

@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 import redis
 import sqlalchemy as sa
-from api_helpers import as_json, body, issue_key, settings, with_key
+from api_helpers import as_app_role, as_json, body, issue_key, settings, with_key
 from confluent_kafka import Consumer
 from conftest import create_database
 from degraded_helpers import Monotonic, StubBundle, populate
@@ -72,7 +72,10 @@ class Stream:
     def scoring(self, cache: RedisHistoryCache | None = None) -> StoredScoring:
         api = settings(self.database)
         return StoredScoring(
-            create_engine(self.database), features=api.features(), rules=api.rules(), cache=cache
+            create_engine(as_app_role(self.database)),
+            features=api.features(),
+            rules=api.rules(),
+            cache=cache,
         )
 
     def worker(self, scoring: Any = None, *, group: str = "workers") -> ScoringWorker:
