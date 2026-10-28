@@ -17,6 +17,14 @@ to the end of their topic. The ledger confirms each SIM swap before publishing a
 Transaction, so once a Transaction has been consumed, every earlier SIM swap is on the topic.
 Every worker reads every SIM swap partition; storing one is idempotent.
 
+With `labels`, the worker also consumes `fraud.discovered` and stores each discovery as a Fraud
+label, dated by the discovery's own event time. A label is only ever read `known_at` a moment, so
+it is invisible before its event time however early it was stored. A repeated discovery changes
+nothing.
+
+With a `clock`, the worker advances the simulation clock (ADR 0005) to the latest event time in
+each batch, once the batch is stored and before its offsets are committed.
+
 Transactions are keyed by Subject wallet, so each Subject wallet's own history is scored in
 order. Histories across Subject wallets (Transfers into a Wallet, an Agent's Cash-outs) span
 partitions, and are as complete as the workers on the other partitions have got.
@@ -41,6 +49,7 @@ from typing import Protocol
 from confluent_kafka import Consumer, KafkaError, KafkaException, Message, TopicPartition
 
 from txrisk.events.contracts import (
+    FraudDiscovered,
     InvalidEvent,
     ScoreProduced,
     SimSwapRecorded,
@@ -74,6 +83,18 @@ class Scoring(Protocol):
     def rescore_degraded(self, limit: int | None = None) -> Rescored: ...
 
 
+class Clock(Protocol):
+    """What the worker advances: `store.SimulationClock`."""
+
+    def advance(self, to: datetime) -> bool: ...
+
+
+class Labels(Protocol):
+    """Where Fraud labels are stored: `store.FraudLabels`."""
+
+    def record(self, transaction_id: str, discovered_at: datetime, source: str) -> bool: ...
+
+
 class ScoringWorker:
     def __init__(
         self,
@@ -87,8 +108,12 @@ class ScoringWorker:
         poll_timeout: float = 1.0,
         catch_up_timeout: float = 60.0,
         rescore_batch: int = 500,
+        clock: Clock | None = None,
+        labels: Labels | None = None,
     ) -> None:
         self._scoring = scoring
+        self._clock = clock
+        self._labels = labels
         self._publisher = publisher
         self._topics = topics = topics or Topics()
         self._batch_size = batch_size
@@ -104,6 +129,18 @@ class ScoringWorker:
             }
         )
         self._transactions.subscribe([topics.transactions])
+        self._discoveries: Consumer | None = None
+        if labels is not None:
+            # A group of its own, so Fraud discoveries are shared between workers separately.
+            self._discoveries = Consumer(
+                {
+                    "bootstrap.servers": bootstrap_servers,
+                    "group.id": f"{group_id}.fraud-discoveries",
+                    "enable.auto.commit": False,
+                    "auto.offset.reset": "earliest",
+                }
+            )
+            self._discoveries.subscribe([topics.fraud_discoveries])
         # Not a group member: every worker is assigned every SIM swap partition. The group only
         # remembers how far they have been read, so a restart does not read them all again.
         self._sim_swaps = Consumer(
@@ -134,22 +171,54 @@ class ScoringWorker:
             self.close()
 
     def run_batch(self) -> int:
-        """Consume, score and publish one batch of Transactions, then commit it. Returns how
-        many events it held; 0 if none arrived within the poll timeout."""
+        """Consume, score and publish one batch of Transactions, then commit it; first store
+        any Fraud discoveries waiting. Returns how many events it held; 0 if none arrived
+        within the poll timeout."""
+        discovered = self._run_discoveries()
         messages = self._transactions.consume(self._batch_size, self._poll_timeout)
         if not messages:
             self._rescore_after_recovery()
-            return 0
+            return discovered
         self.catch_up_sim_swaps()
         offsets: dict[tuple[str, int], int] = {}
+        latest: datetime | None = None
         for message in messages:
             if _failed(message):
                 continue
-            self._handle_transaction(message)
+            occurred_at = self._handle_transaction(message)
+            if occurred_at is not None and (latest is None or occurred_at > latest):
+                latest = occurred_at
             offsets[(_topic(message), _partition(message))] = _offset(message) + 1
+        if latest is not None and self._clock is not None:
+            self._clock.advance(latest)
         self._publisher.flush()
         self._commit(self._transactions, offsets)
         self._rescore_after_recovery()
+        return discovered + len(messages)
+
+    def _run_discoveries(self) -> int:
+        """Store the Fraud discoveries waiting as Fraud labels, and commit them."""
+        if self._discoveries is None or self._labels is None:
+            return 0
+        messages = self._discoveries.consume(self._batch_size, 0.1)
+        offsets: dict[tuple[str, int], int] = {}
+        latest: datetime | None = None
+        for message in messages:
+            if _failed(message):
+                continue
+            try:
+                event = decode(FraudDiscovered, message.value() or b"")
+            except InvalidEvent as e:
+                self._reject(message, e)
+            else:
+                self._labels.record(event.transaction_id, event.discovered_at, event.source)
+                if latest is None or event.discovered_at > latest:
+                    latest = event.discovered_at
+            offsets[(_topic(message), _partition(message))] = _offset(message) + 1
+        if latest is not None and self._clock is not None:
+            self._clock.advance(latest)
+        self._publisher.flush()
+        self._commit(self._discoveries, offsets)
         return len(messages)
 
     def catch_up_sim_swaps(self) -> int:
@@ -185,6 +254,8 @@ class ScoringWorker:
     def close(self) -> None:
         self._transactions.close()
         self._sim_swaps.close()
+        if self._discoveries is not None:
+            self._discoveries.close()
 
     def assess(self, transaction: Transaction) -> Scored:
         """The one scoring call: everything about how a Transaction is scored sits behind it."""
@@ -208,18 +279,21 @@ class ScoringWorker:
             result.remaining,
         )
 
-    def _handle_transaction(self, message: Message) -> None:
+    def _handle_transaction(self, message: Message) -> datetime | None:
+        """Score the Transaction and publish its result; returns its event time, or None if it
+        was rejected."""
         try:
             transaction = decode(TransactionCreated, message.value() or b"").to_transaction()
             scored = self.assess(transaction)
         except (InvalidEvent, UnknownParty, TransactionConflict) as e:
             self._reject(message, e)
-            return
+            return None
         self._publisher.publish(
             self._topics.scores,
             transaction.transaction_id,
             ScoreProduced.of(transaction, scored.assessment),
         )
+        return transaction.occurred_at
 
     def _handle_sim_swap(self, message: Message) -> None:
         try:

@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed produce schemas backup openapi
+.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed produce replay scheduler purge schemas backup openapi
 
 install:
 	uv sync
@@ -68,6 +68,21 @@ seed:
 # event-time order, standing in for the ledger; the workers score them (after `make seed`).
 produce:
 	docker compose run --rm produce
+
+# Replays the live days of data/generated, Transactions, SIM swaps and Fraud discoveries, in
+# event-time order at a day a minute. Faster: make replay SECONDS_PER_DAY=5 (0 is as fast as possible).
+SECONDS_PER_DAY ?= 60
+replay:
+	docker compose run --rm replay txrisk replay --data /data/generated --seconds-per-day $(SECONDS_PER_DAY)
+
+# Runs the scheduler against the compose Postgres: it fires the jobs in config/scheduler.toml, as
+# one-off compose containers, once per simulated period as the replay advances the clock.
+scheduler:
+	set -a && . ./.env && set +a && TXRISK_DATABASE_URL=postgresql://txrisk@localhost:5432/txrisk uv run txrisk scheduler
+
+# Deletes data older than config/retention.toml allows, measured on the simulation clock.
+purge:
+	docker compose run --rm job txrisk purge
 
 # Rewrites the event topics' JSON Schemas in schemas/ from their models.
 schemas:

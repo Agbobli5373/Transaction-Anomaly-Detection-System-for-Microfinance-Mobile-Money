@@ -30,6 +30,8 @@ curl localhost:8000/v1/ready
 - `POST /v1/api-keys`, `GET /v1/api-keys`, `POST /v1/api-keys/{key_id}/rotate` and `DELETE /v1/api-keys/{key_id}` manage API keys.
 - The OpenAPI spec is at `/v1/openapi.json`, and interactive docs at `/v1/docs`.
 
+Each Transaction is scored with the clock at its own `occurred_at` (ADR 0005), against the history stored strictly before it, so the API gives exactly the offline scores. Set `TXRISK_MODEL_BUNDLE=/models/<version>` in `.env` to score with a bundle from `make train` (`./models` is mounted at `/models`); without one the rules alone score. Schema changes are plain SQL files in `src/txrisk/store/migrations/`, applied only by `txrisk migrate`, which compose runs as its own job before the API starts. Ground truth and Benign anomalies are never loaded into Postgres, and `seed` loads no Fraud discoveries: Fraud labels arrive only through `fraud.discovered` events (ADR 0007).
+
 ### Degraded mode
 
 If the Champion model bundle (`TXRISK_MODEL_BUNDLE`) is missing, corrupt or fails to load, or scoring with it fails or takes longer than `TXRISK_SCORING_TIMEOUT_MS` (default 5000: the first call after a load is cold and slow), the API and the workers keep scoring from Rule hits alone (ADR 0009). The assessment has `degraded: true` and `model_version: "rules-only"`, and its `risk_score` and `risk_band` are on the **rules scale** (whole numbers, High from 50, a Critical rule at least 90), not the model's (a probability x 100, High near the bundle's threshold). Critical rules still force High. `GET /v1/ready` stays 200 and reports `degraded`, `reason` and `awaiting_rescore`.
@@ -37,8 +39,6 @@ If the Champion model bundle (`TXRISK_MODEL_BUNDLE`) is missing, corrupt or fail
 Once the model is healthy again the degraded Transactions are re-scored and their stored assessments replaced (the old ones are kept in `risk_assessment_history`). An Alert already raised is kept and never duplicated; a Transaction that re-scores to High raises its Alert once. The API and workers re-score after recovering; `txrisk rescore [--limit N]` does it on demand (exit code 3 while the model is still down), for the scheduler. After a failure the model is skipped for `TXRISK_MODEL_RETRY_SECONDS` (default 30) before it is tried again.
 
 Counters (`txrisk_degraded_assessments_total{reason}`, `txrisk_rescored_total`, `txrisk_model_load_failures_total`) go through the small `txrisk.scoring.Metrics` interface, held in process for now; the observability work wires it to Prometheus.
-
-Each Transaction is scored with the clock at its own `occurred_at` (ADR 0005), against the history stored strictly before it, so the API gives exactly the offline scores. Set `TXRISK_MODEL_BUNDLE=/models/<version>` in `.env` to score with a bundle from `make train` (`./models` is mounted at `/models`); without one the rules alone score. Schema changes are plain SQL files in `src/txrisk/store/migrations/`, applied only by `txrisk migrate`, which compose runs as its own job before the API starts. Ground truth, Fraud discoveries and Benign anomalies are never loaded into Postgres (ADR 0007).
 
 `make backup` takes a Postgres backup into the compose `backups` volume (a one-off job for a scheduler or host cron, pruned to the retention count in `config/backup.toml`); CI restores one into a fresh database and checks it against its source. Restore procedure: `docs/runbooks/restore.md`.
 
@@ -91,7 +91,7 @@ docker compose up --detach --scale worker=3   # three workers share the partitio
 | `transaction.created` | A Transaction, as the ledger reports it | Subject wallet ID |
 | `sim_swap.recorded` | A SIM swap on a Wallet, when it happens | Wallet ID |
 | `score.produced` | The stored Risk assessment of a Transaction | transaction ID |
-| `fraud.discovered` | A Fraud discovery (complaint, chargeback or Case); no producer yet | transaction ID |
+| `fraud.discovered` | A Fraud discovery (complaint, chargeback or Case); `make replay` publishes the generated ones | transaction ID |
 
 The versioned JSON Schemas in [`schemas/`](schemas) are the documented ledger contract. They are written from the Pydantic models that validate every event at both ends (`make schemas`), and a test fails if the two disagree.
 
@@ -102,7 +102,24 @@ The versioned JSON Schemas in [`schemas/`](schemas) are the documented ledger co
 - **Recent-history cache.** With `TXRISK_REDIS_URL` set (compose sets it for the API, workers and seed), the services keep each Wallet's and Agent's last 30 days of Transactions in Redis sorted sets, trimmed by event time, and the features read history from there (ADR 0006). The cache never changes a score: each set carries a watermark of how far back it is complete, and any read it cannot fully answer, such as a Wallet's whole history once it is older than 30 days, falls back to Postgres. A CI parity test checks the cached features equal the offline replay's, and that flushing Redis mid-stream changes no score. Without `TXRISK_REDIS_URL`, history is read from Postgres alone. The compose Redis has no password because it is reachable only on the compose network; use an authenticated Redis anywhere else. Every process that stores Transactions must use the same Redis (`txrisk seed` flushes it); the rules are in `src/txrisk/store/redis_history.py`.
 - **Rejected events** (invalid against the contract, or naming an unregistered party) go to `<topic>.dlq` with the reason in an `error` header. Any other failure stops the worker without committing, and its batch is redelivered.
 
+- **Fraud labels.** Workers consume `fraud.discovered` and store each discovery in `fraud_labels`, dated by its own event time. Readers ask for the labels `known_at` a moment (`store.FraudLabels`), so a complaint or chargeback is invisible before its event time, however early it was stored; the first discovery of a Transaction stands.
+
 Outside Docker, `txrisk worker` reads `TXRISK_DATABASE_URL` and `TXRISK_KAFKA_BOOTSTRAP_SERVERS` (and optionally `TXRISK_MODEL_BUNDLE`, `TXRISK_TOPIC_PARTITIONS`, `TXRISK_CONSUMER_GROUP`), and `txrisk produce` takes `--bootstrap-servers`.
+
+## Simulation clock, scheduler and replay
+
+All time-based behaviour runs on event time (ADR 0005). The **simulation clock** (`store.SimulationClock`, one row in Postgres) is the latest event time any worker or the API has seen; it only moves forward and is the only source of "now" for business logic. A test (`tests/test_wall_clock.py`) scans `src/txrisk` and fails on any read of the wall clock (`datetime.now`, `time.time`, `date.today`, SQL `now()`, and the like) that is not in its allow-list of operational uses, each with its reason.
+
+```bash
+make replay                       # days 90-120 as Transactions, SIM swaps and Fraud discoveries, a day a minute
+make replay SECONDS_PER_DAY=5     # faster; 0 publishes as fast as possible
+make scheduler                    # fire the scheduled jobs as the clock advances (runs on the host)
+make purge                        # one retention purge now
+```
+
+- **Replay** (`txrisk replay`, after `make seed`) publishes the live days in event-time order. `--seconds-per-day` (default 60) only paces the publishing: every event keeps its event time. Fraud discoveries come from `fraud_discoveries.parquet` and are published when the replay reaches their event time; Ground truth is never opened.
+- **Scheduler** (`txrisk scheduler`, `config/scheduler.toml`) fires each named job once per simulated day or week as the clock crosses it, so a replayed week fires the weekly jobs within minutes. The last period fired is kept in Postgres (`scheduled_jobs`), so restarts and a second scheduler never fire a period twice; periods the clock jumped over are not made up. A job runs as a detached one-off compose container (`--launcher compose`, `docker compose run` of the `job` service) or as a Kubernetes Job (`--launcher kubernetes`, in a cluster, named for the job and period).
+- **Retention** (`txrisk purge`, `config/retention.toml`) deletes rows older than each table's period, measured on the simulation clock, and the scheduler runs it daily. The audit log is configured to be kept longest (a validated rule) but does not exist yet (#15), so `purge` does not touch it.
 
 ## CI/CD
 

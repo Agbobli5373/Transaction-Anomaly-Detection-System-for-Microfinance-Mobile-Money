@@ -50,7 +50,7 @@ def test_migrate_applies_each_migration_once(empty_database: str):
     second = migrate(engine)
 
     assert first == list(migrations())
-    assert first[:2] == ["0001_initial", "0002_api_keys"]
+    assert first[:3] == ["0001_initial", "0002_api_keys", "0003_clock_scheduler_labels"]
     assert second == []
     with engine.connect() as connection:
         assert pending_migrations(connection) == []
@@ -125,7 +125,12 @@ def test_no_ground_truth_reaches_postgres(market: Market, data: Path, database: 
 
     inspector = sa.inspect(engine)
     tables = set(inspector.get_table_names())
-    columns = {c["name"] for table in tables for c in inspector.get_columns(table)}
+    # Fraud labels are the one place a Fraud discovery lands, and only from a `fraud.discovered`
+    # event at its event time: seeding never writes them.
+    assert _count(engine, "fraud_labels") == 0
+    columns = {
+        c["name"] for table in tables - {"fraud_labels"} for c in inspector.get_columns(table)
+    }
     assert not tables & set(OFFLINE_ONLY)
     ground_truth_columns = set(market.dataset.ground_truth.columns) | set(
         market.dataset.fraud_discoveries.columns

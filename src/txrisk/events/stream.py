@@ -53,6 +53,7 @@ def ensure_topics(bootstrap_servers: str, topics: Topics, *, partitions: int) ->
         topics.fraud_discoveries: 1,
         topics.dead_letter(topics.transactions): 1,
         topics.dead_letter(topics.sim_swaps): 1,
+        topics.dead_letter(topics.fraud_discoveries): 1,
     }
     admin = AdminClient({"bootstrap.servers": bootstrap_servers})
     futures = admin.create_topics(
