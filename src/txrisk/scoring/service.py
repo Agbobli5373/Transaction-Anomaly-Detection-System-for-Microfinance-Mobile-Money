@@ -18,6 +18,7 @@ from txrisk.features import (
 from txrisk.models import inputs_for
 from txrisk.models.anomaly import AnomalyModel
 from txrisk.models.supervised import SupervisedModel
+from txrisk.observability.tracing import span
 from txrisk.scoring.config import RulesConfig, Severity
 from txrisk.scoring.reasons import Reason, rule_reasons, stacked_reasons
 from txrisk.scoring.rules import RuleHit, rule_hits
@@ -101,26 +102,31 @@ class ScoringService:
         self._bundle = bundle
 
     def assess(self, transaction: Transaction) -> RiskAssessment:
-        features = transaction_features(
-            transaction, self._history, now=self._clock.now(), config=self._features
-        )
+        with span("features.compute"):
+            features = transaction_features(
+                transaction, self._history, now=self._clock.now(), config=self._features
+            )
         hits = rule_hits(transaction, features, self._rules.rules)
         rules_score, critical = combine_hits(hits, self._rules)
         if self._bundle is not None:
-            return self._stacked(self._bundle, transaction, features, hits, rules_score, critical)
+            with span("model.score", model_version=self._bundle.version):
+                return self._stacked(
+                    self._bundle, transaction, features, hits, rules_score, critical
+                )
         score = 100 * rules_score
         if critical:
             score = max(score, self._rules.critical_floor)
         risk_score = round(score)
         anomaly = supervised = None
         if self._anomaly is not None or self._supervised is not None:
-            inputs = inputs_for(
-                transaction, features
-            )  # built once: it costs more than either model
-            if self._anomaly is not None:
-                anomaly = float(self._anomaly.score(inputs).iloc[0])
-            if self._supervised is not None:
-                supervised = float(self._supervised.score(inputs).iloc[0])
+            with span("model.score"):
+                inputs = inputs_for(
+                    transaction, features
+                )  # built once: it costs more than either model
+                if self._anomaly is not None:
+                    anomaly = float(self._anomaly.score(inputs).iloc[0])
+                if self._supervised is not None:
+                    supervised = float(self._supervised.score(inputs).iloc[0])
         return RiskAssessment(
             transaction_id=transaction.transaction_id,
             risk_score=risk_score,

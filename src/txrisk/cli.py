@@ -45,6 +45,9 @@ from txrisk.features import FeatureConfig, feature_table, load_feature_config
 from txrisk.generator import generate, load_config, write_dataset
 from txrisk.models.bundle import ModelBundle, train_bundle
 from txrisk.models.registry import MODEL_NAME, log_bundle
+from txrisk.observability.logs import configure_logging
+from txrisk.observability.metrics import Metrics
+from txrisk.observability.tracing import configure_tracing, shutdown_tracing
 from txrisk.scheduler import (
     ComposeLauncher,
     JobLauncher,
@@ -425,22 +428,36 @@ def _demo_sign_in(args: argparse.Namespace) -> int:
     return 0
 
 
+def _observe(service: str, metrics_port: int | None = None) -> Metrics:
+    """Structured JSON logs, tracing if `TXRISK_TRACING_ENABLED` is set, and Prometheus metrics
+    served on `metrics_port` (default `$TXRISK_METRICS_PORT`, else not served)."""
+    configure_logging()
+    configure_tracing(service)
+    metrics = Metrics()
+    port = metrics_port or int(os.environ.get("TXRISK_METRICS_PORT") or 0)
+    if port:
+        metrics.serve(port)
+    return metrics
+
+
 def _produce(args: argparse.Namespace) -> int:
     servers = args.bootstrap_servers or os.environ.get(KAFKA_ENV)
     if not servers:
         print(f"error: pass --bootstrap-servers or set {KAFKA_ENV}", file=sys.stderr)
         return 2
+    metrics = _observe("txrisk-produce", args.metrics_port)
     from_day = _evaluation_start(args) if args.from_day is None else args.from_day
     since = _day_start(args, from_day)
     until = None if args.until_day is None else _day_start(args, args.until_day)
     topics = Topics(args.topic_prefix)
     ensure_topics(servers, topics, partitions=args.partitions)
     published = publish_ledger(
-        Publisher(servers),
+        Publisher(servers, metrics=metrics),
         topics,
         ledger_events(args.data, since=since, until=until),
         limit=args.limit,
     )
+    shutdown_tracing()
     print(
         f"published {published.transactions:,} Transactions to {topics.transactions} and "
         f"{published.sim_swaps:,} SIM swaps to {topics.sim_swaps}, from day {from_day}"
@@ -456,18 +473,20 @@ def _replay(args: argparse.Namespace) -> int:
     if args.seconds_per_day < 0:
         print("error: --seconds-per-day cannot be negative", file=sys.stderr)
         return 2
+    metrics = _observe("txrisk-replay", args.metrics_port)
     from_day = _evaluation_start(args) if args.from_day is None else args.from_day
     since = _day_start(args, from_day)
     until = None if args.until_day is None else _day_start(args, args.until_day)
     topics = Topics(args.topic_prefix)
     ensure_topics(servers, topics, partitions=args.partitions)
     replayed = replay(
-        Publisher(servers),
+        Publisher(servers, metrics=metrics),
         topics,
         replay_events(args.data, since=since, until=until),
         Pacer(args.seconds_per_day),
         limit=args.limit,
     )
+    shutdown_tracing()
     print(
         f"replayed {replayed.transactions:,} Transactions, {replayed.sim_swaps:,} SIM swaps and "
         f"{replayed.fraud_discoveries:,} Fraud discoveries from day {from_day}, "
@@ -504,7 +523,7 @@ def _launcher(config: SchedulerConfig, kind: str) -> JobLauncher:
 
 
 def _scheduler(args: argparse.Namespace) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    metrics = _observe("txrisk-scheduler", args.metrics_port)
     url = _database_url(args)
     if url is None:
         return 2
@@ -523,6 +542,7 @@ def _scheduler(args: argparse.Namespace) -> int:
         _launcher(config, args.launcher),
         config.jobs,
         timezone=ZoneInfo(config.timezone),
+        metrics=metrics,
     )
     if args.once:
         for fired in scheduler.tick():
@@ -539,8 +559,8 @@ def _scheduler(args: argparse.Namespace) -> int:
 
 
 def _worker(args: argparse.Namespace) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     settings = WorkerSettings.from_env()
+    metrics = _observe("txrisk-worker", settings.metrics_port)
     engine = create_app_engine(settings.database_url)
     with engine.connect() as connection:
         pending = pending_migrations(connection)
@@ -559,13 +579,14 @@ def _worker(args: argparse.Namespace) -> int:
     ensure_topics(settings.kafka_bootstrap_servers, topics, partitions=settings.topic_partitions)
     worker = ScoringWorker(
         scoring,
-        Publisher(settings.kafka_bootstrap_servers),
+        Publisher(settings.kafka_bootstrap_servers, metrics=metrics),
         bootstrap_servers=settings.kafka_bootstrap_servers,
         topics=topics,
         group_id=settings.consumer_group,
         batch_size=settings.batch_size,
         clock=SimulationClock(engine),
         labels=FraudLabels(engine),
+        metrics=metrics,
     )
     stopping: list[int] = []
     for signum in (signal.SIGINT, signal.SIGTERM):
@@ -578,6 +599,7 @@ def _worker(args: argparse.Namespace) -> int:
     )
     worker.run(lambda: bool(stopping))
     engine.dispose()
+    shutdown_tracing()
     return 0
 
 
@@ -593,7 +615,18 @@ def _schemas(args: argparse.Namespace) -> int:
 def _serve(args: argparse.Namespace) -> int:
     import uvicorn
 
-    uvicorn.run("txrisk.api:app_from_env", factory=True, host=args.host, port=args.port)
+    configure_logging()
+    configure_tracing("txrisk-api")
+    # The API logs each request itself (txrisk.api), as JSON with the correlation id.
+    uvicorn.run(
+        "txrisk.api:app_from_env",
+        factory=True,
+        host=args.host,
+        port=args.port,
+        log_config=None,
+        access_log=False,
+    )
+    shutdown_tracing()
     return 0
 
 
@@ -758,6 +791,11 @@ def main(argv: list[str] | None = None) -> int:
     prod.add_argument(
         "--partitions", type=int, default=3, help="partitions for topics it has to create"
     )
+    prod.add_argument(
+        "--metrics-port",
+        type=int,
+        help="serve Prometheus metrics here (default: $TXRISK_METRICS_PORT)",
+    )
     prod.set_defaults(handler=_produce)
 
     rp = commands.add_parser(
@@ -789,6 +827,11 @@ def main(argv: list[str] | None = None) -> int:
     rp.add_argument(
         "--partitions", type=int, default=3, help="partitions for topics it has to create"
     )
+    rp.add_argument(
+        "--metrics-port",
+        type=int,
+        help="serve Prometheus metrics here (default: $TXRISK_METRICS_PORT)",
+    )
     rp.set_defaults(handler=_replay)
 
     pg = commands.add_parser(
@@ -814,6 +857,11 @@ def main(argv: list[str] | None = None) -> int:
         "--poll-seconds", type=float, default=2.0, help="wall-clock seconds between clock checks"
     )
     sc.add_argument("--once", action="store_true", help="check the clock once and exit")
+    sc.add_argument(
+        "--metrics-port",
+        type=int,
+        help="serve Prometheus metrics here (default: $TXRISK_METRICS_PORT)",
+    )
     sc.set_defaults(handler=_scheduler)
 
     wk = commands.add_parser(

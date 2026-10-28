@@ -64,6 +64,7 @@ import redis
 import sqlalchemy as sa
 
 from txrisk.features import SubjectHistory, Transaction, Wallet
+from txrisk.observability.tracing import span
 from txrisk.store.history import PostgresHistory, select_transactions, transaction_from_row
 from txrisk.store.tables import transactions
 
@@ -293,10 +294,12 @@ class RedisHistory:
     def _cached(
         self, kind: Kind, party: str, since: datetime | None, before: datetime
     ) -> list[Transaction] | None:
-        try:
-            found = self._cache.read(kind, party, since, before)
-        except redis.RedisError:
-            log.warning("cache read failed; reading Postgres", exc_info=True)
-            found = None
+        with span("history.redis", party_kind=kind) as read:
+            try:
+                found = self._cache.read(kind, party, since, before)
+            except redis.RedisError:
+                log.warning("cache read failed; reading Postgres", exc_info=True)
+                found = None
+            read.set_attribute("cache.hit", found is not None)
         self._cache.reads["fallback" if found is None else "hit"] += 1
         return found

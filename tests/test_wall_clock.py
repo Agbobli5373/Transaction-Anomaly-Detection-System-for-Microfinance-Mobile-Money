@@ -67,6 +67,14 @@ OPERATIONAL: dict[tuple[str, str], str] = {
         "never their event times"
     ),
     ("events/replay.py", "time.sleep"): "waits between published events to keep the replay's pace",
+    ("observability/metrics.py", "time.perf_counter"): (
+        "times how long a request or a scoring took, for the latency metrics: it measures work "
+        "and never decides anything"
+    ),
+    ("observability/logs.py", "datetime.datetime.fromtimestamp"): (
+        "writes when a log line was emitted, from the record's own creation time; the time is "
+        "only printed"
+    ),
     ("api/app.py", "datetime.datetime.now"): (
         "the wall clock handed to API key expiry, per-key rate limits and the time of audit "
         "entries (an API request has no event time): keys expire, requests are limited and "

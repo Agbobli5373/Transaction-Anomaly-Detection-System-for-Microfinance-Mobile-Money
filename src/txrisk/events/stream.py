@@ -1,15 +1,30 @@
 """The Redpanda topics, and publishing to them with every delivery confirmed."""
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from confluent_kafka import KafkaError, KafkaException, Message, Producer
 from confluent_kafka.admin import AdminClient
 from confluent_kafka.cimpl import NewTopic
+from opentelemetry import trace
 
 from txrisk.events.contracts import Event, encode
+from txrisk.observability import logs, tracing
+from txrisk.observability.metrics import Metrics
 
 log = logging.getLogger(__name__)
+
+# The event headers that carry a Transaction's correlation id (W3C `traceparent` carries its trace).
+CORRELATION_HEADER = "correlation_id"
+
+
+def header_value(headers: Sequence[tuple[str, str | bytes | None]] | None, name: str) -> str | None:
+    """The value of an event header, as text, if the event has it."""
+    for key, value in headers or ():
+        if key == name and value is not None:
+            return value.decode() if isinstance(value, bytes) else value
+    return None
 
 
 @dataclass(frozen=True)
@@ -81,7 +96,13 @@ class Publisher:
     published (committing a consumer offset, say) may happen before `flush` returns.
     """
 
-    def __init__(self, bootstrap_servers: str, *, flush_timeout: float = 30.0) -> None:
+    def __init__(
+        self,
+        bootstrap_servers: str,
+        *,
+        flush_timeout: float = 30.0,
+        metrics: Metrics | None = None,
+    ) -> None:
         self._producer = Producer(
             {
                 "bootstrap.servers": bootstrap_servers,
@@ -91,10 +112,19 @@ class Publisher:
             }
         )
         self._flush_timeout = flush_timeout
+        self._metrics = metrics
         self._failures: list[str] = []
 
     def publish(self, topic: str, key: str, event: Event) -> None:
-        self.publish_raw(topic, key.encode(), encode(event))
+        """Queue an event with the headers that follow it: the correlation id of the request or
+        event being handled (a new one if there is none) and, when tracing, the trace context, so
+        its consumer continues the same trace."""
+        with tracing.span(f"publish {topic}", kind=trace.SpanKind.PRODUCER):
+            headers: dict[str, str | bytes | None] = {
+                CORRELATION_HEADER: logs.current_correlation_id() or logs.new_correlation_id(),
+                **tracing.inject(),
+            }
+            self.publish_raw(topic, key.encode(), encode(event), headers)
 
     def publish_raw(
         self,
@@ -129,3 +159,7 @@ class Publisher:
     def _delivered(self, error: KafkaError | None, message: Message) -> None:
         if error is not None:
             self._failures.append(f"{message.topic()}: {error.str()}")
+            if self._metrics is not None:
+                self._metrics.publish_failures.inc()
+        elif self._metrics is not None:
+            self._metrics.events_published.labels(message.topic()).inc()
