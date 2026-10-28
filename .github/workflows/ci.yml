@@ -245,10 +245,10 @@ jobs:
           for _ in $(seq 30); do
             up=$(curl --silent http://127.0.0.1:9090/api/v1/targets \
               | python3 -c 'import json,sys; t = json.load(sys.stdin)["data"]["activeTargets"]; print(*sorted(x["labels"]["job"] for x in t if x["health"] == "up"))')
-            case " $up " in *" alert-sink "*" alertmanager "*" pushgateway "*) break ;; esac
+            case " $up " in *alert-sink*alertmanager*pushgateway*) break ;; esac
             sleep 2
           done
-          case " $up " in *" alert-sink "*" alertmanager "*" pushgateway "*) ;; *) echo "targets up: $up"; exit 1 ;; esac
+          case " $up " in *alert-sink*alertmanager*pushgateway*) ;; *) echo "targets up: $up"; exit 1 ;; esac
           curl --fail --silent http://127.0.0.1:9090/api/v1/rules | grep -q AlertedInputDriftAction
           curl --fail --silent http://127.0.0.1:9090/api/v1/alertmanagers | grep -q 'alertmanager:9093'
           curl --fail --silent http://127.0.0.1:9093/-/ready
