@@ -233,6 +233,8 @@ def _train(args: argparse.Namespace) -> int:
         "seed": args.seed,
         "data": str(args.data),
         "alert_budget_per_day": evaluation.alert_budget_per_day,
+        "surge_elasticity": evaluation.surge_elasticity,
+        "surge_max_divisor": evaluation.surge_max_divisor,
         "label_maturity_days": evaluation.label_maturity_days,
         **{f"splits.{name}": [window.start, window.end] for name, window in evaluation.splits},
     }

@@ -68,14 +68,14 @@ def build_market(small_config: GeneratorConfig) -> Market:
     )
 
 
-def train(market: Market) -> ModelBundle:
+def train(market: Market, config: EvaluationConfig = CONFIG) -> ModelBundle:
     return train_bundle(
         market.transactions,
         market.features,
         market.discoveries,
         rules=RULES,
         period_start=START,
-        config=CONFIG,
+        config=config,
         seed=11,
     )
 

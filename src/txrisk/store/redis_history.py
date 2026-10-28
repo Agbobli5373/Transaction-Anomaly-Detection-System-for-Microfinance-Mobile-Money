@@ -12,7 +12,8 @@ Three sets are kept per party, each holding the Transactions one history call re
 - `agent:<agent>`: Cash-ins and Cash-outs at the Agent (`agent_transactions`).
 
 Wallets' registration and SIM swaps are not cached: they are small, read by key, and read from
-Postgres.
+Postgres. So is the market's spend per hour (`market_hours`), which a trigger keeps and which is
+the same for every Transaction of an hour.
 
 **What a miss is.** Each set has a *watermark* beside it, the oldest event time the set is known
 to hold every Transaction from: all Transactions of that party at or after the watermark are in
@@ -290,6 +291,9 @@ class RedisHistory:
 
     def last_sim_swap(self, wallet_id: str, before: datetime) -> datetime | None:
         return self._postgres.last_sim_swap(wallet_id, before)
+
+    def market_hourly_spend(self, since: datetime, before: datetime) -> list[float]:
+        return self._postgres.market_hourly_spend(since, before)
 
     def _cached(
         self, kind: Kind, party: str, since: datetime | None, before: datetime

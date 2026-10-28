@@ -70,6 +70,24 @@ def _plot(frame: pd.DataFrame, out: Path, scorer: str) -> None:
         plt.close(figure)
 
 
+def _plot_daily_high(daily: pd.Series, budget: int, out: Path, scorer: str) -> None:
+    """High Alerts raised each day against the Alert budget and the most Analysts can clear."""
+    figure, axes = plt.subplots(figsize=(8, 3.6))
+    axes.bar(range(len(daily)), daily.to_numpy(), color="tab:blue", label="High Alerts")
+    axes.axhline(budget, color="black", linewidth=1, label=f"Alert budget ({budget})")
+    axes.axhline(
+        1.5 * budget, color="tab:red", linestyle="--", linewidth=1, label="1.5x the budget"
+    )
+    ticks = list(range(0, len(daily), 5))
+    axes.set_xticks(ticks, [str(daily.index[i])[:10] for i in ticks], fontsize=8)
+    axes.set(ylabel="High Alerts a day", title=f"{scorer}: High Alerts a day")
+    axes.legend(fontsize=8, loc="upper right")
+    axes.grid(axis="y", alpha=0.3)
+    figure.tight_layout()
+    figure.savefig(out / "daily_high.png", dpi=120)
+    plt.close(figure)
+
+
 def evaluate(
     scores: pd.DataFrame,
     data: Path,
@@ -171,6 +189,10 @@ def report_metrics(
                 )
             ),
         },
+        # How many High Alerts each day raised, which is what the Alert budget is about.
+        "high_per_day": {
+            str(day)[:10]: int(count) for day, count in high.groupby(frame["day"]).sum().items()
+        },
         "recall_by_scenario": {
             str(scenario): {"fraud": len(rows), "recall_at_high": float(high[rows.index].mean())}
             for scenario, rows in frame[frame["fraud"]].groupby("scenario", sort=True)
@@ -207,4 +229,6 @@ def report_metrics(
     (out / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
     frame[scores.columns].to_parquet(out / "scores.parquet", index=False)
     _plot(frame, out, scorer)
+    daily = high.groupby(frame["day"]).sum().sort_index()
+    _plot_daily_high(daily, config.alert_budget_per_day, out, scorer)
     return metrics

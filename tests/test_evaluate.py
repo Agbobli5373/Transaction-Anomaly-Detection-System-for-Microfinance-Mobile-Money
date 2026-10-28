@@ -79,6 +79,7 @@ def test_the_report_has_metrics_curves_and_scores(run: Path):
     report = run / "report"
 
     assert {p.name for p in report.iterdir()} == {
+        "daily_high.png",
         "metrics.json",
         "pr_curve.png",
         "roc_curve.png",
@@ -103,6 +104,18 @@ def test_the_report_counts_high_alerts_from_the_scores_it_wrote(run: Path):
 
     assert metrics["at_high"]["flagged"] == (scores["risk_band"] == "High").sum()
     assert metrics["at_high"]["per_day"] == pytest.approx(metrics["at_high"]["flagged"] / 7)
+
+
+def test_the_report_counts_the_high_alerts_of_each_evaluation_day(run: Path):
+    metrics = _metrics(run)
+    scores = pd.read_parquet(run / "report" / "scores.parquet")
+    evaluated = _evaluation_days(run).merge(scores, on="transaction_id")
+
+    daily = metrics["high_per_day"]
+
+    assert list(daily) == [f"2026-01-{day}" for day in range(15, 22)]
+    for day, flagged in evaluated.groupby(evaluated["occurred_at"].dt.strftime("%Y-%m-%d")):
+        assert daily[day] == (flagged["risk_band"] == "High").sum()
 
 
 def test_the_report_measures_what_fraud_operations_care_about(run: Path):

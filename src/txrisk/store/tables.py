@@ -70,6 +70,15 @@ transactions = sa.Table(
     sa.Column("biller_id", sa.Text),
 )
 
+# The market's spend per clock hour, kept by a trigger on `transactions`; summed over shards.
+market_hours = sa.Table(
+    "market_hours",
+    metadata,
+    sa.Column("hour", _TIME, primary_key=True),
+    sa.Column("shard", sa.SmallInteger, primary_key=True),
+    sa.Column("amount", sa.Numeric(16, 2, asdecimal=False), nullable=False),
+)
+
 risk_assessments = sa.Table(
     "risk_assessments",
     metadata,

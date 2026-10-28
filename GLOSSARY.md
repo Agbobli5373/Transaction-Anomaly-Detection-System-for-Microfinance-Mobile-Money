@@ -105,6 +105,10 @@ _Avoid_: Fraud score, anomaly score
 The Low, Medium, or High category a Risk score falls into.
 _Avoid_: Risk level, decision
 
+**Market spend index**:
+How busy and how large the whole market's spending is, against the same hours of the previous days (1 is a normal day). It sets how high the High Risk band starts, so a festive season does not push Alerts past the Alert budget.
+_Avoid_: Surge factor, load
+
 **Profile**:
 The recent behaviour of one Wallet or Agent against which a new Transaction is compared.
 _Avoid_: History, baseline

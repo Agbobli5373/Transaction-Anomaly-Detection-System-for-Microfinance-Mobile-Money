@@ -3,7 +3,7 @@
 import bisect
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Protocol
 
 
@@ -64,6 +64,12 @@ class HistoryProvider(Protocol):
         """When the Wallet's latest SIM swap strictly before `before` occurred, if it had one."""
         ...
 
+    def market_hourly_spend(self, since: datetime, before: datetime) -> list[float]:
+        """The GHS moved by every Transaction of the market in each clock hour from `since` up to
+        `before`, oldest first, to the cent. Both are on the hour; an hour without Transactions
+        is 0."""
+        ...
+
 
 class _Timeline:
     """Transactions kept in time order, read back by time range."""
@@ -83,6 +89,10 @@ class _Timeline:
         return self._transactions[start : bisect.bisect_left(self._times, before)]
 
 
+def _hour_of(moment: datetime) -> datetime:
+    return moment.replace(minute=0, second=0, microsecond=0)
+
+
 _EMPTY = _Timeline()
 # The Transaction types whose Counterparty is an Agent.
 _AGENT_TYPES = frozenset({"cash_in", "cash_out"})
@@ -97,8 +107,16 @@ class ReplayHistory:
         self._by_receiver: dict[str, _Timeline] = {}
         self._by_agent: dict[str, _Timeline] = {}
         self._sim_swaps: dict[str, list[datetime]] = {}
+        self._market_spend: dict[datetime, float] = {}
+        # The last market_hourly_spend answer: a replay asks the same hours for every Transaction
+        # of an hour, and they cannot change until an earlier Transaction is recorded.
+        self._market_answer: tuple[datetime, datetime, list[float]] | None = None
 
     def record(self, transaction: Transaction) -> None:
+        hour = _hour_of(transaction.occurred_at)
+        self._market_spend[hour] = self._market_spend.get(hour, 0.0) + transaction.amount
+        if self._market_answer is not None and hour < self._market_answer[1]:
+            self._market_answer = None
         self._by_subject.setdefault(transaction.subject_wallet_id, _Timeline()).add(transaction)
         if transaction.transaction_type == "transfer":
             self._by_receiver.setdefault(transaction.counterparty_id, _Timeline()).add(transaction)
@@ -131,3 +149,13 @@ class ReplayHistory:
         swaps = self._sim_swaps.get(wallet_id, [])
         i = bisect.bisect_left(swaps, before)
         return swaps[i - 1] if i else None
+
+    def market_hourly_spend(self, since: datetime, before: datetime) -> list[float]:
+        if self._market_answer is not None and self._market_answer[:2] == (since, before):
+            return self._market_answer[2]
+        hours = int((before - since) / timedelta(hours=1))
+        answer = [
+            round(self._market_spend.get(since + timedelta(hours=h), 0.0), 2) for h in range(hours)
+        ]
+        self._market_answer = (since, before, answer)
+        return answer

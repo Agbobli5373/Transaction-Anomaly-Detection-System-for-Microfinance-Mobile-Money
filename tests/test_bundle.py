@@ -193,3 +193,30 @@ def test_the_riskiest_transactions_come_with_distinct_reasons_critical_hits_firs
     for transaction_id in rules.index[rules["critical"]]:
         assert assessments[transaction_id].risk_band.value == "High"
         assert assessments[transaction_id].reasons[0].code == "SIM_SWAP_DRAIN"
+
+
+def test_the_scoring_service_bands_a_busier_market_as_the_offline_table_does(market: Market):
+    # A steep elasticity, so that the small market's ordinary swings in spending move High.
+    bundle = train(market, CONFIG.model_copy(update={"surge_elasticity": 6.0}))
+    transactions, features, rules = _rows(market, Split.EVALUATION)
+    scores = bundle.risk_scores(model_inputs(transactions, features), rules)
+    index = features.set_index("transaction_id")["market_spend_index"].astype(float)
+    ids = list(scores.nlargest(80).index)
+
+    offline = bundle.bands(scores, rules, index.reindex(scores.index))[ids]
+    served = replay_assessments(market, bundle, set(ids))
+
+    assert [served[i].risk_band.value for i in ids] == offline.tolist()
+    # The market spent more than usual for some of these, and High moved with it.
+    assert (offline != band(scores, bundle.thresholds)[ids]).any()
+    assert (offline == "High").any()
+
+
+def test_a_critical_rule_hit_is_high_however_busy_the_market(market: Market):
+    bundle = train(market, CONFIG.model_copy(update={"surge_elasticity": 6.0}))
+    transactions, features, rules = _rows(market, Split.EVALUATION)
+    critical = rules.assign(critical=True)
+    scores = bundle.risk_scores(model_inputs(transactions, features), critical)
+    busiest = pd.Series(10.0, index=scores.index)
+
+    assert (bundle.bands(scores, critical, busiest) == "High").all()
