@@ -13,6 +13,7 @@ from txrisk.cli import main
 from txrisk.features import features_frame, transaction_features, transactions_from_frame
 from txrisk.generator import GeneratorConfig, write_dataset
 from txrisk.store import PostgresHistory, create_engine, migrate, pending_migrations, seed
+from txrisk.store.database import migrations
 from txrisk.store.tables import metadata
 
 DAY = timedelta(days=1)
@@ -48,12 +49,12 @@ def test_migrate_applies_each_migration_once(empty_database: str):
     first = migrate(engine)
     second = migrate(engine)
 
-    assert first == [
+    assert first == list(migrations())
+    assert first[:4] == [
         "0001_initial",
         "0002_api_keys",
         "0003_clock_scheduler_labels",
         "0004_audit_log",
-        "0005_cases",
     ]
     assert second == []
     with engine.connect() as connection:

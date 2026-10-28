@@ -26,7 +26,7 @@ from txrisk.store.records import TransactionConflict, UnknownParty
 from txrisk.store.redis_history import RedisHistory, RedisHistoryCache
 from txrisk.store.retention import Purged, RetentionConfig, load_retention_config, purge
 from txrisk.store.roles import APP_ROLE, provision_app_role
-from txrisk.store.scoring import HistoryCache, Scored, StoredScoring
+from txrisk.store.scoring import HistoryCache, Rescored, Scored, StoredScoring
 from txrisk.store.seed import seed
 
 __all__ = [
@@ -41,6 +41,7 @@ __all__ = [
     "Purged",
     "RedisHistory",
     "RedisHistoryCache",
+    "Rescored",
     "RestoreCheck",
     "RetentionConfig",
     "Scored",

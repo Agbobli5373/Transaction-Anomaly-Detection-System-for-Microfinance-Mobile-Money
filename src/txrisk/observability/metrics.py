@@ -15,7 +15,10 @@ The names a dashboard or an alert relies on:
 - `txrisk_scoring_errors_total{path,reason}`: Transactions refused or failed;
 - `txrisk_events_consumed_total{topic,outcome}`, `txrisk_consumer_lag{topic,partition}`: the worker;
 - `txrisk_events_published_total{topic}`, `txrisk_publish_failures_total`: every publisher;
-- `txrisk_scheduler_jobs_fired_total{job}`: the scheduler.
+- `txrisk_scheduler_jobs_fired_total{job}`: the scheduler;
+- `txrisk_degraded_assessments_total{reason}`, `txrisk_rescored_total`,
+  `txrisk_alerts_rescored_total{day}`, `txrisk_model_load_failures_total`: Degraded mode and
+  re-scoring, counted through `increment` by the scoring path (`txrisk.scoring.metrics`).
 """
 
 import time
@@ -27,6 +30,13 @@ from typing import TYPE_CHECKING
 
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, ProcessCollector
 from prometheus_client import start_http_server as _start_http_server
+
+from txrisk.scoring.metrics import (
+    ALERTS_RESCORED,
+    DEGRADED_ASSESSMENTS,
+    MODEL_LOAD_FAILURES,
+    RESCORED,
+)
 
 if TYPE_CHECKING:  # scoring itself is traced, so importing it here at runtime would cycle
     from txrisk.scoring import RiskAssessment
@@ -113,12 +123,42 @@ class Metrics:
             "Events the broker did not confirm.",
             registry=self.registry,
         )
+        # The scoring path's own counters (see txrisk.scoring.metrics), by name: `increment`.
+        self._scoring_counters = {
+            DEGRADED_ASSESSMENTS: Counter(
+                DEGRADED_ASSESSMENTS.removesuffix("_total"),
+                "Transactions scored with Rule hits alone, by why the model was not used.",
+                ["reason"],
+                registry=self.registry,
+            ),
+            RESCORED: Counter(
+                RESCORED.removesuffix("_total"),
+                "Degraded Transactions re-scored by the full model.",
+                registry=self.registry,
+            ),
+            ALERTS_RESCORED: Counter(
+                ALERTS_RESCORED.removesuffix("_total"),
+                "Alerts raised by re-scoring, by the simulated day of the Transaction.",
+                ["day"],
+                registry=self.registry,
+            ),
+            MODEL_LOAD_FAILURES: Counter(
+                MODEL_LOAD_FAILURES.removesuffix("_total"),
+                "Times loading the Champion model bundle failed.",
+                registry=self.registry,
+            ),
+        }
         self.scheduler_jobs = Counter(
             "txrisk_scheduler_jobs_fired",
             "Scheduled jobs launched, by job.",
             ["job"],
             registry=self.registry,
         )
+
+    def increment(self, name: str, **labels: str) -> None:
+        """Add one to a counter of the scoring path (the `txrisk.scoring.Metrics` interface)."""
+        counter = self._scoring_counters[name]
+        (counter.labels(**labels) if labels else counter).inc()
 
     def observe_score(
         self,

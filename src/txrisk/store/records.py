@@ -18,6 +18,7 @@ from txrisk.store.tables import (
     billers,
     cases,
     merchants,
+    risk_assessment_history,
     risk_assessments,
     sim_swaps,
     transactions,
@@ -162,25 +163,31 @@ def save_assessment(
         insert(risk_assessments)
         .values(
             transaction_id=assessment.transaction_id,
-            risk_score=assessment.risk_score,
-            risk_band=assessment.risk_band.value,
-            reasons=[
-                {
-                    "code": r.code,
-                    "message": r.message,
-                    "value": r.value if isinstance(r.value, str) else _json_number(r.value),
-                }
-                for r in assessment.reasons
-            ],
-            component_scores={k: _json_number(v) for k, v in assessment.component_scores.items()},
-            model_version=assessment.model_version,
-            degraded=assessment.degraded,
+            **_assessment_values(assessment),
             assessed_at=assessed_at,
         )
         .on_conflict_do_nothing()
         .returning(risk_assessments.c.transaction_id)
     ).first()
     return inserted is not None
+
+
+def _assessment_values(assessment: RiskAssessment) -> dict[str, Any]:
+    return {
+        "risk_score": assessment.risk_score,
+        "risk_band": assessment.risk_band.value,
+        "reasons": [
+            {
+                "code": r.code,
+                "message": r.message,
+                "value": r.value if isinstance(r.value, str) else _json_number(r.value),
+            }
+            for r in assessment.reasons
+        ],
+        "component_scores": {k: _json_number(v) for k, v in assessment.component_scores.items()},
+        "model_version": assessment.model_version,
+        "degraded": assessment.degraded,
+    }
 
 
 def assessment_from_row(row: sa.Row[Any]) -> RiskAssessment:
@@ -230,6 +237,70 @@ def _join_or_open_case(connection: sa.Connection, wallet_id: str, opened_at: dat
         ).scalar_one_or_none()
         if opened is not None:
             return opened
+
+
+def awaiting_rescore(connection: sa.Connection, *, limit: int | None = None) -> list[str]:
+    """Transaction IDs whose stored assessment is degraded, oldest event time first."""
+    query = (
+        sa.select(risk_assessments.c.transaction_id)
+        .where(risk_assessments.c.degraded)
+        .order_by(risk_assessments.c.assessed_at, risk_assessments.c.transaction_id)
+    )
+    if limit is not None:
+        query = query.limit(limit)
+    return list(connection.execute(query).scalars())
+
+
+def count_awaiting_rescore(connection: sa.Connection) -> int:
+    return int(
+        connection.execute(
+            sa.select(sa.func.count())
+            .select_from(risk_assessments)
+            .where(risk_assessments.c.degraded)
+        ).scalar_one()
+    )
+
+
+def replace_degraded_assessment(connection: sa.Connection, assessment: RiskAssessment) -> bool:
+    """Replace the Transaction's degraded assessment with `assessment`, keeping the old one in
+    the history; False, changing nothing, if it is not degraded (another re-score got there
+    first, or it was never degraded). The assessment time stays the Transaction's event time."""
+    current = connection.execute(
+        sa.select(risk_assessments)
+        .where(risk_assessments.c.transaction_id == assessment.transaction_id)
+        .with_for_update()
+    ).one_or_none()
+    if current is None or not current.degraded:
+        return False
+    connection.execute(
+        insert(risk_assessment_history).values(
+            transaction_id=current.transaction_id,
+            risk_score=current.risk_score,
+            risk_band=current.risk_band,
+            reasons=current.reasons,
+            component_scores=current.component_scores,
+            model_version=current.model_version,
+            degraded=current.degraded,
+            assessed_at=current.assessed_at,
+            replaced_by=assessment.model_version,
+        )
+    )
+    connection.execute(
+        sa.update(risk_assessments)
+        .where(risk_assessments.c.transaction_id == assessment.transaction_id)
+        .values(**_assessment_values(assessment))
+    )
+    return True
+
+
+def assessment_history(connection: sa.Connection, transaction_id: str) -> list[RiskAssessment]:
+    """The assessments re-scoring replaced, oldest first."""
+    rows = connection.execute(
+        sa.select(risk_assessment_history)
+        .where(risk_assessment_history.c.transaction_id == transaction_id)
+        .order_by(risk_assessment_history.c.history_id)
+    )
+    return [assessment_from_row(row) for row in rows]
 
 
 def raise_alert(connection: sa.Connection, transaction: Transaction) -> bool:
