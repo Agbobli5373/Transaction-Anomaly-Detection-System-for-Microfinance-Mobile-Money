@@ -16,8 +16,8 @@ make backup                           # = docker compose run --rm backup, into t
 docker compose run --rm backup ls -l /backups
 ```
 
-The job is a one-off, so whatever drives schedules calls it. The scheduler that arrives with the simulation
-clock (ADR 0005) fires it as a Kubernetes Job or a one-off compose container. Until then, host cron:
+The job is a one-off, so whatever drives schedules calls it. `config/scheduler.toml` has no backup job, so
+nothing in the stack schedules it; use host cron (or a Kubernetes CronJob, which the chart does not provide):
 
 ```cron
 # daily at 02:10, from the repository checkout
