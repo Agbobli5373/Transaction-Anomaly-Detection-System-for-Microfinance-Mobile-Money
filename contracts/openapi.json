@@ -1007,7 +1007,7 @@
       },
       "ModelCardOut": {
         "additionalProperties": false,
-        "description": "The model card of one version: intended use, data, metrics by segment and limitations.",
+        "description": "The model card of one version: intended use, data, scores by segment and limitations.",
         "properties": {
           "card": {
             "additionalProperties": true,
@@ -3399,7 +3399,7 @@
     },
     "/v1/models/{version}/card": {
       "get": {
-        "description": "The model card of a version: intended use, the data it learned from, its metrics by\nsegment and its limitations, as data and as a Markdown page. For every role, or the\n`models:read` scope.",
+        "description": "The model card of a version: intended use, the data it learned from, its scores by\nsegment and its limitations, as data and as a Markdown page. For every role, or the\n`models:read` scope.",
         "operationId": "get_model_card_v1_models__version__card_get",
         "parameters": [
           {

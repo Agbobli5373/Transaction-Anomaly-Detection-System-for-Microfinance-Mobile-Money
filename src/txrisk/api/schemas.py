@@ -589,7 +589,7 @@ class ModelList(_Body):
 
 
 class ModelCardOut(_Body):
-    """The model card of one version: intended use, data, metrics by segment and limitations."""
+    """The model card of one version: intended use, data, scores by segment and limitations."""
 
     version: str
     card: dict[str, Any]

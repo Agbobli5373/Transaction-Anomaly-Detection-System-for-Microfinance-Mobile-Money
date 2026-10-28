@@ -105,7 +105,12 @@ def test_train_records_the_run_and_registers_the_bundle_in_mlflow(trained: Path)
         bundle.stacker.weights["supervised_log_odds"]
     )
     artifacts = {a.path for a in client.list_artifacts(run.info.run_id, "bundle")}
-    assert artifacts == {"bundle/bundle.pkl", "bundle/manifest.json"}
+    assert artifacts == {
+        "bundle/bundle.pkl",
+        "bundle/manifest.json",
+        "bundle/model_card.json",
+        "bundle/model_card.md",
+    }
     assert Path(version.source.removeprefix("file://")).is_relative_to(trained / "mlruns")
 
 

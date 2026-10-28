@@ -181,7 +181,7 @@ def add_model_routes(
         responses={**_DENIED, 404: {"description": "No such model version"}},
     )
     def get_model_card(version: Version) -> ModelCardOut:
-        """The model card of a version: intended use, the data it learned from, its metrics by
+        """The model card of a version: intended use, the data it learned from, its scores by
         segment and its limitations, as data and as a Markdown page. For every role, or the
         `models:read` scope."""
         folder = folder_of(version)
