@@ -133,7 +133,7 @@ spec:
         - name: redis
           image: {{ .Values.image.redis }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: [redis-server, --save, "", --appendonly, "no"]
+          args: [redis-server, --save, "", --appendonly, "no"]
           ports:
             - name: redis
               containerPort: 6379
@@ -191,7 +191,7 @@ spec:
         - name: redpanda
           image: {{ .Values.image.redpanda }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command:
+          args:
             - redpanda
             - start
             - --mode=dev-container

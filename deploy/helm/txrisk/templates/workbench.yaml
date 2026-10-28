@@ -65,7 +65,7 @@ spec:
               path: /signed-out
               port: http
             periodSeconds: 3
-            failureThreshold: 40
+            failureThreshold: 100
           readinessProbe:
             httpGet:
               path: /signed-out

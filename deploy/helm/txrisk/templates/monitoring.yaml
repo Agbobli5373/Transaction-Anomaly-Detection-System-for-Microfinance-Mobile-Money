@@ -311,6 +311,10 @@ spec:
           image: {{ include "txrisk.image" .Values.image.txrisk }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: [txrisk, alert-sink, --port, "9095"]
+          env:
+            # The image's user has no writable home (matplotlib wants one).
+            - name: HOME
+              value: /tmp
           ports:
             - name: http
               containerPort: 9095

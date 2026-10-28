@@ -95,14 +95,14 @@ keycloak:
 
 migrate:
   resources:
-    requests: {cpu: 50m, memory: 128Mi}
-    limits: {cpu: 500m, memory: 512Mi}
+    requests: {cpu: 50m, memory: 256Mi}
+    limits: {cpu: 500m, memory: 1Gi}
 
 api:
   replicas: 1
   resources:
-    requests: {cpu: 100m, memory: 256Mi}
-    limits: {cpu: "1", memory: 1Gi}
+    requests: {cpu: 100m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1536Mi}
 
 # Scoring workers share transaction.created's partitions (txrisk.events: three by default), so more
 # than three replicas would sit idle: maxReplicas follows the topic's partition count. The
@@ -115,13 +115,13 @@ worker:
     maxReplicas: 3
     targetCPUUtilizationPercentage: 60
   resources:
-    requests: {cpu: 200m, memory: 256Mi}
-    limits: {cpu: "1", memory: 1Gi}
+    requests: {cpu: 200m, memory: 512Mi}
+    limits: {cpu: "1", memory: 2Gi}
 
 outbox:
   resources:
-    requests: {cpu: 50m, memory: 128Mi}
-    limits: {cpu: 500m, memory: 512Mi}
+    requests: {cpu: 50m, memory: 256Mi}
+    limits: {cpu: 500m, memory: 1Gi}
 
 workbench:
   resources:
@@ -133,8 +133,8 @@ workbench:
 scheduler:
   enabled: true
   resources:
-    requests: {cpu: 50m, memory: 128Mi}
-    limits: {cpu: 500m, memory: 512Mi}
+    requests: {cpu: 50m, memory: 256Mi}
+    limits: {cpu: 500m, memory: 1Gi}
 
 prometheus:
   retention: 7d
@@ -156,8 +156,8 @@ alertmanager:
 
 alertSink:
   resources:
-    requests: {cpu: 20m, memory: 64Mi}
-    limits: {cpu: 200m, memory: 192Mi}
+    requests: {cpu: 20m, memory: 128Mi}
+    limits: {cpu: 200m, memory: 512Mi}
 
 grafana:
   resources:

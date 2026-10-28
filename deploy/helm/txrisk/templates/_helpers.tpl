@@ -63,11 +63,15 @@ own environment, so the URL names the role and nothing more. */}}
 {{- define "txrisk.appDatabase" -}}
 - name: TXRISK_DATABASE_URL
   value: postgresql://txrisk_app@postgres:5432/txrisk
+- name: HOME
+  value: /tmp
 {{- end }}
 
 {{- define "txrisk.ownerDatabase" -}}
 - name: TXRISK_DATABASE_URL
   value: postgresql://txrisk@postgres:5432/txrisk
+- name: HOME
+  value: /tmp
 {{- end }}
 
 {{/* Starts the pod only once `txrisk migrate` has finished (the role it creates can log in and no
@@ -103,8 +107,8 @@ migration is pending). */}}
   securityContext:
     {{- include "txrisk.containerSecurity" . | nindent 4 }}
   resources:
-    requests: {cpu: 10m, memory: 64Mi}
-    limits: {cpu: 250m, memory: 256Mi}
+    requests: {cpu: 10m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 768Mi}
 {{- end }}
 
 {{/* The models volume, read-only unless a job saves bundles to it. */}}

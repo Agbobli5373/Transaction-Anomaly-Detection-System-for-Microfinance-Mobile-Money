@@ -108,7 +108,7 @@ spec:
               path: /v1/ready
               port: http
             periodSeconds: 3
-            failureThreshold: 40
+            failureThreshold: 100
           readinessProbe:
             httpGet:
               path: /v1/ready
@@ -349,6 +349,7 @@ data:
     TXRISK_KAFKA_BOOTSTRAP_SERVERS = "redpanda:9092"
     TXRISK_REDIS_URL = "redis://redis:6379/0"
     TXRISK_PUSHGATEWAY_URL = "http://pushgateway:9091"
+    HOME = "/tmp"
     TXRISK_MODELS_DIR = "/models"
     TXRISK_MLFLOW_URI = "sqlite:////models/mlflow.db"
     TXRISK_MLFLOW_ARTIFACTS = "/models/mlruns"

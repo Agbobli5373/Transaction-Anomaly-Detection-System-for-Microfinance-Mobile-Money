@@ -60,10 +60,30 @@ if ! kubectl --namespace kube-system get deployment metrics-server >/dev/null 2>
     --patch '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]' >/dev/null
 fi
 
+# When the wait fails, say which pods are not ready and why, so the log explains itself.
+diagnose() {
+  echo "::group::pods" >&2
+  kubectl --namespace "$namespace" get pods --output wide >&2 || true
+  echo "::endgroup::" >&2
+  local pod ready
+  for pod in $(kubectl --namespace "$namespace" get pods --output name 2>/dev/null); do
+    ready=$(kubectl --namespace "$namespace" get "$pod" --output 'jsonpath={.status.phase}/{.status.containerStatuses[*].ready}' 2>/dev/null || true)
+    case "$ready" in Succeeded/*) continue ;; *false*|Pending/*|Failed/*) ;; *) continue ;; esac
+    echo "::group::$pod (not ready)" >&2
+    kubectl --namespace "$namespace" describe "$pod" 2>&1 | tail -40 >&2 || true
+    kubectl --namespace "$namespace" logs "$pod" --all-containers --tail=50 >&2 2>&1 || true
+    kubectl --namespace "$namespace" logs "$pod" --all-containers --previous --tail=50 >&2 2>&1 || true
+    echo "::endgroup::" >&2
+  done
+}
+
 # shellcheck disable=SC2086
-helm upgrade --install "$release" "$chart" \
+if ! helm upgrade --install "$release" "$chart" \
   --namespace "$namespace" \
   --set "image.txrisk.tag=$tag" \
   --set "image.workbench.tag=$tag" \
   --wait --wait-for-jobs --timeout 15m \
-  ${EXTRA_HELM_ARGS:-}
+  ${EXTRA_HELM_ARGS:-}; then
+  diagnose
+  exit 1
+fi
