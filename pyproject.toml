@@ -16,6 +16,7 @@ dependencies = [
     "pyarrow>=17",
     "pydantic>=2.9",
     "pyjwt[crypto]>=2.10",
+    "redis>=8.1.0",
     "scikit-learn>=1.9.1",
     "shap>=0.54.1",
     "sqlalchemy>=2.1.6",
@@ -31,7 +32,9 @@ dev = [
     "jsonschema>=4.26.0",
     "mypy>=1.13",
     "pandas-stubs>=2.2",
+    "pip-audit>=2.10.1",
     "pytest>=8.3",
+    "pytest-cov>=7.1.0",
     "pyyaml>=6.0",
     "ruff>=0.8",
     "testcontainers[postgres]>=4.15.0",
@@ -64,3 +67,23 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+    "smoke: the generate -> features -> train -> evaluate smoke test; CI runs it as its own job",
+]
+
+# Coverage is gated on the core logic only (issue #1): the features, rules and scoring, the
+# store's scoring and records, and the evaluation thresholds. The gate is on what the tests of
+# behaviour reach there; nothing is omitted to reach it. Run `uv run pytest --cov`.
+[tool.coverage.run]
+source = ["txrisk"]
+branch = true
+
+[tool.coverage.report]
+include = [
+    "src/txrisk/features/*",
+    "src/txrisk/scoring/*",
+    "src/txrisk/store/scoring.py",
+    "src/txrisk/store/records.py",
+    "src/txrisk/evaluation/thresholds.py",
+]
+fail_under = 80

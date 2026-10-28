@@ -16,4 +16,5 @@ reports/
 mlruns/
 mlflow.db
 .env
+.coverage
 keycloak.env

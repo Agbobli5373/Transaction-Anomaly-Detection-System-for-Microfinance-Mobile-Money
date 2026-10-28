@@ -1,0 +1,1321 @@
+{
+  "components": {
+    "schemas": {
+      "ActiveModel": {
+        "additionalProperties": false,
+        "properties": {
+          "fitted_on": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fitted On"
+          },
+          "model_version": {
+            "title": "Model Version",
+            "type": "string"
+          },
+          "thresholds": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Thresholds",
+            "type": "object"
+          }
+        },
+        "required": [
+          "model_version",
+          "thresholds",
+          "fitted_on"
+        ],
+        "title": "ActiveModel",
+        "type": "object"
+      },
+      "AlertOut": {
+        "additionalProperties": false,
+        "properties": {
+          "alert_id": {
+            "title": "Alert Id",
+            "type": "integer"
+          },
+          "assessment": {
+            "$ref": "#/components/schemas/AssessmentOut"
+          },
+          "raised_at": {
+            "format": "date-time",
+            "title": "Raised At",
+            "type": "string"
+          },
+          "subject_wallet_id": {
+            "title": "Subject Wallet Id",
+            "type": "string"
+          },
+          "transaction_id": {
+            "title": "Transaction Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "alert_id",
+          "transaction_id",
+          "subject_wallet_id",
+          "raised_at",
+          "assessment"
+        ],
+        "title": "AlertOut",
+        "type": "object"
+      },
+      "AlertPage": {
+        "additionalProperties": false,
+        "properties": {
+          "alerts": {
+            "items": {
+              "$ref": "#/components/schemas/AlertOut"
+            },
+            "title": "Alerts",
+            "type": "array"
+          },
+          "next_before": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Before"
+          }
+        },
+        "required": [
+          "alerts",
+          "next_before"
+        ],
+        "title": "AlertPage",
+        "type": "object"
+      },
+      "ApiKeyIn": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "rate_limit_per_minute": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 100000.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate Limit Per Minute"
+          },
+          "scopes": {
+            "items": {
+              "enum": [
+                "alerts:read",
+                "models:read",
+                "score:write",
+                "transactions:read"
+              ],
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Scopes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "scopes"
+        ],
+        "title": "ApiKeyIn",
+        "type": "object"
+      },
+      "ApiKeyOut": {
+        "additionalProperties": false,
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "key_id": {
+            "title": "Key Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "rate_limit_per_minute": {
+            "title": "Rate Limit Per Minute",
+            "type": "integer"
+          },
+          "replaces": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replaces"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scopes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "key_id",
+          "name",
+          "scopes",
+          "rate_limit_per_minute",
+          "created_at",
+          "created_by",
+          "expires_at",
+          "revoked_at",
+          "replaces",
+          "active"
+        ],
+        "title": "ApiKeyOut",
+        "type": "object"
+      },
+      "AssessmentOut": {
+        "additionalProperties": false,
+        "properties": {
+          "component_scores": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Component Scores",
+            "type": "object"
+          },
+          "degraded": {
+            "title": "Degraded",
+            "type": "boolean"
+          },
+          "model_version": {
+            "title": "Model Version",
+            "type": "string"
+          },
+          "reasons": {
+            "items": {
+              "$ref": "#/components/schemas/ReasonOut"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "risk_band": {
+            "enum": [
+              "Low",
+              "Medium",
+              "High"
+            ],
+            "title": "Risk Band",
+            "type": "string"
+          },
+          "risk_score": {
+            "title": "Risk Score",
+            "type": "number"
+          },
+          "transaction_id": {
+            "title": "Transaction Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id",
+          "risk_score",
+          "risk_band",
+          "reasons",
+          "component_scores",
+          "model_version",
+          "degraded"
+        ],
+        "title": "AssessmentOut",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "IssuedApiKeyOut": {
+        "additionalProperties": false,
+        "properties": {
+          "api_key": {
+            "$ref": "#/components/schemas/ApiKeyOut"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "api_key"
+        ],
+        "title": "IssuedApiKeyOut",
+        "type": "object"
+      },
+      "ReasonOut": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "value"
+        ],
+        "title": "ReasonOut",
+        "type": "object"
+      },
+      "RotationIn": {
+        "additionalProperties": false,
+        "properties": {
+          "overlap_minutes": {
+            "anyOf": [
+              {
+                "maximum": 43200.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overlap Minutes"
+          }
+        },
+        "title": "RotationIn",
+        "type": "object"
+      },
+      "Status": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "unavailable"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "Status",
+        "type": "object"
+      },
+      "TransactionIn": {
+        "additionalProperties": false,
+        "description": "A Transaction as the ledger reports it: exactly one Counterparty, of the kind its\nTransaction type deals with, and no balance after.",
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "amount": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Amount"
+          },
+          "biller_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Biller Id"
+          },
+          "channel": {
+            "enum": [
+              "ussd",
+              "app"
+            ],
+            "title": "Channel",
+            "type": "string"
+          },
+          "counterparty_wallet_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counterparty Wallet Id"
+          },
+          "device_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Device Id",
+            "type": "string"
+          },
+          "direction": {
+            "enum": [
+              "in",
+              "out"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "merchant_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merchant Id"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "region": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Region",
+            "type": "string"
+          },
+          "subject_balance_before": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Subject Balance Before"
+          },
+          "subject_wallet_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Subject Wallet Id",
+            "type": "string"
+          },
+          "transaction_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Transaction Id",
+            "type": "string"
+          },
+          "transaction_type": {
+            "enum": [
+              "cash_in",
+              "cash_out",
+              "transfer",
+              "payment",
+              "bill_payment"
+            ],
+            "title": "Transaction Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id",
+          "occurred_at",
+          "transaction_type",
+          "amount",
+          "subject_wallet_id",
+          "direction",
+          "subject_balance_before",
+          "channel",
+          "device_id",
+          "region"
+        ],
+        "title": "TransactionIn",
+        "type": "object"
+      },
+      "TransactionOut": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "amount": {
+            "title": "Amount",
+            "type": "number"
+          },
+          "biller_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Biller Id"
+          },
+          "channel": {
+            "title": "Channel",
+            "type": "string"
+          },
+          "counterparty_wallet_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counterparty Wallet Id"
+          },
+          "device_id": {
+            "title": "Device Id",
+            "type": "string"
+          },
+          "direction": {
+            "title": "Direction",
+            "type": "string"
+          },
+          "merchant_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merchant Id"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "region": {
+            "title": "Region",
+            "type": "string"
+          },
+          "subject_balance_before": {
+            "title": "Subject Balance Before",
+            "type": "number"
+          },
+          "subject_wallet_id": {
+            "title": "Subject Wallet Id",
+            "type": "string"
+          },
+          "transaction_id": {
+            "title": "Transaction Id",
+            "type": "string"
+          },
+          "transaction_type": {
+            "title": "Transaction Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id",
+          "occurred_at",
+          "transaction_type",
+          "amount",
+          "subject_wallet_id",
+          "direction",
+          "subject_balance_before",
+          "channel",
+          "device_id",
+          "region"
+        ],
+        "title": "TransactionOut",
+        "type": "object"
+      },
+      "TransactionView": {
+        "additionalProperties": false,
+        "properties": {
+          "assessment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssessmentOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/TransactionOut"
+          }
+        },
+        "required": [
+          "transaction",
+          "assessment"
+        ],
+        "title": "TransactionView",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "APIKeyHeader": {
+        "description": "A scoped API key, for services.",
+        "in": "header",
+        "name": "X-API-Key",
+        "type": "apiKey"
+      },
+      "HTTPBearer": {
+        "description": "A Keycloak access token for a person signed in to the realm.",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Scores mobile money Transactions for risk and explains why. Advisory only: it raises Alerts for people to review and never blocks a Transaction.\n\nPeople call with a Keycloak access token (`Authorization: Bearer ...`); services with a scoped API key (`X-API-Key: ...`). Health and readiness are open.",
+    "title": "Transaction risk scoring",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/alerts": {
+      "get": {
+        "description": "Alerts, newest first. For Analysts and Supervisors, or the `alerts:read` scope.",
+        "operationId": "get_alerts_v1_alerts_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "next_before of the previous page",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "next_before of the previous page",
+              "title": "Before"
+            }
+          },
+          {
+            "in": "query",
+            "name": "subject_wallet_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Wallet Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles or scopes do not permit this"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "description": "The API key's rate limit is exceeded; see Retry-After"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Get Alerts",
+        "tags": [
+          "alerts"
+        ]
+      }
+    },
+    "/v1/api-keys": {
+      "get": {
+        "description": "Every key ever issued, revoked and expired ones included, oldest first. Never the\nkeys themselves.",
+        "operationId": "list_api_keys_v1_api_keys_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ApiKeyOut"
+                  },
+                  "title": "Response List Api Keys V1 Api Keys Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles or scopes do not permit this"
+          },
+          "429": {
+            "description": "The API key's rate limit is exceeded; see Retry-After"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "List Api Keys",
+        "tags": [
+          "api keys"
+        ]
+      },
+      "post": {
+        "description": "Issue a key for a service. The key is in this response only: just its hash is\nstored.",
+        "operationId": "issue_api_key_v1_api_keys_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApiKeyIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedApiKeyOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles or scopes do not permit this"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "description": "The API key's rate limit is exceeded; see Retry-After"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Issue Api Key",
+        "tags": [
+          "api keys"
+        ]
+      }
+    },
+    "/v1/api-keys/{key_id}": {
+      "delete": {
+        "description": "Revoke a key at once, as after a leak.",
+        "operationId": "revoke_api_key_v1_api_keys__key_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles or scopes do not permit this"
+          },
+          "404": {
+            "description": "No such API key"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "description": "The API key's rate limit is exceeded; see Retry-After"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Revoke Api Key",
+        "tags": [
+          "api keys"
+        ]
+      }
+    },
+    "/v1/api-keys/{key_id}/rotate": {
+      "post": {
+        "description": "Issue a replacement with the same name, scopes, rate limit and expiry. The old key\nkeeps working for the overlap (a day by default), so the service switches without\ndowntime. A key is rotated once; rotate its replacement next time.",
+        "operationId": "rotate_api_key_v1_api_keys__key_id__rotate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RotationIn"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Rotation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedApiKeyOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles or scopes do not permit this"
+          },
+          "404": {
+            "description": "No such API key"
+          },
+          "409": {
+            "description": "The key is revoked, expired or already rotated"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "description": "The API key's rate limit is exceeded; see Retry-After"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Rotate Api Key",
+        "tags": [
+          "api keys"
+        ]
+      }
+    },
+    "/v1/health": {
+      "get": {
+        "description": "Liveness: the process is up. It does not touch the database. Open to all.",
+        "operationId": "health_v1_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health",
+        "tags": [
+          "operations"
+        ]
+      }
+    },
+    "/v1/models/active": {
+      "get": {
+        "description": "The model version that scores, and its Risk band thresholds. For every role, or the\n`models:read` scope.",
+        "operationId": "get_active_model_v1_models_active_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActiveModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles or scopes do not permit this"
+          },
+          "429": {
+            "description": "The API key's rate limit is exceeded; see Retry-After"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Get Active Model",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/v1/ready": {
+      "get": {
+        "description": "Readiness: the database answers and every migration has been applied. Open to all.",
+        "operationId": "ready_v1_ready_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            },
+            "description": "Not ready to score"
+          }
+        },
+        "summary": "Ready",
+        "tags": [
+          "operations"
+        ]
+      }
+    },
+    "/v1/score": {
+      "post": {
+        "description": "Score a Transaction and store it with its Risk assessment; a High Risk band raises\nan Alert. Idempotent on `transaction_id`: a repeat returns the stored assessment, marked\nwith the `Idempotent-Replayed: true` header, and raises no second Alert.\nNeeds the `score:write` scope.",
+        "operationId": "score_v1_score_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransactionIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssessmentOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles or scopes do not permit this"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "description": "The API key's rate limit is exceeded; see Retry-After"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Score",
+        "tags": [
+          "scoring"
+        ]
+      }
+    },
+    "/v1/transactions/{transaction_id}": {
+      "get": {
+        "description": "A stored Transaction and its Risk assessment, if it was scored. For Analysts and\nSupervisors, or the `transactions:read` scope.",
+        "operationId": "get_transaction_v1_transactions__transaction_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transaction_id",
+            "required": true,
+            "schema": {
+              "title": "Transaction Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles or scopes do not permit this"
+          },
+          "404": {
+            "description": "No such Transaction"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "description": "The API key's rate limit is exceeded; see Retry-After"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Get Transaction",
+        "tags": [
+          "transactions"
+        ]
+      }
+    }
+  }
+}

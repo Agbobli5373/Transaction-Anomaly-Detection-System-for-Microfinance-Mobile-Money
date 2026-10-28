@@ -19,15 +19,19 @@ from txrisk.store.database import (
 )
 from txrisk.store.history import PostgresHistory
 from txrisk.store.records import TransactionConflict, UnknownParty
+from txrisk.store.redis_history import RedisHistory, RedisHistoryCache
 from txrisk.store.roles import APP_ROLE, provision_app_role
-from txrisk.store.scoring import Scored, StoredScoring
+from txrisk.store.scoring import HistoryCache, Scored, StoredScoring
 from txrisk.store.seed import seed
 
 __all__ = [
     "APP_ROLE",
     "BackupConfig",
     "BackupError",
+    "HistoryCache",
     "PostgresHistory",
+    "RedisHistory",
+    "RedisHistoryCache",
     "RestoreCheck",
     "Scored",
     "StoredScoring",
