@@ -45,6 +45,13 @@ from txrisk.events import (
 )
 from txrisk.features import FeatureConfig, feature_table, load_feature_config
 from txrisk.generator import generate, load_config, write_dataset
+from txrisk.loadtest import (
+    check_stream,
+    check_sync,
+    load_loadtest_config,
+    read_stream_result,
+    read_sync_result,
+)
 from txrisk.models.bundle import train_bundle
 from txrisk.models.registry import MODEL_NAME, log_bundle
 from txrisk.observability.logs import configure_logging
@@ -526,6 +533,27 @@ def _replay(args: argparse.Namespace) -> int:
     return 0
 
 
+def _loadtest_check(args: argparse.Namespace) -> int:
+    if args.sync is None and args.stream is None:
+        print("error: pass --sync and/or --stream", file=sys.stderr)
+        return 2
+    config = load_loadtest_config(args.config)
+    checks = []
+    try:
+        if args.sync is not None:
+            checks += [("sync", c) for c in check_sync(read_sync_result(args.sync), config.sync)]
+        if args.stream is not None:
+            checks += [
+                ("stream", c) for c in check_stream(read_stream_result(args.stream), config.stream)
+            ]
+    except (OSError, ValueError, TypeError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    for part, check in checks:
+        print(f"{'PASS' if check.passed else 'FAIL'}  {part} {check.name}: {check.detail}")
+    return 0 if all(c.passed for _, c in checks) else 1
+
+
 def _purge(args: argparse.Namespace) -> int:
     url = _database_url(args)
     if url is None:
@@ -935,6 +963,20 @@ def main(argv: list[str] | None = None) -> int:
         help="serve Prometheus metrics here (default: $TXRISK_METRICS_PORT)",
     )
     rp.set_defaults(handler=_replay)
+
+    lt = commands.add_parser(
+        "loadtest", help="judge load-test results against the targets in config/loadtest.toml"
+    )
+    lt_commands = lt.add_subparsers(dest="loadtest_command", required=True)
+    lt_check = lt_commands.add_parser(
+        "check",
+        help="exit 1 unless a Locust sync run (its _stats.csv) and/or a stream run (its JSON) "
+        "meet the targets",
+    )
+    lt_check.add_argument("--sync", type=Path, help="a Locust --csv run's <prefix>_stats.csv")
+    lt_check.add_argument("--stream", type=Path, help="the JSON a stream_locustfile.py run wrote")
+    lt_check.add_argument("--config", type=Path, default=Path("config/loadtest.toml"))
+    lt_check.set_defaults(handler=_loadtest_check)
 
     pg = commands.add_parser(
         "purge", help="delete data older than its retention period, by simulation clock"

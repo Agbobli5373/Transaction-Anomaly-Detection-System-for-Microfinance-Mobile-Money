@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed produce replay scheduler purge schemas backup openapi workbench
+.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed produce replay scheduler purge schemas backup openapi workbench loadtest-sync loadtest-stream loadtest-check
 
 install:
 	uv sync
@@ -100,3 +100,27 @@ openapi:
 # Restoring one: docs/runbooks/restore.md
 backup:
 	docker compose run --rm backup
+
+# Load tests (README, Load tests). The sync run reads the API key it calls with from
+# reports/loadtest/api-key: one with the score:write scope and a high rate limit (README). LOADTEST_RPS is
+# the offered rate; add LOADTEST_EXPECT_DEGRADED=1 against an API with no model for the Degraded
+# mode run, and RUN=sync-degraded to keep its results apart.
+RUN ?= sync
+LOADTEST_RPS ?= 200
+LOADTEST_TIME ?= 120s
+API_URL ?= http://localhost:8000
+loadtest-sync:
+	mkdir -p reports/loadtest
+	LOADTEST_RPS=$(LOADTEST_RPS) uv run locust -f loadtests/locustfile.py --headless --host $(API_URL) \
+	  --users 40 --spawn-rate 40 --run-time $(LOADTEST_TIME) --reset-stats --csv reports/loadtest/$(RUN)
+
+# The stream run publishes LOADTEST_RATE Transactions a second to a stack that has been seeded
+# and has its workers running; writes reports/loadtest/stream.json.
+LOADTEST_RATE ?= 1500
+loadtest-stream:
+	LOADTEST_RATE=$(LOADTEST_RATE) uv run locust -f loadtests/stream_locustfile.py --headless \
+	  --host stream --users 4 --spawn-rate 4 --run-time $(LOADTEST_TIME)
+
+# Judges the runs in reports/loadtest/ against config/loadtest.toml; exits 1 if a target is missed.
+loadtest-check:
+	uv run txrisk loadtest check --sync reports/loadtest/$(RUN)_stats.csv --stream reports/loadtest/stream.json
