@@ -48,7 +48,7 @@ def test_migrate_applies_each_migration_once(empty_database: str):
     first = migrate(engine)
     second = migrate(engine)
 
-    assert first == ["0001_initial"]
+    assert first == ["0001_initial", "0002_api_keys"]
     assert second == []
     with engine.connect() as connection:
         assert pending_migrations(connection) == []

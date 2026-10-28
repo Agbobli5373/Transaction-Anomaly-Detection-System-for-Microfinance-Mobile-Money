@@ -6,7 +6,7 @@ for amounts with at most two decimals, so served features equal offline ones.
 """
 
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 
 metadata = sa.MetaData()
 
@@ -100,3 +100,18 @@ COUNTERPARTY_COLUMNS = {
     "payment": "merchant_id",
     "bill_payment": "biller_id",
 }
+
+api_keys = sa.Table(
+    "api_keys",
+    metadata,
+    sa.Column("key_id", sa.Text, primary_key=True),
+    sa.Column("name", sa.Text, nullable=False),
+    sa.Column("key_digest", sa.LargeBinary, nullable=False),
+    sa.Column("scopes", ARRAY(sa.Text), nullable=False),
+    sa.Column("rate_limit_per_minute", sa.Integer, nullable=False),
+    sa.Column("created_at", _TIME, nullable=False),
+    sa.Column("created_by", sa.Text, nullable=False),
+    sa.Column("expires_at", _TIME),
+    sa.Column("revoked_at", _TIME),
+    sa.Column("replaces", sa.Text),
+)

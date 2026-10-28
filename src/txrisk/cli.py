@@ -6,7 +6,7 @@ import logging
 import os
 import signal
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -321,6 +321,55 @@ def _seed(args: argparse.Namespace) -> int:
     return 0
 
 
+def _issue_api_key(args: argparse.Namespace) -> int:
+    from txrisk.api.auth import SCOPES
+    from txrisk.store import api_keys
+
+    url = _database_url(args)
+    if url is None:
+        return 2
+    unknown = sorted(set(args.scope) - set(SCOPES))
+    if unknown:
+        print(
+            f"error: unknown scope {', '.join(unknown)}; one of {', '.join(SCOPES)}",
+            file=sys.stderr,
+        )
+        return 2
+    # Real time, not event time: API keys expire in the real world (ADR 0005 covers scoring).
+    now = datetime.now(UTC)
+    with create_engine(url).begin() as connection:
+        issued = api_keys.issue(
+            connection,
+            name=args.name,
+            scopes=args.scope,
+            rate_limit_per_minute=args.rate_limit,
+            created_by="txrisk api-key",
+            now=now,
+        )
+    print(
+        f"issued API key {issued.record.key_id} for {args.name}; it is shown only once:",
+        file=sys.stderr,
+    )
+    print(issued.key)
+    return 0
+
+
+def _demo_sign_in(args: argparse.Namespace) -> int:
+    from txrisk.api.signin import demo_access, demo_signin_env
+
+    realm_url = args.realm_url or os.environ.get("TXRISK_OIDC_ISSUER")
+    if not realm_url:
+        print("error: pass --realm-url or set TXRISK_OIDC_ISSUER", file=sys.stderr)
+        return 2
+    if not os.environ.get(demo_signin_env(args.role)):
+        print(
+            f"error: set {demo_signin_env(args.role)} (see keycloak.env.example)", file=sys.stderr
+        )
+        return 2
+    print(demo_access(realm_url, args.role))
+    return 0
+
+
 def _produce(args: argparse.Namespace) -> int:
     servers = args.bootstrap_servers or os.environ.get(KAFKA_ENV)
     if not servers:
@@ -519,6 +568,24 @@ def main(argv: list[str] | None = None) -> int:
         help="load SIM swaps and Transactions before this day (default: the evaluation start)",
     )
     sd.set_defaults(handler=_seed)
+
+    key = commands.add_parser(
+        "api-key", help="issue a scoped API key for a service, straight into Postgres"
+    )
+    key.add_argument("--name", required=True, help="the service that will hold it")
+    key.add_argument(
+        "--scope", action="append", required=True, help="repeat for each, e.g. score:write"
+    )
+    key.add_argument("--rate-limit", type=int, default=600, help="requests a minute")
+    key.add_argument("--database-url", help=f"default: ${DATABASE_URL_ENV}")
+    key.set_defaults(handler=_issue_api_key)
+
+    demo = commands.add_parser(
+        "demo-sign-in", help="print an access token for a demo user of the Keycloak realm"
+    )
+    demo.add_argument("role", choices=["analyst", "supervisor", "admin"])
+    demo.add_argument("--realm-url", help="where to reach the realm (default: $TXRISK_OIDC_ISSUER)")
+    demo.set_defaults(handler=_demo_sign_in)
 
     srv = commands.add_parser("serve", help="run the scoring API, configured by TXRISK_* variables")
     srv.add_argument("--host", default="127.0.0.1")
