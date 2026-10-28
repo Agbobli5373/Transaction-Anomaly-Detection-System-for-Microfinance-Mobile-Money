@@ -99,6 +99,9 @@ def test_every_transaction_type_gets_the_features_that_apply_to_it(data_dir: Pat
     fan_in = kind.isin(["transfer", "cash_out"])
     assert features.loc[fan_in, "receiver_fan_in_24h"].notna().all()
     assert features.loc[~fan_in, "receiver_fan_in_24h"].isna().all()
+    transfer = kind == "transfer"
+    assert features.loc[transfer, "received_from_counterparty_24h"].notna().all()
+    assert features.loc[~transfer, "received_from_counterparty_24h"].isna().all()
     agent = kind.isin(["cash_in", "cash_out"])
     agent_columns = [
         "agent_cash_out_count_24h",

@@ -18,6 +18,9 @@ class TransactionFeatures:
     # Distinct Wallets that Transferred to the receiving Wallet in the last 24h; for a Cash-out
     # the receiving side is the Subject wallet itself. Empty for other Transaction types.
     receiver_fan_in_24h: int | None = None
+    # For a Transfer, what its Counterparty Transferred to the Subject wallet in the last 24h:
+    # money coming back the other way. Empty for other Transaction types.
+    received_from_counterparty_24h: float | None = None
     # The Agent's Cash-outs in the last 24h, for Cash-ins and Cash-outs; empty otherwise.
     agent_cash_out_count_24h: int | None = None
     agent_cash_out_amount_24h: float | None = None
@@ -38,6 +41,13 @@ class TransactionFeatures:
 def _fan_in(wallet_id: str, history: HistoryProvider, now: datetime) -> int:
     transfers = history.incoming_transfers(wallet_id, since=now - _DAY, before=now)
     return len({t.subject_wallet_id for t in transfers})
+
+
+def _received_from(
+    wallet_id: str, sender_id: str, history: HistoryProvider, now: datetime
+) -> float:
+    transfers = history.incoming_transfers(wallet_id, since=now - _DAY, before=now)
+    return sum((t.amount for t in transfers if t.subject_wallet_id == sender_id), 0.0)
 
 
 def _device_age(transaction: Transaction, past: Sequence[Transaction], now: datetime) -> float:
@@ -71,10 +81,13 @@ def transaction_features(
 
     Every window is measured back from `now` and includes its start; the wall clock is never read.
     """
-    receiver_fan_in = agent_count = agent_amount = agent_near_limit = None
+    receiver_fan_in = received_from = agent_count = agent_amount = agent_near_limit = None
     match transaction.transaction_type:
         case "transfer":
             receiver_fan_in = _fan_in(transaction.counterparty_id, history, now)
+            received_from = _received_from(
+                transaction.subject_wallet_id, transaction.counterparty_id, history, now
+            )
         case "cash_out":
             receiver_fan_in = _fan_in(transaction.subject_wallet_id, history, now)
     if transaction.transaction_type in ("cash_in", "cash_out"):
@@ -96,6 +109,7 @@ def transaction_features(
             transaction, history, now, min_history=config.min_history
         ),
         receiver_fan_in_24h=receiver_fan_in,
+        received_from_counterparty_24h=received_from,
         agent_cash_out_count_24h=agent_count,
         agent_cash_out_amount_24h=agent_amount,
         agent_near_limit_cash_out_count_24h=agent_near_limit,

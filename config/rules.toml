@@ -34,11 +34,30 @@ min_new_counterparty_transfers = 3
 severity = "high"
 min_distinct_senders_24h = 10
 
+# A second near-limit Cash-out at one Agent within 24 hours is already rare: about 2 a day on the
+# threshold days, against 1.2 a day for a fifth. See docs/evaluation/stacked.md, Agent structuring
+# and the Reversal scam.
 [rules.AGENT_STRUCTURING]
 severity = "high"
 # Matches near_limit_share in config/features.toml: at least 90% of the KYC tier limit.
 min_share_of_limit = 0.90
-min_near_limit_cash_outs_24h = 5
+min_near_limit_cash_outs_24h = 2
+
+# The Cash-in that loads a structured Cash-out: close to the limit, and far above anything the
+# Wallet has brought in lately. Like the usual-amount rules below, it waits until the Wallet is 30
+# days old. About 1.5 hits a day on the threshold days.
+[rules.NEAR_LIMIT_CASH_IN]
+severity = "high"
+min_share_of_limit = 0.90
+above_largest_multiple = 5
+min_wallet_age_days = 30
+
+# A Transfer to a first-time recipient who sent this Wallet money in the last 24 hours: the
+# "I sent that by mistake, please send it back" of the Reversal scam. It never fired on the train,
+# calibration or threshold days. See docs/evaluation/stacked.md, Agent structuring and the
+# Reversal scam.
+[rules.RETURN_TO_NEW_SENDER]
+severity = "high"
 
 # Both rules compare an amount with the Wallet's own usual amount, so neither fires in a Wallet's
 # first 30 days. On the training and calibration days, 6 of their 2,716 hits on new Wallets were

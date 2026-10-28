@@ -83,6 +83,7 @@ UNSUPPORTED_RULES = {
     "SIM_SWAP_DRAIN": "no SIM swaps",
     "NEW_DEVICE_BURST": "no devices",
     "AGENT_STRUCTURING": "no Agents or KYC tiers",
+    "NEAR_LIMIT_CASH_IN": "no KYC tiers",
     "NEAR_KYC_LIMIT": "no KYC tiers",
     "NEW_REGION": "no regions",
 }

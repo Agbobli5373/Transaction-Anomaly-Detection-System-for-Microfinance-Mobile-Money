@@ -114,6 +114,36 @@ def test_amount_is_compared_with_the_median_outgoing_amount_of_the_last_30_days(
     assert features.amount_to_median_30d == 3.0
 
 
+def test_amount_is_compared_with_the_largest_cash_in_of_the_last_30_days():
+    def cash_in(at: datetime, amount: float) -> Transaction:
+        return tx(at, amount, transaction_type="cash_in", counterparty="A00001")
+
+    history = history_of(
+        cash_in(_days_ago(30) - timedelta(seconds=1), 5000.0),
+        cash_in(_days_ago(30), 200.0),
+        cash_in(_days_ago(10), 100.0),
+        tx(_days_ago(5), 900.0),
+        tx(_days_ago(3), 600.0, transaction_type="cash_out", counterparty="A00001"),
+    )
+
+    features = subject_wallet_features(cash_in(NOW, 950.0), history, now=NOW)
+
+    # The 5000 GHS Cash-in is just outside the window; outgoing amounts never count.
+    assert features.amount_to_largest_cash_in_30d == 4.75
+
+
+def test_largest_cash_in_ratio_is_empty_when_the_wallet_had_no_cash_in_in_30_days():
+    history = history_of(
+        tx(_days_ago(31), 100.0, transaction_type="cash_in", counterparty="A00001"),
+        *(tx(_days_ago(d), 100.0) for d in (4, 3, 2, 1)),
+    )
+
+    features = subject_wallet_features(tx(NOW), history, now=NOW)
+
+    assert features.history_count == 5
+    assert features.amount_to_largest_cash_in_30d is None
+
+
 def test_time_since_the_wallets_last_transaction():
     history = history_of(*(tx(_days_ago(d)) for d in (5, 4, 3, 2)), tx(NOW - timedelta(hours=3)))
 
@@ -195,6 +225,7 @@ def test_transactions_later_than_the_one_being_scored_never_change_its_features(
     after = subject_wallet_features(scored, history_of(*earlier, *later), now=NOW)
 
     assert before.velocity_count_7d == 5
+    assert before.amount_to_largest_cash_in_30d == 3.2
     assert after == before
 
 
@@ -241,6 +272,7 @@ def test_worked_example_of_every_subject_wallet_feature():
         velocity_count_7d=3,
         velocity_amount_7d=120.0,
         amount_to_median_30d=3.0,
+        amount_to_largest_cash_in_30d=0.4,
         seconds_since_last_transaction=2700.0,
         new_counterparty=True,
         unusual_hour=False,

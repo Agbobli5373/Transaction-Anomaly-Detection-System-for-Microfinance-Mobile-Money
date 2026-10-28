@@ -108,6 +108,42 @@ def test_a_cash_out_sees_how_many_distinct_wallets_sent_to_the_subject_wallet_in
     assert features.receiver_fan_in_24h == 2
 
 
+def test_a_transfer_sees_what_its_counterparty_sent_the_subject_wallet_in_the_last_24h():
+    history = history_of(
+        transfer(MULE, SUBJECT, NOW - DAY - SECOND),
+        transfer(MULE, SUBJECT, NOW - DAY),
+        tx(NOW - timedelta(hours=2), wallet=MULE, counterparty=SUBJECT, amount=30.0),
+        transfer("w-other", SUBJECT, NOW - timedelta(hours=1)),
+        transfer(SUBJECT, MULE, NOW - timedelta(minutes=30)),
+        transfer(MULE, "w-other", NOW - timedelta(minutes=20)),
+        transfer(MULE, SUBJECT, NOW),
+    )
+
+    features = transaction_features(transfer(SUBJECT, MULE, NOW), history, now=NOW, config=CONFIG)
+
+    # 50 GHS at the window's start and 30 GHS later; not the earlier one, other senders, money
+    # going the other way, or the Transfer at the same moment.
+    assert features.received_from_counterparty_24h == 80.0
+
+
+def test_a_transfer_from_a_counterparty_that_sent_nothing_has_received_zero():
+    features = transaction_features(
+        transfer(SUBJECT, MULE, NOW), history_of(), now=NOW, config=CONFIG
+    )
+
+    assert features.received_from_counterparty_24h == 0.0
+
+
+def test_received_from_counterparty_is_empty_for_other_transaction_types():
+    history = history_of(transfer(AGENT, SUBJECT, NOW - timedelta(hours=1)))
+
+    for transaction_type in ("cash_in", "cash_out", "payment", "bill_payment"):
+        scored = tx(NOW, transaction_type, counterparty=AGENT)
+        features = transaction_features(scored, history, now=NOW, config=CONFIG)
+
+        assert features.received_from_counterparty_24h is None
+
+
 def test_fan_in_is_empty_for_cash_ins_payments_and_bill_payments():
     history = history_of(transfer("w-a", SUBJECT, NOW - timedelta(hours=1)))
 
@@ -240,13 +276,14 @@ def test_later_transactions_and_sim_swaps_never_change_a_transactions_features()
     market = Market(**{"w-min": "minimum"})
     earlier = [
         transfer("w-a", MULE, NOW - timedelta(hours=5)),
-        transfer("w-b", SUBJECT, NOW - timedelta(hours=4)),
+        transfer(MULE, SUBJECT, NOW - timedelta(hours=4)),
         cash_out("w-min", NOW - timedelta(hours=3), 950.0),
         cash_out("w-c", NOW - timedelta(hours=2), 30.0),
     ]
     later = [
         transfer("w-x", MULE, NOW + timedelta(microseconds=1)),
         transfer("w-y", SUBJECT, NOW + timedelta(minutes=1)),
+        transfer(MULE, SUBJECT, NOW + timedelta(minutes=1)),
         cash_out("w-min", NOW + timedelta(minutes=2), 990.0),
         cash_out("w-z", NOW + timedelta(hours=1), 70.0),
     ]
@@ -266,6 +303,8 @@ def test_later_transactions_and_sim_swaps_never_change_a_transactions_features()
         assert before.receiver_fan_in_24h == 1
         assert before.seconds_since_sim_swap == 21_600.0
         assert before.share_of_balance_moved == 0.8
+        transfer_back = 50.0 if scored.transaction_type == "transfer" else None
+        assert before.received_from_counterparty_24h == transfer_back
         assert after == before
 
     assert before.agent_cash_out_count_24h == 2
