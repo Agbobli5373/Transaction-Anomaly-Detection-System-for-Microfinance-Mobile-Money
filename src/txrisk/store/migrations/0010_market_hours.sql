@@ -1,4 +1,4 @@
--- The market's spend per clock hour (#47, ADR 0010): what the market spend index reads. Summing
+-- The market's spend per clock hour (#47, ADR 0011): what the market spend index reads. Summing
 -- every Transaction of eight days on each assessment would be slow, so a trigger keeps the hourly
 -- sums as Transactions are stored. Nothing here is Ground truth (ADR 0007): it is the sum of what
 -- the ledger already told us.

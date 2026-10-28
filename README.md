@@ -35,7 +35,7 @@ Each Transaction is scored with the clock at its own `occurred_at` (ADR 0005), a
 
 ### Busy days
 
-The High threshold is not fixed. On a festive day the whole market spends more, every amount-driven score rises with it, and a fixed threshold would raise twice the Alert budget (#47). Each assessment therefore reads the **market spend index** (the market's spend in the last 6 and 24 complete hours against the same hours on each of the previous 7 days, a feature in the shared feature function) and the bundle's High threshold rises with it, as if the Alert budget were `index ^ surge_elasticity` times smaller (`config/evaluation.toml`; ADR 0010). Medium does not move, so a Transaction that stops being High lands on the Medium watch list, and a Critical rule hit is High on any day. Postgres keeps the market's spend per hour in `market_hours`, maintained by a trigger on `transactions` (migration 0008).
+The High threshold is not fixed. On a festive day the whole market spends more, every amount-driven score rises with it, and a fixed threshold would raise twice the Alert budget (#47). Each assessment therefore reads the **market spend index** (the market's spend in the last 6 and 24 complete hours against the same hours on each of the previous 7 days, a feature in the shared feature function) and the bundle's High threshold rises with it, as if the Alert budget were `index ^ surge_elasticity` times smaller (`config/evaluation.toml`; ADR 0011). Medium does not move, so a Transaction that stops being High lands on the Medium watch list, and a Critical rule hit is High on any day. Postgres keeps the market's spend per hour in `market_hours`, maintained by a trigger on `transactions` (migration 0010).
 
 ### Degraded mode
 

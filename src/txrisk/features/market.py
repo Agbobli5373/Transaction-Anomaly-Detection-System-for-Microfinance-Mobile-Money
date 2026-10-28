@@ -3,7 +3,7 @@
 A festive season is a Benign anomaly: Transactions are more numerous and each is bigger. Every
 amount-driven score rises with it, so at a fixed High threshold the Alerts of a festive day double
 while the fraud does not (#47). The index measures that market-wide surge from history alone, so
-the High threshold can rise with it (ADR 0010).
+the High threshold can rise with it (ADR 0011).
 
 Spend is the GHS moved by all Transactions of the market in each complete clock hour before the
 Transaction. A recent window of the last 6 or 24 hours is compared with the same window on each of

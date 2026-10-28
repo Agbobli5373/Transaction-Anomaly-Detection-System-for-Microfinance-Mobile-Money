@@ -103,6 +103,19 @@ def _band(score: float, *, medium: float, high: float) -> RiskBand:
     return RiskBand.LOW
 
 
+def _stacked_band(
+    bundle: "ModelBundle", score: float, features: TransactionFeatures, critical: bool
+) -> RiskBand:
+    """The Risk band of a bundle's unrounded `score`, as the thresholds were set on unrounded
+    scores. On a busier day High starts higher (ADR 0011), but a Critical rule hit is judged by
+    the plain threshold, which its score is floored at: it is High on any day."""
+    thresholds = bundle.thresholds
+    index = features.market_spend_index
+    busy_high = thresholds.high_at(np.array([math.nan if index is None else index]))[0]
+    high = thresholds.high if critical else float(busy_high)
+    return _band(score, medium=thresholds.medium, high=high)
+
+
 def combine_hits(hits: list[RuleHit], config: RulesConfig) -> tuple[float, bool]:
     """The rules score (0-1) of these Rule hits, and whether any is a Critical rule."""
     weights = config.severity_weights
@@ -212,8 +225,7 @@ class ScoringService:
             return ShadowScore(
                 bundle.version, None, None, {}, elapsed() * 1000, f"{type(e).__name__}: {e}"
             )
-        thresholds = bundle.thresholds
-        band = _band(value, medium=thresholds.medium, high=thresholds.high)
+        band = _stacked_band(bundle, value, features, critical)
         return ShadowScore(bundle.version, round(value, 2), band, components, elapsed() * 1000)
 
     def _with_champion(
@@ -309,18 +321,10 @@ class ScoringService:
             contributions=bundle.contributions(inputs).iloc[0],
             config=self._rules,
         )
-        thresholds = bundle.thresholds
-        # Banded before rounding, as the thresholds were set on unrounded scores. On a busier day
-        # High starts higher (ADR 0010), but a Critical rule hit is judged by the plain threshold,
-        # which its score is floored at: it is High on any day.
-        index = features.market_spend_index
-        busy_high = thresholds.high_at(np.array([math.nan if index is None else index]))[0]
-        high = thresholds.high if critical else float(busy_high)
-        risk_band = _band(score, medium=thresholds.medium, high=high)
         return RiskAssessment(
             transaction_id=transaction.transaction_id,
             risk_score=round(score, RISK_SCORE_DECIMALS),
-            risk_band=risk_band,
+            risk_band=_stacked_band(bundle, score, features, critical),
             reasons=reasons,
             component_scores={
                 "rules": rules_score,

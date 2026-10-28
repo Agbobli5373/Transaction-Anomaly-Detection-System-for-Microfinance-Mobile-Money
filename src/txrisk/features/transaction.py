@@ -39,7 +39,7 @@ class TransactionFeatures:
     amount_to_kyc_limit: float = 0.0
     # How busy and how large the whole market's spending is, against the same hours on the
     # previous days (1 is a normal day). Not a model input: it only sets the High threshold on a
-    # festive day (ADR 0010). Empty until the market has history to compare with.
+    # festive day (ADR 0011). Empty until the market has history to compare with.
     market_spend_index: float | None = None
 
 

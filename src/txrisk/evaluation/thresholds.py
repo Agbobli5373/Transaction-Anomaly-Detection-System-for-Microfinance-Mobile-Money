@@ -14,7 +14,7 @@ SURGE_STEP = 0.05
 
 @dataclass(frozen=True)
 class SurgeThresholds:
-    """How the High threshold rises when the whole market is busier and spending more (ADR 0010).
+    """How the High threshold rises when the whole market is busier and spending more (ADR 0011).
 
     On a day when the market spend index is `index` (1 is a normal day) the Alert budget is shared
     among that many times more spending, so High is set as if the budget were `index ** elasticity`
