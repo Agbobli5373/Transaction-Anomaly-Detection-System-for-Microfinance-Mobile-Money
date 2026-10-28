@@ -3,6 +3,7 @@
 import os
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -71,7 +72,7 @@ class ApiSettings(BaseModel):
         return self.oidc_issuer.rstrip("/") + "/protocol/openid-connect/certs"
 
     @classmethod
-    def from_env(cls, environ: Mapping[str, str] = os.environ) -> "ApiSettings":
+    def from_env(cls, environ: Mapping[str, str] = os.environ) -> Self:
         """Settings from `TXRISK_DATABASE_URL`, `TXRISK_MODEL_BUNDLE` and so on; only
         `TXRISK_DATABASE_URL` is required. An empty value counts as unset."""
         values = {

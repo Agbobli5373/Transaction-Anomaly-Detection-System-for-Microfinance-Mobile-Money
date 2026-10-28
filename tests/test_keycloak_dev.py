@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 import yaml
-from conftest import _need_docker, keycloak_container
+from conftest import _require_docker, keycloak_container
 
 from txrisk.api.signin import demo_signin_env
 
@@ -18,7 +18,7 @@ DEMO_SIGN_INS = {demo_signin_env(role) for role in ROLES}
 
 def _exit_of(environment: dict[str, str]) -> tuple[int, str]:
     """How the compose Keycloak container ends with `environment`, and what it said."""
-    _need_docker()
+    _require_docker()
     container = keycloak_container()
     for name, value in environment.items():
         container.with_env(name, value)

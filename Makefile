@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed backup
+.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed produce schemas backup
 
 install:
 	uv sync
@@ -50,11 +50,12 @@ train:
 paysim:
 	uv run txrisk paysim --csv $(PAYSIM_CSV) --features data/features/paysim.parquet
 
-# The serving stack in Docker: Postgres, Keycloak on 127.0.0.1:8080, the migration job, then the
-# API on :8000. Reads its settings and credentials from .env and Keycloak's from keycloak.env (see
-# .env.example and keycloak.env.example); Keycloak refuses to start without its demo sign-ins.
+# The serving stack in Docker: Postgres, Keycloak on 127.0.0.1:8080, Redpanda, the migration job,
+# then the API on :8000 and a scoring worker. Reads its settings and credentials from .env and
+# Keycloak's from keycloak.env (see .env.example and keycloak.env.example); Keycloak refuses to
+# start without its demo sign-ins.
 up:
-	docker compose up --build --detach --wait api keycloak
+	docker compose up --build --detach --wait api worker keycloak
 
 down:
 	docker compose down
@@ -62,6 +63,15 @@ down:
 # Loads the parties and days 0-90 of data/generated into the compose Postgres as history.
 seed:
 	docker compose run --rm seed
+
+# Publishes days 90-120 of data/generated to transaction.created and sim_swap.recorded in
+# event-time order, standing in for the ledger; the workers score them (after `make seed`).
+produce:
+	docker compose run --rm produce
+
+# Rewrites the event topics' JSON Schemas in schemas/ from their models.
+schemas:
+	uv run txrisk schemas
 
 # One Postgres backup into the compose `backups` volume, pruned to config/backup.toml's count.
 # Restoring one: docs/runbooks/restore.md

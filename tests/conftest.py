@@ -47,8 +47,11 @@ def small_config(default_config: GeneratorConfig) -> GeneratorConfig:
     )
 
 
-def _need_docker() -> None:
-    """Skip the test without Docker locally; fail it in CI, where Docker must be running."""
+REDPANDA_IMAGE = "redpandadata/redpanda:v24.2.18"
+
+
+def _require_docker() -> None:
+    """Skip the test without Docker locally; in CI, fail instead."""
     import docker
 
     try:
@@ -67,9 +70,26 @@ def postgres() -> Iterator[str]:
     """
     from testcontainers.community.postgres import PostgresContainer
 
-    _need_docker()
+    _require_docker()
     with PostgresContainer("postgres:17-alpine", driver="psycopg") as container:
         yield container.get_connection_url()
+
+
+@pytest.fixture(scope="session")
+def redpanda() -> Iterator[str]:
+    """The bootstrap server of a throwaway Redpanda broker, run in Docker by Testcontainers.
+
+    Tests share it, each under its own topic prefix.
+    """
+    from testcontainers.community.kafka import RedpandaContainer
+
+    _require_docker()
+    container = RedpandaContainer(REDPANDA_IMAGE)
+    container.start(timeout=120)
+    try:
+        yield container.get_bootstrap_server()
+    finally:
+        container.stop()
 
 
 def create_database(server_url: str, name: str, *, template: str | None = None) -> str:
@@ -130,7 +150,7 @@ def keycloak_container() -> "DockerContainer":
 def keycloak() -> Iterator[Keycloak]:
     """Keycloak in Docker, importing the committed realm with freshly generated sign-in values
     for its demo users, exactly as compose does. It takes about half a minute to start."""
-    _need_docker()
+    _require_docker()
     sign_ins = {role: secrets.token_urlsafe(16) for role in ("analyst", "supervisor", "admin")}
     container = keycloak_container().with_exposed_ports(8080)
     for role, value in sign_ins.items():
