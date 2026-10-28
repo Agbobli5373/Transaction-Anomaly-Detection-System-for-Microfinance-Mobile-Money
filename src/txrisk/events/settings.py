@@ -20,5 +20,8 @@ class WorkerSettings(ApiSettings):
     consumer_group: str = "txrisk-scoring"
     batch_size: int = Field(default=500, ge=1)
 
+    # The worker serves its Prometheus metrics here (see ApiSettings.metrics_port).
+    metrics_port: int | None = Field(default=9100, ge=1, le=65535)
+
     def topics(self) -> Topics:
         return Topics(self.topic_prefix)

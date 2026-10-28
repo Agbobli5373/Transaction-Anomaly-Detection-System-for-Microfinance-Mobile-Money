@@ -25,6 +25,13 @@ nothing.
 With a `clock`, the worker advances the simulation clock (ADR 0005) to the latest event time in
 each batch, once the batch is stored and before its offsets are committed.
 
+Each Transaction is handled under the correlation id of its `transaction.created` event (its
+`correlation_id` header, else a new one), which every log line of its handling carries together
+with the Transaction ID, and which `score.produced` carries on. With tracing on, the worker
+continues the trace in the event's `traceparent` header, so the producer's publish and the
+worker's scoring are one trace. The worker serves Prometheus metrics, among them each partition's
+consumer lag: the topic's end offset less the group's committed offset.
+
 Transactions are keyed by Subject wallet, so each Subject wallet's own history is scored in
 order. Histories across Subject wallets (Transfers into a Wallet, an Agent's Cash-outs) span
 partitions, and are as complete as the workers on the other partitions have got.
@@ -47,6 +54,7 @@ from datetime import datetime
 from typing import Protocol
 
 from confluent_kafka import Consumer, KafkaError, KafkaException, Message, TopicPartition
+from opentelemetry import trace
 
 from txrisk.events.contracts import (
     FraudDiscovered,
@@ -56,14 +64,19 @@ from txrisk.events.contracts import (
     TransactionCreated,
     decode,
 )
-from txrisk.events.stream import Publisher, Topics
+from txrisk.events.stream import CORRELATION_HEADER, Publisher, Topics, header_value
 from txrisk.features import Transaction
+from txrisk.observability import logs, tracing
+from txrisk.observability.metrics import Metrics, stopwatch
 from txrisk.store import Rescored, Scored, TransactionConflict, UnknownParty
 
 log = logging.getLogger(__name__)
 
 # Commit failures that only mean the group rebalanced under the batch: its events are
 # redelivered to whichever worker now owns their partitions, which replays the stored results.
+# How often the consumer lag is read from the broker, in seconds: each read asks the broker.
+_LAG_INTERVAL = 5.0
+
 _REBALANCED = {
     KafkaError.REBALANCE_IN_PROGRESS,
     KafkaError.ILLEGAL_GENERATION,
@@ -110,8 +123,11 @@ class ScoringWorker:
         rescore_batch: int = 500,
         clock: Clock | None = None,
         labels: Labels | None = None,
+        metrics: Metrics | None = None,
     ) -> None:
         self._scoring = scoring
+        self._metrics = metrics
+        self._lag_read_at: float | None = None
         self._clock = clock
         self._labels = labels
         self._publisher = publisher
@@ -175,6 +191,7 @@ class ScoringWorker:
         any Fraud discoveries waiting. Returns how many events it held; 0 if none arrived
         within the poll timeout."""
         discovered = self._run_discoveries()
+        self._export_lag()
         messages = self._transactions.consume(self._batch_size, self._poll_timeout)
         if not messages:
             self._rescore_after_recovery()
@@ -194,6 +211,7 @@ class ScoringWorker:
         self._publisher.flush()
         self._commit(self._transactions, offsets)
         self._rescore_after_recovery()
+        self._export_lag(force=True)
         return discovered + len(messages)
 
     def _run_discoveries(self) -> int:
@@ -282,16 +300,56 @@ class ScoringWorker:
     def _handle_transaction(self, message: Message) -> datetime | None:
         """Score the Transaction and publish its result; returns its event time, or None if it
         was rejected."""
+        headers = _headers(message)
+        with (
+            logs.scope(header_value(headers, CORRELATION_HEADER)),
+            tracing.span(
+                f"consume {_topic(message)}",
+                kind=trace.SpanKind.CONSUMER,
+                context=tracing.extract(headers),
+                **{"messaging.kafka.partition": _partition(message)},
+            ),
+        ):
+            return self._score_event(message)
+
+    def _score_event(self, message: Message) -> datetime | None:
+        elapsed = stopwatch()
         try:
             transaction = decode(TransactionCreated, message.value() or b"").to_transaction()
+            logs.bind_transaction(transaction.transaction_id)
             scored = self.assess(transaction)
         except (InvalidEvent, UnknownParty, TransactionConflict) as e:
             self._reject(message, e)
             return None
+        except Exception:
+            if self._metrics is not None:
+                self._metrics.scoring_errors.labels("worker", "failure").inc()
+            log.exception("scoring failed; the batch will be redelivered")
+            raise
         self._publisher.publish(
             self._topics.scores,
             transaction.transaction_id,
             ScoreProduced.of(transaction, scored.assessment),
+        )
+        if self._metrics is not None:
+            self._metrics.observe_score(
+                "worker",
+                scored.assessment,
+                replayed=scored.replayed,
+                seconds=elapsed(),
+                occurred_at=transaction.occurred_at,
+            )
+            self._metrics.events_consumed.labels(
+                _topic(message), "replayed" if scored.replayed else "scored"
+            ).inc()
+        log.info(
+            "scored: %s",
+            scored.assessment.risk_band.value,
+            extra={
+                "risk_band": scored.assessment.risk_band.value,
+                "degraded": scored.assessment.degraded,
+                "replayed": scored.replayed,
+            },
         )
         return transaction.occurred_at
 
@@ -306,17 +364,49 @@ class ScoringWorker:
         topic = _topic(message)
         reason = f"{type(error).__name__}: {error}"
         log.warning("rejected %s[%d]@%d: %s", topic, _partition(message), _offset(message), reason)
+        if self._metrics is not None:
+            self._metrics.events_consumed.labels(topic, "rejected").inc()
+            self._metrics.scoring_errors.labels("worker", type(error).__name__).inc()
         self._publisher.publish_raw(
             Topics.dead_letter(topic),
             message.key(),
             message.value(),
             headers={
+                CORRELATION_HEADER: logs.current_correlation_id() or logs.new_correlation_id(),
+                **tracing.inject(),
                 "error": reason[:4096],
                 "topic": topic,
                 "partition": str(_partition(message)),
                 "offset": str(_offset(message)),
             },
         )
+
+    def _export_lag(self, *, force: bool = False) -> None:
+        """Set each assigned partition's consumer lag: the topic's end offset less the group's
+        committed offset (less its start, for a group that has committed nothing). Read from the
+        broker at most every few seconds, and after each batch commit when `force`d."""
+        if self._metrics is None:
+            return
+        now = time.monotonic()
+        if not force and self._lag_read_at is not None and now - self._lag_read_at < _LAG_INTERVAL:
+            return
+        self._lag_read_at = now
+        try:
+            assigned = self._transactions.assignment()
+            committed = self._transactions.committed(assigned, timeout=5) if assigned else []
+            lags = {}
+            for tp in committed:
+                low, high = self._transactions.get_watermark_offsets(tp, timeout=5, cached=False)
+                lags[(tp.topic, tp.partition)] = max(
+                    0, high - (tp.offset if tp.offset >= 0 else low)
+                )
+        except KafkaException as e:
+            log.warning("could not read the consumer lag: %s", e)
+            return
+        # Partitions this worker no longer owns are another worker's to report.
+        self._metrics.consumer_lag.clear()
+        for (topic, partition), lag in lags.items():
+            self._metrics.consumer_lag.labels(topic, str(partition)).set(lag)
 
     def _start(self, committed: TopicPartition) -> int:
         """Where reading a SIM swap partition starts: its committed offset, else its beginning."""
@@ -359,6 +449,11 @@ def _failed(message: Message) -> bool:
         raise KafkaException(error)
     log.warning("consumer error: %s", error.str())
     return True
+
+
+def _headers(message: Message) -> list[tuple[str, str | bytes | None]]:
+    found = message.headers() or []
+    return list(found.items()) if isinstance(found, dict) else found
 
 
 def _topic(message: Message) -> str:

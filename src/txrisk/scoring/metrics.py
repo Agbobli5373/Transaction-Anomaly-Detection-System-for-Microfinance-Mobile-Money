@@ -1,8 +1,8 @@
 """Counters the scoring path emits, behind a small interface.
 
-There is no metrics library yet: `InMemoryMetrics` counts in-process (and is what tests read).
-The observability ticket (#20) implements `Metrics` over Prometheus counters and passes it in;
-nothing here changes then.
+The scoring path counts through this interface so it does not depend on a metrics library.
+`txrisk.observability.metrics.Metrics` implements it over Prometheus counters, and is what the API
+and the worker pass in; `InMemoryMetrics` counts in-process and is the default (tests read it).
 """
 
 import threading
@@ -12,6 +12,9 @@ from typing import Protocol
 # An assessment was made with Rule hits alone because the Champion model was unavailable, too
 # slow or failed. Labelled `reason`: unavailable, timeout or error.
 DEGRADED_ASSESSMENTS = "txrisk_degraded_assessments_total"
+# An Alert was raised by re-scoring a Degraded Transaction; labelled `day`, the simulated day of
+# the Transaction, like the Alerts scoring raises (`txrisk_alerts_total`).
+ALERTS_RESCORED = "txrisk_alerts_rescored_total"
 # A Degraded Transaction was re-scored by the full model.
 RESCORED = "txrisk_rescored_total"
 # Loading the Champion model bundle failed.

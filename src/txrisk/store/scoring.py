@@ -12,6 +12,7 @@ import sqlalchemy as sa
 
 from txrisk.features import FeatureConfig, HistoryProvider, Transaction
 from txrisk.models.bundle import ModelBundle
+from txrisk.observability.tracing import span
 from txrisk.scoring import (
     Champion,
     FixedClock,
@@ -23,7 +24,7 @@ from txrisk.scoring import (
     RulesConfig,
     ScoringService,
 )
-from txrisk.scoring.metrics import RESCORED
+from txrisk.scoring.metrics import ALERTS_RESCORED, RESCORED
 from txrisk.store import records
 from txrisk.store.history import PostgresHistory
 
@@ -100,8 +101,13 @@ class StoredScoring:
         Raises `records.UnknownParty` for unregistered parties, and `records.TransactionConflict`
         if a different Transaction is stored under the same ID.
         """
+        with span("score.transaction", transaction_id=transaction.transaction_id):
+            return self._assess(transaction)
+
+    def _assess(self, transaction: Transaction) -> Scored:
         with self._engine.connect() as connection:
-            stored = self._stored(connection, transaction)
+            with span("store.lookup"):
+                stored = self._stored(connection, transaction)
             if stored is not None:
                 self._cached(connection, transaction)
                 return Scored(stored, replayed=True)
@@ -118,7 +124,7 @@ class StoredScoring:
             )
             assessment = service.assess(transaction)
 
-        with self._engine.begin() as connection:
+        with span("store.save"), self._engine.begin() as connection:
             # A concurrent call may have stored a Transaction under this ID since the check
             # above: the insert waits for it to commit, and raises `TransactionConflict` if it
             # differs from this one, so a different payload is never answered as a replay.
@@ -134,7 +140,7 @@ class StoredScoring:
             stored = records.stored_assessment(connection, transaction.transaction_id)
         assert stored is not None
         # Only now is the Transaction durably stored, which is what the cache may hold.
-        with self._engine.connect() as connection:
+        with span("cache.record"), self._engine.connect() as connection:
             self._cached(connection, transaction)
         return Scored(stored, replayed=not first)
 
@@ -219,6 +225,8 @@ class StoredScoring:
                 connection, transaction
             )
         self.metrics.increment(RESCORED)
+        if raised:
+            self.metrics.increment(ALERTS_RESCORED, day=transaction.occurred_at.date().isoformat())
         return int(raised)
 
     def _history(self, connection: sa.Connection) -> HistoryProvider:

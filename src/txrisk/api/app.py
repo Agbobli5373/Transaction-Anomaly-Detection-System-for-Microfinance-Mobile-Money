@@ -8,6 +8,7 @@ The API never changes the schema: `txrisk migrate` does that as its own job, and
 reports unready until it has.
 """
 
+import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -60,7 +61,10 @@ from txrisk.api.schemas import (
     TransactionView,
 )
 from txrisk.api.settings import ApiSettings
-from txrisk.scoring import RULES_ONLY, InMemoryMetrics
+from txrisk.observability import logs
+from txrisk.observability.asgi import CORRELATION_HEADER, Observability
+from txrisk.observability.metrics import Metrics, stopwatch
+from txrisk.scoring import RULES_ONLY
 from txrisk.store import (
     SimulationClock,
     StoredScoring,
@@ -72,6 +76,8 @@ from txrisk.store import (
     pending_migrations,
     records,
 )
+
+log = logging.getLogger(__name__)
 
 # Set on a scoring response that returns the assessment an earlier call stored.
 REPLAYED_HEADER = "Idempotent-Replayed"
@@ -113,7 +119,7 @@ def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _u
     """
     engine = create_app_engine(settings.database_url)
     rules = settings.rules()
-    metrics = InMemoryMetrics()
+    metrics = Metrics()
     scoring = StoredScoring(
         engine,
         features=settings.features(),
@@ -138,8 +144,16 @@ def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _u
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        yield
-        engine.dispose()
+        # Metrics are served on a port of their own, which compose never publishes, so they are
+        # not under /v1 and need no credential.
+        exporter = None if settings.metrics_port is None else metrics.serve(settings.metrics_port)
+        try:
+            yield
+        finally:
+            if exporter is not None:
+                exporter[0].shutdown()
+                exporter[0].server_close()
+            engine.dispose()
 
     app = FastAPI(
         title="Transaction risk scoring",
@@ -163,9 +177,11 @@ def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _u
         app,
         cors_origins=settings.cors_origins,
         allowed_headers=["Authorization", "Content-Type", API_KEY_HEADER],
-        exposed_headers=[REPLAYED_HEADER, "Retry-After"],
+        exposed_headers=[REPLAYED_HEADER, "Retry-After", CORRELATION_HEADER],
         max_request_bytes=settings.max_request_bytes,
     )
+    # Outermost, so a request any other layer refuses is still counted, logged and traced.
+    app.add_middleware(Observability, metrics=metrics)
     v1 = APIRouter(prefix="/v1")
 
     @v1.post(
@@ -186,12 +202,37 @@ def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _u
         hits alone: `degraded` is true, `model_version` is `rules-only` and the score and band
         are on the rules scale (see AssessmentOut). It is re-scored once the model is healthy.
         Needs the `score:write` scope."""
+        domain = transaction.to_transaction()
+        logs.bind_transaction(domain.transaction_id)
+        elapsed = stopwatch()
         try:
-            scored = scoring.assess(transaction.to_transaction())
+            scored = scoring.assess(domain)
         except UnknownParty as e:
+            metrics.scoring_errors.labels("api", "unknown_party").inc()
             raise HTTPException(422, f"not registered: {e}") from e
         except TransactionConflict as e:
+            metrics.scoring_errors.labels("api", "conflict").inc()
             raise HTTPException(409, f"a different Transaction is already stored as {e}") from e
+        except Exception:
+            metrics.scoring_errors.labels("api", "failure").inc()
+            log.exception("scoring failed")
+            raise
+        metrics.observe_score(
+            "api",
+            scored.assessment,
+            replayed=scored.replayed,
+            seconds=elapsed(),
+            occurred_at=domain.occurred_at,
+        )
+        log.info(
+            "scored: %s",
+            scored.assessment.risk_band.value,
+            extra={
+                "risk_band": scored.assessment.risk_band.value,
+                "degraded": scored.assessment.degraded,
+                "replayed": scored.replayed,
+            },
+        )
         # The simulation clock follows the latest event time seen (ADR 0005).
         clock.advance(transaction.occurred_at)
         if scored.replayed:

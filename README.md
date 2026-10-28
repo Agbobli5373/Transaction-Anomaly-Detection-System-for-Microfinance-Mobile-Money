@@ -135,6 +135,21 @@ make purge                        # one retention purge now
 - **Scheduler** (`txrisk scheduler`, `config/scheduler.toml`) fires each named job once per simulated day or week as the clock crosses it, so a replayed week fires the weekly jobs within minutes. The last period fired is kept in Postgres (`scheduled_jobs`), so restarts and a second scheduler never fire a period twice; periods the clock jumped over are not made up. A job runs as a detached one-off compose container (`--launcher compose`, `docker compose run` of the `job` service) or as a Kubernetes Job (`--launcher kubernetes`, in a cluster, named for the job and period).
 - **Retention** (`txrisk purge`, `config/retention.toml`) deletes rows older than each table's period, measured on the simulation clock, and the scheduler runs it daily. The audit log is kept longest (a validated rule, and at least 365 days), but by wall-clock age, because its entries are stamped with the wall clock; see Audit log. `purge` deletes, so it runs as the owner role (compose's `job` service, which the scheduler launches, uses the owner; `txrisk purge` refuses `txrisk_app`).
 
+## Observability
+
+`docker compose up` also starts Prometheus, Grafana and Jaeger, all bound to this machine only. Set `GF_SECURITY_ADMIN_PASSWORD` in `.env` first (Grafana refuses to start without it).
+
+| What | Where |
+| --- | --- |
+| Operations dashboard (Grafana) | <http://localhost:3001>, user `admin`, the password from `.env` |
+| Prometheus | <http://localhost:9090> |
+| Traces (Jaeger) | <http://localhost:16686>, once `TXRISK_TRACING_ENABLED=true` is in `.env` |
+
+- **Metrics.** The API (`TXRISK_METRICS_PORT`, 9101 in compose), the worker (9100), and `replay` and `produce` (9102) serve Prometheus metrics on a port of their own at `/metrics`. They are unauthenticated and carry only counts and timings, so compose never publishes them: Prometheus scrapes them over the compose network, and they are not under `/v1`. The scheduler serves them with `--metrics-port`. Run a replay with `docker compose run --rm --use-aliases replay` for Prometheus to find it. The series are `txrisk_scoring_duration_seconds` and `txrisk_http_request_duration_seconds` (latency histograms), `txrisk_scores_total{path,band,degraded}` (throughput, the Risk band mix and the Degraded mode rate), `txrisk_alerts_total{day}` (Alerts per simulated day), `txrisk_scoring_errors_total`, `txrisk_events_consumed_total`, `txrisk_consumer_lag{topic,partition}` (the worker reads each assigned partition's end offset less its committed offset) and `txrisk_events_published_total`. Degraded mode is counted from `RiskAssessment.degraded`, so whichever path produces a degraded assessment is counted.
+- **Logs** are one JSON object per line on stderr. Every line inside a scoring request or an event carries `correlation_id` and `transaction_id` (plus `trace_id` when tracing). The correlation id is the request's `X-Correlation-ID` (echoed in the response) or the event's `correlation_id` header, else a new one; it is put on `score.produced` and dead-letter events as a header. Tokens, API keys and MSISDN-shaped numbers are masked in every message and exception text.
+- **Traces** are off until `TXRISK_TRACING_ENABLED=true`: with it unset there is no exporter, no background thread and nothing in event headers. They go as OTLP/HTTP to `OTEL_EXPORTER_OTLP_ENDPOINT` (Jaeger, in compose). One Transaction is one trace: the API's request (or the producer's publish and the worker's consume) down through `score.transaction`, `store.lookup`, `features.compute`, `history.redis` (`cache.hit`) or `history.postgres.*`, `model.score`, `store.save` and `cache.record`. The `traceparent` event header carries the trace across Redpanda.
+- **Dashboard.** `deploy/grafana/dashboards/operations.json` is provisioned read-only with the datasources in `deploy/grafana/provisioning/`: latency percentiles, throughput, errors, consumer lag, Degraded mode rate, Alerts per day and the Risk band mix.
+
 ## CI/CD
 
 `.github/workflows/ci.yml` runs these jobs in parallel on every PR and push to main (uv's cache is on):
@@ -144,7 +159,7 @@ make purge                        # one retention purge now
 - `audit`: `pip-audit` over the locked dependencies. It has no severity filter, so any known vulnerability fails the build.
 - `trivy`: Trivy scans the built image, and the Dockerfile and compose file, and fails on high and critical findings. The image scan passes `--ignore-unfixed`: it skips vulnerabilities for which Debian has published no fixed version yet, because rebuilding cannot remove them (on 2026-10-28: 47 High findings in the Debian 13.7 base's util-linux, ncurses, systemd, acl and perl packages, all without a fix; the Python dependencies had none). The image build runs `apt-get upgrade`, so the gate fails as soon as a fix exists. There is no `.trivyignore` and the severity threshold is not lowered; the Dockerfile and compose scan has no exception, and neither has `pip-audit`.
 - `contracts`: a breaking change to the OpenAPI spec (`oasdiff breaking`) or to any `schemas/*.json` event schema, compared with the base commit, fails the build. `contracts/openapi.json` is the committed snapshot of `/v1/openapi.json`; after an API change, regenerate it with `make openapi`. A test fails while the snapshot is stale.
-- `compose`: the compose stack starts and reports ready.
+- `compose`: the compose stack starts and reports ready; Prometheus scrapes the API and worker, Grafana loads its provisioned datasources and the Operations dashboard, and Jaeger receives the API's traces.
 - `restore`: a backup restores into a fresh database and matches its source.
 - `publish`: on pushes to main, once the jobs above pass, pushes `ghcr.io/<owner>/<repo>:<commit sha>` using `GITHUB_TOKEN` (`packages: write`).
 

@@ -10,6 +10,7 @@ from datetime import datetime
 import sqlalchemy as sa
 
 from txrisk.features import SubjectHistory, Transaction, Wallet
+from txrisk.observability.tracing import traced
 from txrisk.store.tables import sim_swaps, transactions, wallets
 
 _t = transactions.c
@@ -51,6 +52,7 @@ class PostgresHistory:
         self._wallets: dict[str, Wallet] = {}
         self._subject: dict[tuple[str, datetime], SubjectHistory] = {}
 
+    @traced("history.postgres.wallet")
     def wallet(self, wallet_id: str) -> Wallet:
         if wallet_id not in self._wallets:
             row = self._connection.execute(
@@ -63,6 +65,7 @@ class PostgresHistory:
             self._wallets[wallet_id] = Wallet(registered_at=row[0], kyc_tier=row[1])
         return self._wallets[wallet_id]
 
+    @traced("history.postgres.subject_history")
     def subject_history(self, wallet_id: str, before: datetime) -> SubjectHistory:
         key = (wallet_id, before)
         if key not in self._subject:
@@ -77,6 +80,7 @@ class PostgresHistory:
             )
         return self._subject[key]
 
+    @traced("history.postgres.incoming_transfers")
     def incoming_transfers(
         self, wallet_id: str, since: datetime, before: datetime
     ) -> Sequence[Transaction]:
@@ -92,6 +96,7 @@ class PostgresHistory:
         )
         return [transaction_from_row(row) for row in rows]
 
+    @traced("history.postgres.agent_transactions")
     def agent_transactions(
         self, agent_id: str, since: datetime, before: datetime
     ) -> Sequence[Transaction]:
@@ -111,6 +116,7 @@ class PostgresHistory:
             found.append(transaction)
         return found
 
+    @traced("history.postgres.last_sim_swap")
     def last_sim_swap(self, wallet_id: str, before: datetime) -> datetime | None:
         latest: datetime | None = self._connection.execute(
             sa.select(sa.func.max(sim_swaps.c.occurred_at)).where(

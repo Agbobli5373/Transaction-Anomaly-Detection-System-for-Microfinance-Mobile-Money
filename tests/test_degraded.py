@@ -390,3 +390,21 @@ def test_the_application_role_may_only_replace_degraded_assessments(world: str):
         pytest.raises(sa.exc.DBAPIError, match="permission denied"),
     ):
         connection.execute(delete)
+
+
+def test_the_prometheus_metrics_count_degraded_assessments_and_rescoring():
+    from prometheus_client import generate_latest
+
+    from txrisk.observability.metrics import Metrics
+    from txrisk.scoring.metrics import ALERTS_RESCORED, RESCORED
+
+    metrics = Metrics()
+    metrics.increment(DEGRADED_ASSESSMENTS, reason="timeout")
+    metrics.increment(RESCORED)
+    metrics.increment(ALERTS_RESCORED, day="2026-01-05")
+
+    exposed = generate_latest(metrics.registry).decode()
+
+    assert 'txrisk_degraded_assessments_total{reason="timeout"} 1.0' in exposed
+    assert "txrisk_rescored_total 1.0" in exposed
+    assert 'txrisk_alerts_rescored_total{day="2026-01-05"} 1.0' in exposed
