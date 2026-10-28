@@ -104,24 +104,14 @@ def _utc_now() -> datetime:
 def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _utc_now) -> FastAPI:
     """The API over the database and model bundle in `settings`.
 
-<<<<<<< HEAD
     The Champion model bundle is loaded here if it can be, and again whenever it is needed and
     not loaded. One that is missing, corrupt, slow or failing does not stop the API: it scores in
     Degraded mode (Rule hits alone, marked degraded) and reports `degraded` on `/v1/ready`, until
     the model is healthy again, when the degraded assessments are re-scored in the background.
-    `wall_clock` is real time, used only for API key expiry and rate limits; scoring runs on each
-    Transaction's event time (ADR 0005).
-    """
-    engine = create_engine(settings.database_url)
-=======
-    The bundle is loaded once, here; a configured bundle that cannot be loaded stops the API from
-    starting rather than letting it score with something other than what was configured.
     `wall_clock` is real time, used only for API key expiry, rate limits and the time of audit
     entries; scoring runs on each Transaction's event time (ADR 0005).
     """
     engine = create_app_engine(settings.database_url)
-    bundle = None if settings.model_bundle is None else ModelBundle.load(settings.model_bundle)
->>>>>>> origin/main
     rules = settings.rules()
     metrics = InMemoryMetrics()
     scoring = StoredScoring(

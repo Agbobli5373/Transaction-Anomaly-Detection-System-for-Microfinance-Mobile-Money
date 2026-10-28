@@ -378,9 +378,15 @@ def test_the_application_role_may_only_replace_degraded_assessments(world: str):
     healthy = scoring.assess(on_app(tx(NOW, amount=40.0)))
     assert not healthy.degraded
 
-    with scoring.engine.begin() as connection:
-        with pytest.raises(sa.exc.DBAPIError, match="only a degraded assessment"):
-            connection.execute(sa.text("UPDATE risk_assessments SET risk_score = 99"))
-    with scoring.engine.begin() as connection:
-        with pytest.raises(sa.exc.DBAPIError, match="permission denied"):
-            connection.execute(sa.text("DELETE FROM risk_assessments"))
+    update = sa.text("UPDATE risk_assessments SET risk_score = 99")
+    with (
+        scoring.engine.begin() as connection,
+        pytest.raises(sa.exc.DBAPIError, match="only a degraded assessment"),
+    ):
+        connection.execute(update)
+    delete = sa.text("DELETE FROM risk_assessments")
+    with (
+        scoring.engine.begin() as connection,
+        pytest.raises(sa.exc.DBAPIError, match="permission denied"),
+    ):
+        connection.execute(delete)

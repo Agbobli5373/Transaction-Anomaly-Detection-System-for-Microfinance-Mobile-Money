@@ -72,6 +72,10 @@ OPERATIONAL: dict[tuple[str, str], str] = {
         "entries (an API request has no event time): keys expire, requests are limited and "
         "audits are stamped in real time, while scoring runs on the Transaction's event time"
     ),
+    ("scoring/champion.py", "time.monotonic"): (
+        "the Champion model's circuit breaker: how long to skip a failing model before trying it "
+        "again. It decides whether the model is tried, never what a Transaction scores"
+    ),
     ("api/auth.py", "time.monotonic"): (
         "when the Keycloak signing keys were last fetched, to decide when to refresh them"
     ),

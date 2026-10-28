@@ -259,10 +259,12 @@
             "type": "object"
           },
           "degraded": {
+            "description": "True when the Champion model was unavailable, too slow or failed, and this was scored from Rule hits alone: model_version is then `rules-only` and the score is on the rules scale, not comparable with stacked scores. The full model re-scores it once healthy, replacing the stored assessment (a High keeps its Alert; a new High raises one).",
             "title": "Degraded",
             "type": "boolean"
           },
           "model_version": {
+            "description": "Which scale risk_score and risk_band are on. A bundle version: the stacked scale, a probability x 100, where High starts at that bundle's threshold (see /v1/models/active). The value `rules-only`: the rules scale, whole numbers 0-100 where High starts at 50 (`bands` in config/rules.toml) and a Critical rule hit is at least 90.",
             "title": "Model Version",
             "type": "string"
           },
@@ -454,6 +456,57 @@
           "api_key"
         ],
         "title": "IssuedApiKeyOut",
+        "type": "object"
+      },
+      "Readiness": {
+        "additionalProperties": false,
+        "description": "Ready to score. `degraded` says whether it scores with the Champion model.",
+        "properties": {
+          "awaiting_rescore": {
+            "default": 0,
+            "title": "Awaiting Rescore",
+            "type": "integer"
+          },
+          "degraded": {
+            "default": false,
+            "title": "Degraded",
+            "type": "boolean"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "unavailable"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "Readiness",
         "type": "object"
       },
       "ReasonOut": {
@@ -1477,7 +1530,7 @@
     },
     "/v1/models/active": {
       "get": {
-        "description": "The model version that scores, and its Risk band thresholds. For every role, or the\n`models:read` scope.",
+        "description": "The model version that scores, and its Risk band thresholds. For every role, or the\n`models:read` scope. While the Champion model is down this is `rules-only`, with the\nrules bands.",
         "operationId": "get_active_model_v1_models_active_get",
         "responses": {
           "200": {
@@ -1516,14 +1569,14 @@
     },
     "/v1/ready": {
       "get": {
-        "description": "Readiness: the database answers and every migration has been applied. Open to all.",
+        "description": "Readiness: the database answers and every migration has been applied. Open to all.\n\nDegraded mode does not make the service unready, as it can still score: the answer is\n200 with `degraded: true` and the `reason`, so a load balancer keeps sending traffic\nwhile monitoring sees the Champion model is down.",
         "operationId": "ready_v1_ready_get",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Status"
+                  "$ref": "#/components/schemas/Readiness"
                 }
               }
             },
@@ -1548,7 +1601,7 @@
     },
     "/v1/score": {
       "post": {
-        "description": "Score a Transaction and store it with its Risk assessment; a High Risk band raises\nan Alert. Idempotent on `transaction_id`: a repeat returns the stored assessment, marked\nwith the `Idempotent-Replayed: true` header, and raises no second Alert.\nNeeds the `score:write` scope.",
+        "description": "Score a Transaction and store it with its Risk assessment; a High Risk band raises\nan Alert. Idempotent on `transaction_id`: a repeat returns the stored assessment, marked\nwith the `Idempotent-Replayed: true` header, and raises no second Alert.\n\nIf the Champion model is unavailable or too slow, the Transaction is scored from Rule\nhits alone: `degraded` is true, `model_version` is `rules-only` and the score and band\nare on the rules scale (see AssessmentOut). It is re-scored once the model is healthy.\nNeeds the `score:write` scope.",
         "operationId": "score_v1_score_post",
         "requestBody": {
           "content": {

@@ -595,7 +595,7 @@ def _stored_scoring(settings: ApiSettings, engine: sa.Engine) -> StoredScoring:
 def _rescore(args: argparse.Namespace) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     settings = ApiSettings.from_env()
-    engine = create_engine(settings.database_url)
+    engine = create_app_engine(settings.database_url)
     with engine.connect() as connection:
         pending = pending_migrations(connection)
     if pending:
