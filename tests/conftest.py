@@ -79,7 +79,7 @@ def postgres() -> Iterator[str]:
 def redis_url() -> Iterator[str]:
     """The URL of a throwaway Redis server, run in Docker by Testcontainers.
 
-    Tests share it and begin from `flush_redis`, which they ask for by name.
+    Tests share it, and each starts by flushing what it uses.
     """
     from testcontainers.community.redis import RedisContainer
 
