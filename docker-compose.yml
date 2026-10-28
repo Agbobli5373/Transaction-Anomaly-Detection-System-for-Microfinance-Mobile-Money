@@ -1,4 +1,4 @@
-# The development stack: Postgres, Redpanda, the migration job, the scoring API and the scoring
+# The development stack: Postgres, Redis, Redpanda, the migration job, the scoring API and the scoring
 # workers. Every service reads .env (copy .env.example and fill it in); no credential is written here.
 #   docker compose up --build             # Postgres, Redpanda, migrations, the API on :8000, a worker
 #   docker compose run --rm seed          # load data/generated as history (after `make generate`)
@@ -16,6 +16,8 @@ x-txrisk: &txrisk
     # No credential in the URL: libpq reads the database password from PGPASSWORD in .env.
     TXRISK_DATABASE_URL: postgresql://txrisk@postgres:5432/txrisk
     TXRISK_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+    # The recent-history cache (ADR 0006). Every service that stores Transactions must use it.
+    TXRISK_REDIS_URL: redis://redis:6379/0
 
 services:
   postgres:
@@ -31,6 +33,20 @@ services:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "txrisk", "-d", "txrisk"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # The recent-history cache (ADR 0006): reachable as redis:6379 on the compose network only, with
+  # no published port, so it takes no password. A cache holds nothing Postgres does not, and
+  # nothing is persisted: restarting it just means reads fall back to Postgres until it refills.
+  # Anywhere beyond a development machine, run an authenticated Redis and pass its credential
+  # through .env, never in a committed URL.
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -75,6 +91,8 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
 
   # One-off: `docker compose run --rm produce`, standing in for the ledger. Publishes the
   # Transactions and SIM swaps from the day `seed` stops at, in event-time order.
@@ -110,6 +128,8 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     healthcheck:
       test:
         - CMD
@@ -132,6 +152,8 @@ services:
       migrate:
         condition: service_completed_successfully
       redpanda:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
 volumes:

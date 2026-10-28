@@ -60,6 +60,19 @@ def postgres() -> Iterator[str]:
 
 
 @pytest.fixture(scope="session")
+def redis_url() -> Iterator[str]:
+    """The URL of a throwaway Redis server, run in Docker by Testcontainers.
+
+    Tests share it and begin from `flush_redis`, which they ask for by name.
+    """
+    from testcontainers.community.redis import RedisContainer
+
+    _require_docker()
+    with RedisContainer("redis:7-alpine") as container:
+        yield f"redis://{container.get_container_host_ip()}:{container.get_exposed_port(6379)}/0"
+
+
+@pytest.fixture(scope="session")
 def redpanda() -> Iterator[str]:
     """The bootstrap server of a throwaway Redpanda broker, run in Docker by Testcontainers.
 

@@ -4,9 +4,9 @@ The sync API and the stream workers both use it: whichever path scores a Transac
 stores the assessment, and every later call, from either path, gets that stored assessment back.
 """
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Protocol
 
 import sqlalchemy as sa
 
@@ -15,6 +15,18 @@ from txrisk.models.bundle import ModelBundle
 from txrisk.scoring import FixedClock, RiskAssessment, RiskBand, RulesConfig, ScoringService
 from txrisk.store import records
 from txrisk.store.history import PostgresHistory
+
+
+class HistoryCache(Protocol):
+    """A cache in front of Postgres for the history the features read: `RedisHistoryCache`."""
+
+    def history(self, connection: sa.Connection) -> HistoryProvider:
+        """A history that answers as `PostgresHistory` does, over `connection` as its fallback."""
+        ...
+
+    def record(self, connection: sa.Connection, transaction: Transaction) -> None:
+        """Add a Transaction that is durably stored; idempotent."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -32,15 +44,16 @@ class StoredScoring:
         features: FeatureConfig,
         rules: RulesConfig,
         bundle: ModelBundle | None = None,
-        history: Callable[[sa.Connection], HistoryProvider] = PostgresHistory,
+        cache: HistoryCache | None = None,
     ) -> None:
-        """`history` gives the history the features read, over the connection an assessment
-        runs in; by default it is Postgres itself."""
+        """With a `cache`, the features read their history through it, and every Transaction is
+        added to it once stored (and again if it was already stored, which repairs an add that
+        failed earlier). Without one, history is read from Postgres itself."""
         self._engine = engine
         self._features = features
         self._rules = rules
         self._bundle = bundle
-        self._history = history
+        self._cache = cache
 
     def assess(self, transaction: Transaction) -> Scored:
         """The Transaction's Risk assessment, scored and stored with the Transaction if it is new.
@@ -53,6 +66,7 @@ class StoredScoring:
         with self._engine.connect() as connection:
             stored = self._stored(connection, transaction)
             if stored is not None:
+                self._cached(connection, transaction)
                 return Scored(stored, replayed=True)
             missing = records.unknown_parties(connection, transaction)
             if missing:
@@ -81,7 +95,19 @@ class StoredScoring:
             # Read back, so this answer and every replay of it are the same stored assessment.
             stored = records.stored_assessment(connection, transaction.transaction_id)
         assert stored is not None
+        # Only now is the Transaction durably stored, which is what the cache may hold.
+        with self._engine.connect() as connection:
+            self._cached(connection, transaction)
         return Scored(stored, replayed=not first)
+
+    def _history(self, connection: sa.Connection) -> HistoryProvider:
+        if self._cache is None:
+            return PostgresHistory(connection)
+        return self._cache.history(connection)
+
+    def _cached(self, connection: sa.Connection, transaction: Transaction) -> None:
+        if self._cache is not None:
+            self._cache.record(connection, transaction)
 
     def record_sim_swap(self, wallet_id: str, occurred_at: datetime) -> bool:
         """Store a SIM swap as history, for the Transactions after it; False if it was already

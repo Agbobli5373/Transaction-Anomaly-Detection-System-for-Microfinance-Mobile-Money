@@ -14,13 +14,17 @@ from txrisk.store.backup import (
 from txrisk.store.database import create_engine, migrate, pending_migrations
 from txrisk.store.history import PostgresHistory
 from txrisk.store.records import TransactionConflict, UnknownParty
-from txrisk.store.scoring import Scored, StoredScoring
+from txrisk.store.redis_history import RedisHistory, RedisHistoryCache
+from txrisk.store.scoring import HistoryCache, Scored, StoredScoring
 from txrisk.store.seed import seed
 
 __all__ = [
     "BackupConfig",
     "BackupError",
+    "HistoryCache",
     "PostgresHistory",
+    "RedisHistory",
+    "RedisHistoryCache",
     "RestoreCheck",
     "Scored",
     "StoredScoring",
