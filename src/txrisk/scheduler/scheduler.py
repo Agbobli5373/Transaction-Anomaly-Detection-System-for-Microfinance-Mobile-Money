@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert
 
+from txrisk.observability.metrics import Metrics
 from txrisk.scheduler.jobs import JobSpec, period_of
 from txrisk.scheduler.launcher import JobLauncher
 from txrisk.scoring import Clock
@@ -45,12 +46,14 @@ class Scheduler:
         jobs: tuple[JobSpec, ...],
         *,
         timezone: ZoneInfo | None = None,
+        metrics: Metrics | None = None,
     ) -> None:
         self._engine = engine
         self._clock = clock
         self._launcher = launcher
         self._jobs = jobs
         self._timezone = timezone or ZoneInfo("UTC")
+        self._metrics = metrics
 
     def tick(self) -> list[Fired]:
         """Launch every job whose period the clock has entered since it last fired.
@@ -71,6 +74,8 @@ class Scheduler:
                 continue
             if found is not None:
                 fired.append(found)
+                if self._metrics is not None:
+                    self._metrics.scheduler_jobs.labels(job.name).inc()
                 log.info("fired %s for %s as %s", job.name, period, found.launch_ref)
         return fired
 
