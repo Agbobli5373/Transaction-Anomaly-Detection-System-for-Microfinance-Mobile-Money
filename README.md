@@ -1,18 +1,102 @@
 # Transaction Risk Scoring for Mobile Money
 
-Scores Ghana-style mobile money Transactions for risk and explains why, so people can review unusual activity. The system flags; it never blocks a Transaction or declares fraud. See [GLOSSARY.md](GLOSSARY.md) for the vocabulary and [docs/adr](docs/adr) for key decisions.
+Scores Ghana-style mobile money Transactions for risk and explains why, so people can review unusual activity. The system flags; it never blocks a Transaction or declares fraud (ADR 0001). See [GLOSSARY.md](GLOSSARY.md) for the vocabulary and [docs/adr](docs/adr) for key decisions.
+
+It is built to production standard in the parts we control (authentication, audit, observability, gated model promotion, drift monitoring, case management, a Degraded mode fallback, CI/CD, Helm) and runs on synthetic data (ADR 0003). Read the limitations below before relying on any number in this repository.
+
+Contents: [Limitations](#limitations-read-this-first) | [Data protection](#data-protection) | [Quickstart](#quickstart) | [Architecture](#architecture) | [Scoring API](#scoring-api) | [Event stream](#event-stream) | [Operations and runbooks](#operations-and-runbooks) | [Commands](#commands) | [CI/CD](#cicd)
+
+## Limitations (read this first)
+
+1. **The data is synthetic, and the rules were designed with the generator.** The dataset comes from our own generator (ADR 0002). The generator's Fraud scenarios and the Rule hits were designed together, so the rules' recall on the generator's scenarios flatters them. Real-world performance is unknown. The one check on data we did not design, the PaySim benchmark (#33), **has not been run**: it needs the PaySim CSV (Kaggle `ealaxi/paysim1`) from the repo owner, and `uv run txrisk paysim --csv <file>` produces it. [docs/evaluation/paysim.md](docs/evaluation/paysim.md) still holds placeholders.
+2. **The Risk score is not the probability of fraud.** The stacker's probability is the chance of Fraud that gets *discovered*, not ground truth (ADR 0007). Fraud labels arrive 1-30 days late, only about two frauds in three are ever discovered, and an undiscovered fraud is learned as legitimate. Ground truth never reaches training or serving; offline evaluation reports recall against Ground truth and against discovered labels, and the gap between them is deliberate. Label-based metrics for recent days understate recall until the Label maturity window (30 days) has passed.
+3. **An accepted miss from #45: Wallets 180 days and over.** Fixing the false Alerts on new Wallets lowered the High threshold, and because the Alert budget is fixed, the freed slots went to older Wallets. Their false positive rate at High rose 22% relative (0.43% to 0.52%) against the 20% limit set in #45. It stays inside the 0.40-0.70% range of every other segment and bought 3 more frauds at High. Details: [docs/evaluation/stacked.md](docs/evaluation/stacked.md).
+4. **No throughput is claimed.** The load tests (#31) did not meet their targets. On a shared 4-CPU machine: sync `/v1/score` served 3.7 req/s at p95 17 s (target 200 req/s at p95 under 200 ms); the stream committed about 29 Tx/s (target 1,000); Degraded mode served 29.7 req/s. The scoring path needs a batch path, fewer Postgres round trips per scoring and cheaper explanations, then a rerun on a dedicated machine. #31 is still open. See [Load tests](#load-tests).
+5. **CI decisions that relax a check, on purpose.** The Trivy image scans pass `--ignore-unfixed` (vulnerabilities with no published fix are skipped; the gate fails as soon as a fix exists). The Helm chart ignores `KSV-0014` (read-only root filesystems) for the chart only, in `.trivyignore.yaml`, with its reason. See [CI/CD](#cicd).
+6. **Repository settings only the owner can make** are not in place until the owner makes them: [branch protection on `main`](#branch-protection-repo-owner) with the required checks.
+7. **Out of our control (ADR 0003).** Real operator data, regulatory approval, an institution's model risk sign-off, external penetration testing and contractual SLAs. The ledger is an event schema we define, with replay standing in for it, and a Suspicious transaction report is an export file the system never files.
+8. **Other known limits.** The first Champion trains on labels discovered by day 90 only, so it is weaker than one trained on perfect labels. Fraud found only through Cases is biased toward what the system already Alerted. Wallets with little history are scored with empty history features, so a legitimate new customer is more likely to be flagged. The Kubernetes deployment is a single-replica development one ([runbook](docs/runbooks/kubernetes.md)). The dev Keycloak keeps no state, and the workbench keeps sessions in memory. The stack does not schedule backups ([restore runbook](docs/runbooks/restore.md)).
+
+## Data protection
+
+This is a simulation on synthetic data. Nothing here is a compliance claim under any data-protection law, and no legal review has been done. What the code does:
+
+- **Pseudonymised Wallet IDs.** A Wallet ID is an HMAC-SHA256 of the phone number under `TXRISK_PSEUDONYM_KEY`, unrecoverable without the key (`pseudonymise` in `src/txrisk/generator/population.py`). The key lives only in the gitignored `.env`. Customer names are never stored or used, and no model sees a phone number.
+- **Masking.** Anything shaped like a phone number in free text (Case notes, report summaries) is masked to its last three digits on screen and in Suspicious transaction report exports. Logs mask tokens, API keys and phone-shaped numbers. The audit log stores identifiers and small facts only, and replaces an object ID that looks like a phone number with `[redacted]`.
+- **Ground truth never reaches the system** (ADR 0007). Training, monitoring and serving see only Fraud labels from discoveries at their event time.
+- **Audit log, append-only.** The API and workers connect as the least-privilege database role `txrisk_app`, which can only SELECT and INSERT on `audit_log`, owns no table and cannot create objects. Triggers refuse UPDATE, DELETE and TRUNCATE; the only exit is `audit_log_purge`, owner-only, refusing periods under 365 days.
+- **Retention** (`config/retention.toml`, enforced by `txrisk purge`, which the scheduler runs daily): `model_inputs` 60 days; `transactions`, `risk_assessments`, `alerts`, `sim_swaps`, `fraud_labels` and `monitoring_metrics` 365; `challenger_scores` 30; `audit_log` 2555 (wall-clock days, never under 365).
+- **Secrets.** No credential is committed. They come from the gitignored `.env` and `keycloak.env`, or from Kubernetes Secrets generated at deploy time. API keys are stored as SHA-256 digests and shown once.
+- **The model card** (`GET /v1/models/{version}/card`) states the same.
+
+**Not covered:** encryption at rest or key management for Postgres, backups and the models volume (compose has none, and its Redis has no password); data-subject rights processes (access, erasure); a data-protection impact assessment; a lawful-basis analysis; cross-border transfer rules; penetration testing; any regulator's or institution's sign-off. Retention periods are settings, not legal advice. Pseudonymisation is not anonymisation: whoever holds the key can recompute IDs from phone numbers.
 
 ## Quickstart
 
-Requires [uv](https://docs.astral.sh/uv/).
+Requires [uv](https://docs.astral.sh/uv/) and Python 3.12. The tests, `make up` and the kind deployment also need Docker running.
+
+**Offline only (no containers):**
 
 ```bash
 uv sync
 cp .env.example .env   # then set TXRISK_PSEUDONYM_KEY to a long random value
-make generate          # writes the synthetic dataset to data/generated/
-make features          # writes point-in-time features to data/features/
-make check             # lint, type-check and test
+make generate          # writes the synthetic dataset to data/generated/ (about a minute)
+make features          # writes point-in-time features to data/features/ (about 12 minutes)
+make train             # trains a model bundle into models/<version>/
+make check             # lint, type-check and test (the tests need Docker)
 ```
+
+**The compose stack:**
+
+```bash
+cp .env.example .env && cp keycloak.env.example keycloak.env
+# fill every empty value (openssl rand -hex 16 is fine; AUTH_SECRET wants openssl rand -hex 32),
+# and set TXRISK_MODEL_BUNDLE=/models/<version> from `make train`
+make up                         # Postgres, Redis, Redpanda, Keycloak, the migration job, the API on :8000, one worker
+make seed                       # parties and days 0-90 as history, with the Fraud labels discovered before day 90
+curl localhost:8000/v1/ready
+make replay SECONDS_PER_DAY=5   # days 90-120 through the stream; the workers score them
+make workbench                  # the Case workbench on http://localhost:3000
+```
+
+`docker compose up` also starts Prometheus, Alertmanager, Grafana, Jaeger, the Pushgateway and the alert sink; addresses are in [Where things run](#case-workbench). Stop with `make down`.
+
+**Kubernetes (kind)** needs `kind`, `kubectl`, `helm` and `openssl`:
+
+```bash
+make kind-up kind-deploy kind-smoke   # cluster, the whole stack from the Helm chart, an end-to-end scoring smoke test
+make kind-down
+```
+
+Details and limits: [docs/runbooks/kubernetes.md](docs/runbooks/kubernetes.md).
+
+## Architecture
+
+```mermaid
+flowchart LR
+  ledger["Ledger (simulated by produce and replay)"] -->|"transaction.created, sim_swap.recorded"| rp[(Redpanda)]
+  rp --> worker["worker"]
+  svc["Services"] -->|"POST /v1/score"| api["API (FastAPI, /v1)"]
+  worker --> scoring["ScoringService: features, rules, models, stacker"]
+  api --> scoring
+  scoring <--> pg[(Postgres)]
+  scoring <-.->|recent-history cache| redis[(Redis)]
+  worker -->|"score.produced, dead letters"| rp
+  pg --> outbox["outbox"]
+  outbox -->|fraud.discovered| rp
+  rp -->|fraud.discovered| worker
+  wb["Case workbench (Next.js)"] --> api
+  ep["Evaluation pages (Streamlit)"] --> api
+  kc["Keycloak (OIDC)"] -.-> api
+  sched["scheduler"] --> jobs["jobs: monitor, retrain, purge, rescore"]
+  jobs --> pg
+  jobs --> pgw["Pushgateway"] --> prom["Prometheus"] --> am["Alertmanager"] --> sink["alert sink"]
+  api --> prom
+  worker --> prom
+  prom --> graf["Grafana"]
+```
+
+The API and the workers share one `ScoringService` and one idempotent store, so both paths give the same assessment for a Transaction. The code is in `src/txrisk/`: `generator`, `features`, `scoring` (rules, reasons, the service), `models` (bundle, model card), `evaluation`, `store` (Postgres, migrations, the Redis cache), `api`, `events` (worker, producer, outbox, replay), `scheduler`, `monitoring`, `retraining`, `promotion`, `observability`, `benchmark` and `loadtest`. The services are in [docker-compose.yml](docker-compose.yml), and the Helm chart deploys the same stack.
 
 ## Scoring API
 
@@ -20,7 +104,7 @@ The sync scoring API runs on Postgres, in Docker. The tests start their own Post
 
 ```bash
 # first fill in .env (from .env.example) and keycloak.env (from keycloak.env.example)
-make up                # Postgres, Keycloak on 127.0.0.1:8080, the migration job, the API on :8000
+make up                # Postgres, Redis, Redpanda, Keycloak on 127.0.0.1:8080, the migration job, the API on :8000, one worker
 make seed              # loads the parties, and days 0-90 of data/generated, as history, with the Fraud labels discovered before day 90
 curl localhost:8000/v1/ready
 ```
@@ -311,6 +395,97 @@ make kind-down
 
 See [docs/runbooks/kubernetes.md](docs/runbooks/kubernetes.md).
 
+## Operations and runbooks
+
+| Situation | Runbook |
+| --- | --- |
+| The model is missing, failing or too slow; assessments say `rules-only` | [Degraded mode](docs/runbooks/degraded-mode.md) |
+| A promoted model is scoring badly | [Model rollback](docs/runbooks/model-rollback.md) |
+| Postgres lost or corrupt; taking backups | [Back up and restore](docs/runbooks/restore.md) |
+| Consumer lag grows, workers restart, dead letters | [Consumer lag recovery](docs/runbooks/consumer-lag.md) |
+| Drift, Alert volume or label-metric alerts fire | [Drift alerts](docs/runbooks/drift-alerts.md) |
+| Rotating or revoking an API key | [API key rotation](docs/runbooks/api-key-rotation.md) |
+| Running the stack on Kubernetes | [Kubernetes (kind)](docs/runbooks/kubernetes.md) |
+
+These runbooks were written from the code, configuration and CLI help, and the restore procedure is exercised by CI on every change. The Degraded mode, consumer lag, drift and key rotation runbooks have **not** been run end to end against a live stack (the environment they were written in had no Docker daemon): treat their commands as reviewed, not rehearsed, and fix them as you use them.
+
+Day-to-day, the Operations, Model health and Fraud outcomes dashboards in Grafana (<http://localhost:3001>) and `GET /v1/ready` show the state of the system. Alerts go to Alertmanager and the alert sink; replace the receiver in `deploy/alertmanager/alertmanager.yml` to be told for real.
+
+## Commands
+
+### Make targets
+
+`make -n <target>` shows what one runs. Variables: `PAYSIM_CSV`, `SECONDS_PER_DAY`, `RUN`, `LOADTEST_RPS`, `LOADTEST_TIME`, `LOADTEST_RATE`, `API_URL`, `KIND_CLUSTER`.
+
+| Target | What it does |
+| --- | --- |
+| `install` | `uv sync` |
+| `lint` | `ruff check` and `ruff format --check` |
+| `format` | Format and auto-fix with ruff |
+| `typecheck` | Strict `mypy` |
+| `test` | `pytest` (needs Docker for the integration tests) |
+| `check` | `lint`, `typecheck` and `test` |
+| `generate` | Generate the synthetic dataset into `data/generated/` (seed 42; needs `TXRISK_PSEUDONYM_KEY`) |
+| `features` | Build the point-in-time feature table |
+| `evaluate` | Judge the rules alone on the evaluation days, into `reports/rules-only/` |
+| `evaluate-supervised` | The same for the supervised model, into `reports/supervised/` |
+| `evaluate-stacked` | The same for the stacked Risk score, into `reports/stacked/` |
+| `train` | Train a model bundle into `models/<version>/` and log it to the local MLflow store |
+| `paysim` | Judge every scorer on a local PaySim CSV: `make paysim PAYSIM_CSV=<file>` |
+| `up` | Compose: API, worker, Keycloak and what they depend on |
+| `workbench` | Compose: API, Keycloak and the Case workbench |
+| `evaluation-pages` | Compose: API and the Streamlit evaluation pages (needs `TXRISK_EVALUATION_API_KEY`) |
+| `down` | `docker compose down` |
+| `seed` | Load the parties and days 0-90 into the compose Postgres |
+| `produce` | Publish days 90-120 to the stream in event-time order (the `produce` compose service) |
+| `replay` | Replay days 90-120 (Transactions, SIM swaps, Fraud discoveries) at `SECONDS_PER_DAY` |
+| `scheduler` | Run the scheduler on the host against the compose Postgres |
+| `purge` | One retention purge now |
+| `schemas` | Rewrite `schemas/*.json` from the event models |
+| `openapi` | Regenerate `contracts/openapi.json` |
+| `backup` | One Postgres backup into the compose `backups` volume |
+| `monitor` | One run of the daily monitoring job |
+| `retrain` | One run of the retraining job (registers a Challenger model) |
+| `loadtest-sync` | Locust against `/v1/score`; needs an API key in `reports/loadtest/api-key` |
+| `loadtest-stream` | Locust publishing to the stream |
+| `loadtest-check` | Judge the load-test runs against `config/loadtest.toml` |
+| `kind-up` | Build the images, create the kind cluster, load them |
+| `kind-deploy` | Install the Helm chart with generated Secrets |
+| `kind-smoke` | End-to-end smoke test of the kind deployment |
+| `kind-down` | Delete the kind cluster |
+
+### `txrisk` commands
+
+Run as `uv run txrisk <command> --help` (or `docker compose run --rm job txrisk <command>` in the stack). Settings come from `TXRISK_*` environment variables where noted in each `--help`.
+
+| Command | What it does |
+| --- | --- |
+| `generate` | Generate the synthetic dataset |
+| `features` | Compute the feature table for a dataset |
+| `evaluate` | Score the evaluation days and write a report; `--scorer` is `rules-only`, `anomaly`, `lof`, `supervised`, `stacked` or `bundle` (judge a saved bundle, report saved in `<bundle>/evaluation`) |
+| `train` | Train a model bundle, save it and record the run in MLflow |
+| `paysim` | Judge the scorers on a local PaySim CSV: `uv run txrisk paysim --csv <file>` |
+| `migrate` | Apply pending Postgres migrations and provision the `txrisk_app` role |
+| `backup` | Dump Postgres to a timestamped file and prune old backups |
+| `restore` | Load a backup into an empty database (`--compare-with` checks it against a source) |
+| `seed` | Load a dataset's parties and history before a day into Postgres |
+| `seed-cases` | Create demo Cases and Medium Transactions through the store |
+| `api-key` | Issue a scoped API key straight into Postgres |
+| `demo-sign-in` | Print an access token for a demo Keycloak user |
+| `serve` | Run the scoring API |
+| `produce` | Publish a dataset's Transactions and SIM swaps to the stream |
+| `replay` | Replay the live days through the stream at a set pace |
+| `loadtest check` | Judge Locust results against the targets |
+| `purge` | Delete data older than its retention period |
+| `scheduler` | Fire the scheduled jobs as the simulation clock crosses their schedule |
+| `monitor` | Compute one simulated day's monitoring metrics |
+| `retrain` | Train a Challenger model from Postgres (`--if-drift` only after a drift action alert) |
+| `alert-sink` | Run the webhook that records Alertmanager's alerts |
+| `worker` | Score `transaction.created` into `score.produced` |
+| `rescore` | Re-score Transactions scored in Degraded mode (exit 3 while the model is down) |
+| `outbox` | Publish the outbox (Fraud discoveries from closed Cases) to Redpanda |
+| `schemas` | Write the event topics' JSON Schemas |
+
 ## CI/CD
 
 `.github/workflows/ci.yml` runs these jobs in parallel on every PR and push to main (uv's cache is on):
@@ -331,7 +506,7 @@ See [docs/runbooks/kubernetes.md](docs/runbooks/kubernetes.md).
 Branch protection cannot be set from CI or by the agents that built it. In the repository, go to Settings > Branches > Add branch ruleset (or classic rule) for `main` and turn on:
 
 - Require a pull request before merging.
-- Require status checks to pass before merging, and require branches to be up to date. Add the checks `check`, `smoke`, `audit`, `trivy`, `contracts`, `compose`, `restore` and `workbench`.
+- Require status checks to pass before merging, and require branches to be up to date. Add the checks, named as the jobs in `.github/workflows/ci.yml`: `check`, `smoke`, `audit`, `trivy`, `contracts`, `compose`, `kubernetes`, `workbench` and `restore`. None of this is set yet; it is the one repository setting still needing the owner.
 - Block force pushes and deletion of `main`.
 
 `publish` runs only on main, so it is not a required check.

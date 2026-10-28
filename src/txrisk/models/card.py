@@ -50,6 +50,10 @@ LIMITATIONS = [
 PRIVACY = [
     "Wallets are pseudonymised identifiers (a keyed hash of the phone number); phone numbers and "
     "customer names are never stored or used.",
+    "The inputs each Transaction was scored with are kept 60 days, Transactions, assessments, "
+    "Alerts and Fraud labels 365, and the audit log at least a year (config/retention.toml).",
+    "Ground truth never reaches training or serving (ADR 0007). This is a simulation on "
+    "synthetic data, not a claim of compliance with any data-protection law.",
 ]
 
 
