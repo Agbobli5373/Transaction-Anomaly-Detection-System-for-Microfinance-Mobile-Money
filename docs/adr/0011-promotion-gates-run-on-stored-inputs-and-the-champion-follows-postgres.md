@@ -1,0 +1,17 @@
+# Promotion gates run on stored inputs and labels, and the Champion model follows Postgres
+
+A Challenger model is promoted only by an Admin, through the API, and only if the server finds that it passes both gates at that moment; nothing a caller sends says the gates passed. The decision is made with what the system itself stored, never Ground truth (ADR 0007).
+
+The **backtest gate** has the Champion and the Challenger both score the most recent matured window (the days ending one Label maturity window before the simulated time) from the `model_inputs` the scoring path stored, against the Fraud labels known at the simulated time. We chose stored inputs over recomputing features from Postgres, as retraining does, because the gate then runs in seconds on the very inputs the Champion scored with, and a request cannot afford the minutes a feature rebuild takes. The cost is that a Transaction scored in Degraded mode has no inputs and is not in the window, and that the inputs of the window must still be stored: it ends one Label maturity window (30 days) before the clock and is 14 days long, so `model_inputs` is kept 60 days in `config/retention.toml`, not the 30 monitoring alone needs. If retention is shortened below the two together, the gate fails for too few labels rather than passing on less. The Challenger passes if it matches or beats the Champion on PR-AUC and on precision at the Alert budget, and no segment's false positive rate at High (region, KYC tier, Channel, Wallet age band) rises by more than 20% relative. A segment with too few legitimate Transactions is reported but not judged, and a rise from zero counts as a rise.
+
+The **shadow gate** reads `challenger_scores` (ADR 0010): at least 7 simulated days between its first and latest score, its High a day within 25% of the Alert budget, p95 latency within the sync API's target, and no errors. Thresholds are in `config/promotion.toml`.
+
+Promotion and rollback move a single row, `champion_model`, and append to `model_promotions`, in one transaction with the audit entry, so the pointer never moves unrecorded. A null pointer means the bundle each process is configured with (`TXRISK_MODEL_BUNDLE`), the first Champion. Every process that scores follows the row as it follows the Challenger (ADR 0010), polling every `challenger_refresh_seconds` and switching without a restart. The pointer is locked while it changes and compared with the one the gates were checked against, so two Promotions cannot both apply.
+
+Rollback restores the Champion that the latest Promotion replaced, in one call and without gates: it undoes a Promotion, so it must be quick. It is one step. A rollback is itself the latest change, so another one is refused until there is a new Promotion. The rolled-back model stays the Challenger.
+
+## Consequences
+
+Processes learn of a Promotion within a few seconds, not at once, so for that long some score with the old Champion. Alerts raised meanwhile stay as raised. Monitoring (`txrisk monitor`) reads the Champion's baseline from the pointer, so after a Promotion drift is measured against the new model's training baseline.
+
+Each bundle carries a model card, written when it is trained and saved beside it (`model_card.json` and `.md`). Its segment metrics are against the labels known when the version went live, on the calibration days the stacker was fitted on, so they flatter the model; the backtest gate is the out-of-sample comparison. A bundle from before cards existed gets a card that says what was not recorded.

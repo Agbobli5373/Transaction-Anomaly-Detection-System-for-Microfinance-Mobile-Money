@@ -162,8 +162,24 @@ Training a new bundle from the Transactions and Fraud labels known at the simula
 _Avoid_: Refresh, update
 
 **Promotion**:
-Making a Challenger model the Champion model, allowed only when it passes its promotion gates.
+Making a Challenger model the Champion model, allowed only when an Admin asks for it and it passes the Backtest gate and the Shadow gate. Never automatic.
 _Avoid_: Deployment, release
+
+**Backtest gate**:
+The first condition for Promotion: on the latest matured window, scored from the stored model inputs and judged against the Fraud labels known at the simulated time, the Challenger model matches or beats the Champion model on PR-AUC and on precision at the Alert budget, and no segment's false positive rate rises by more than 20% relative.
+_Avoid_: Offline test, validation
+
+**Shadow gate**:
+The second condition for Promotion: the Challenger model has scored in shadow for at least 7 simulated days, with its simulated Alert volume within 25% of the Alert budget, its latency within target and no scoring errors.
+_Avoid_: Canary, soak test
+
+**Rollback**:
+Putting back the Champion model that the latest Promotion replaced, in one call and without gates. It is one step, and is itself a change that is audited.
+_Avoid_: Revert, undo
+
+**Model card**:
+The page generated with every model version: its intended use, the data it was trained on, its metrics by segment and its limitations, for someone judging the model without reading code.
+_Avoid_: Model report, datasheet
 
 **Training baseline**:
 The distribution of every model input, and of the Risk score, on the rows a Champion model was built from, kept inside its bundle for monitoring to compare live Transactions with. Never made from later data.

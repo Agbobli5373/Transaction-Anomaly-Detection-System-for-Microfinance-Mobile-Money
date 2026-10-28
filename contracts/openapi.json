@@ -456,6 +456,81 @@
         "title": "AuditPage",
         "type": "object"
       },
+      "BacktestOut": {
+        "additionalProperties": false,
+        "description": "The backtest gate: the Champion and Challenger models on the latest matured window.",
+        "properties": {
+          "challenger": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelResultOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "champion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelResultOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "failures": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Failures",
+            "type": "array"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          },
+          "positives": {
+            "title": "Positives",
+            "type": "integer"
+          },
+          "segments": {
+            "items": {
+              "$ref": "#/components/schemas/SegmentFprOut"
+            },
+            "title": "Segments",
+            "type": "array"
+          },
+          "transactions": {
+            "title": "Transactions",
+            "type": "integer"
+          },
+          "window_end": {
+            "format": "date-time",
+            "title": "Window End",
+            "type": "string"
+          },
+          "window_start": {
+            "format": "date-time",
+            "title": "Window Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "passed",
+          "failures",
+          "window_start",
+          "window_end",
+          "transactions",
+          "positives",
+          "champion",
+          "challenger",
+          "segments"
+        ],
+        "title": "BacktestOut",
+        "type": "object"
+      },
       "CaseAlertOut": {
         "additionalProperties": false,
         "properties": {
@@ -867,6 +942,38 @@
         "title": "ExportedTransaction",
         "type": "object"
       },
+      "GatesOut": {
+        "additionalProperties": false,
+        "properties": {
+          "backtest": {
+            "$ref": "#/components/schemas/BacktestOut"
+          },
+          "champion_version": {
+            "title": "Champion Version",
+            "type": "string"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          },
+          "shadow": {
+            "$ref": "#/components/schemas/ShadowOut"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "champion_version",
+          "passed",
+          "backtest",
+          "shadow"
+        ],
+        "title": "GatesOut",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -898,6 +1005,165 @@
         "title": "IssuedApiKeyOut",
         "type": "object"
       },
+      "ModelCardOut": {
+        "additionalProperties": false,
+        "description": "The model card of one version: intended use, data, metrics by segment and limitations.",
+        "properties": {
+          "card": {
+            "additionalProperties": true,
+            "title": "Card",
+            "type": "object"
+          },
+          "markdown": {
+            "title": "Markdown",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "card",
+          "markdown"
+        ],
+        "title": "ModelCardOut",
+        "type": "object"
+      },
+      "ModelList": {
+        "additionalProperties": false,
+        "properties": {
+          "challenger": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Challenger"
+          },
+          "champion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Champion"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/PromotionOut"
+            },
+            "title": "History",
+            "type": "array"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelVersionOut"
+            },
+            "title": "Models",
+            "type": "array"
+          }
+        },
+        "required": [
+          "champion",
+          "challenger",
+          "models",
+          "history"
+        ],
+        "title": "ModelList",
+        "type": "object"
+      },
+      "ModelResultOut": {
+        "additionalProperties": false,
+        "properties": {
+          "pr_auc": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pr Auc"
+          },
+          "precision_at_budget": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Precision At Budget"
+          }
+        },
+        "required": [
+          "pr_auc",
+          "precision_at_budget"
+        ],
+        "title": "ModelResultOut",
+        "type": "object"
+      },
+      "ModelVersionOut": {
+        "additionalProperties": false,
+        "properties": {
+          "roles": {
+            "items": {
+              "enum": [
+                "champion",
+                "challenger"
+              ],
+              "type": "string"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "trained_cutoff": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trained Cutoff"
+          },
+          "trigger": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "roles",
+          "trained_cutoff",
+          "trigger"
+        ],
+        "title": "ModelVersionOut",
+        "type": "object"
+      },
       "NoteIn": {
         "additionalProperties": false,
         "properties": {
@@ -912,6 +1178,57 @@
           "text"
         ],
         "title": "NoteIn",
+        "type": "object"
+      },
+      "PromotionOut": {
+        "additionalProperties": false,
+        "description": "A Promotion or a rollback of the Champion model.",
+        "properties": {
+          "action": {
+            "enum": [
+              "promote",
+              "rollback"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "actor_name": {
+            "title": "Actor Name",
+            "type": "string"
+          },
+          "from_version": {
+            "title": "From Version",
+            "type": "string"
+          },
+          "gates": {
+            "additionalProperties": true,
+            "title": "Gates",
+            "type": "object"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "promotion_id": {
+            "title": "Promotion Id",
+            "type": "integer"
+          },
+          "to_version": {
+            "title": "To Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "promotion_id",
+          "action",
+          "from_version",
+          "to_version",
+          "actor_name",
+          "occurred_at",
+          "gates"
+        ],
+        "title": "PromotionOut",
         "type": "object"
       },
       "Readiness": {
@@ -1170,6 +1487,136 @@
           }
         },
         "title": "RotationIn",
+        "type": "object"
+      },
+      "SegmentFprOut": {
+        "additionalProperties": false,
+        "properties": {
+          "challenger_fpr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Challenger Fpr"
+          },
+          "champion_fpr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Champion Fpr"
+          },
+          "judged": {
+            "title": "Judged",
+            "type": "boolean"
+          },
+          "member": {
+            "title": "Member",
+            "type": "string"
+          },
+          "negatives": {
+            "title": "Negatives",
+            "type": "integer"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          },
+          "segment": {
+            "title": "Segment",
+            "type": "string"
+          }
+        },
+        "required": [
+          "segment",
+          "member",
+          "negatives",
+          "champion_fpr",
+          "challenger_fpr",
+          "judged",
+          "passed"
+        ],
+        "title": "SegmentFprOut",
+        "type": "object"
+      },
+      "ShadowOut": {
+        "additionalProperties": false,
+        "description": "The shadow gate: what the Challenger model did scoring beside the Champion.",
+        "properties": {
+          "alert_budget_per_day": {
+            "title": "Alert Budget Per Day",
+            "type": "integer"
+          },
+          "alerts_per_day": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alerts Per Day"
+          },
+          "days": {
+            "title": "Days",
+            "type": "number"
+          },
+          "errors": {
+            "title": "Errors",
+            "type": "integer"
+          },
+          "failures": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Failures",
+            "type": "array"
+          },
+          "high": {
+            "title": "High",
+            "type": "integer"
+          },
+          "p95_latency_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95 Latency Ms"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          },
+          "scored": {
+            "title": "Scored",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "passed",
+          "failures",
+          "scored",
+          "errors",
+          "days",
+          "high",
+          "alerts_per_day",
+          "alert_budget_per_day",
+          "p95_latency_ms"
+        ],
+        "title": "ShadowOut",
         "type": "object"
       },
       "Status": {
@@ -2836,6 +3283,42 @@
         ]
       }
     },
+    "/v1/models": {
+      "get": {
+        "description": "The Champion and Challenger models, every version retraining has made, and the latest\nPromotions and rollbacks. For every role, or the `models:read` scope.",
+        "operationId": "list_models_v1_models_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles or scopes do not permit this"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "List Models",
+        "tags": [
+          "models"
+        ]
+      }
+    },
     "/v1/models/active": {
       "get": {
         "description": "The model version that scores, and its Risk band thresholds. For every role, or the\n`models:read` scope. While the Champion model is down this is `rules-only`, with the\nrules bands.",
@@ -2870,6 +3353,228 @@
           }
         ],
         "summary": "Get Active Model",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/v1/models/rollback": {
+      "post": {
+        "description": "Put back the Champion model that the latest Promotion replaced, in one call and with\nno gates (a bad Promotion must be quick to undo). One step: it cannot be repeated until\nthere is another Promotion. Admins only. Audited.",
+        "operationId": "roll_back_v1_models_rollback_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromotionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles or scopes do not permit this"
+          },
+          "409": {
+            "description": "There is no Promotion to roll back: `detail` says so"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Roll Back",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/v1/models/{version}/card": {
+      "get": {
+        "description": "The model card of a version: intended use, the data it learned from, its metrics by\nsegment and its limitations, as data and as a Markdown page. For every role, or the\n`models:read` scope.",
+        "operationId": "get_model_card_v1_models__version__card_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "pattern": "^\\w[\\w.-]{0,127}$",
+              "title": "Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelCardOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles or scopes do not permit this"
+          },
+          "404": {
+            "description": "No such model version"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Get Model Card",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/v1/models/{version}/gates": {
+      "get": {
+        "description": "Run the backtest and shadow gates for the Challenger model now, without promoting it.\nAdmins only. Audited.",
+        "operationId": "get_gates_v1_models__version__gates_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "pattern": "^\\w[\\w.-]{0,127}$",
+              "title": "Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatesOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles or scopes do not permit this"
+          },
+          "409": {
+            "description": "Cannot be judged: `detail` says why"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Get Gates",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/v1/models/{version}/promote": {
+      "post": {
+        "description": "Make the Challenger model the Champion model, if it passes both gates, which are\nchecked here, now, whatever anyone has seen before. Admins only; manual, never\nautomatic. The workers and the API switch within a few seconds. Audited with the gate\nresults, whether or not it is allowed.",
+        "operationId": "promote_v1_models__version__promote_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "pattern": "^\\w[\\w.-]{0,127}$",
+              "title": "Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromotionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles or scopes do not permit this"
+          },
+          "409": {
+            "description": "Not the Challenger model, or a gate did not pass, or the Champion model changed meanwhile: `detail` has the `message` and the `gates`"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Promote",
         "tags": [
           "models"
         ]

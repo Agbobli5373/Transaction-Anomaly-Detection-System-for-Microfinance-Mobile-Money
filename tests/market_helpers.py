@@ -77,6 +77,7 @@ def train(market: Market) -> ModelBundle:
         period_start=START,
         config=CONFIG,
         seed=11,
+        wallets=market.wallets,
     )
 
 

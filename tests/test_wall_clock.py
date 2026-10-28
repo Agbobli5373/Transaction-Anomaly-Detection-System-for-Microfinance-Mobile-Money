@@ -84,6 +84,10 @@ OPERATIONAL: dict[tuple[str, str], str] = {
         "the Champion model's circuit breaker: how long to skip a failing model before trying it "
         "again. It decides whether the model is tried, never what a Transaction scores"
     ),
+    ("store/champion.py", "time.monotonic"): (
+        "how often a process asks Postgres which bundle is the Champion model, as the Challenger "
+        "model's poll does. It decides when the row is read, never what a Transaction scores"
+    ),
     ("store/challenger.py", "time.monotonic"): (
         "how often a process asks Postgres which bundle is the Challenger model. It decides when "
         "the row is read, never what a Transaction scores"

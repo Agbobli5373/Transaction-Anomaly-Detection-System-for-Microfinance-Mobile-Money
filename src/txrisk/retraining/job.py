@@ -286,6 +286,7 @@ def _retrain(
         config=evaluation,
         seed=seed,
         baseline_bins=baseline_bins,
+        wallets=data.wallets,
     )
     folder = models / bundle.version
     bundle.save(folder)

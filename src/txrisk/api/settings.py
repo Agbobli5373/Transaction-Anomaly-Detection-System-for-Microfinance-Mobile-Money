@@ -3,15 +3,18 @@
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Self
+from typing import Any, Self
 
 import sqlalchemy as sa
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from txrisk.evaluation import EvaluationConfig, load_evaluation_config
 from txrisk.features import FeatureConfig, load_feature_config
 from txrisk.generator import load_config
+from txrisk.promotion.config import PromotionConfig, load_promotion_config
 from txrisk.scoring import Champion, Metrics, RulesConfig, load_rules_config
 from txrisk.store.challenger import ChallengerModel
+from txrisk.store.champion import FollowedChampion
 from txrisk.store.redis_history import RedisHistoryCache
 
 _PREFIX = "TXRISK_"
@@ -50,6 +53,9 @@ class ApiSettings(BaseModel):
     generator_config: Path = Path("config/generator.toml")
     feature_config: Path = Path("config/features.toml")
     rules_config: Path = Path("config/rules.toml")
+    # The Promotion gates' thresholds and the evaluation's Alert budget and Label maturity window.
+    promotion_config: Path = Path("config/promotion.toml")
+    evaluation_config: Path = Path("config/evaluation.toml")
 
     # Sign-in for people, through Keycloak. The issuer is the realm URL as tokens name it
     # (http://localhost:8080/realms/txrisk in compose); without one only API keys are accepted.
@@ -115,24 +121,40 @@ class ApiSettings(BaseModel):
         """The recent-history cache, or None when no Redis is configured."""
         return None if self.redis_url is None else RedisHistoryCache.from_url(self.redis_url)
 
-    def champion(self, metrics: Metrics | None = None) -> Champion | None:
+    def models_folder(self) -> Path | None:
+        """Where every bundle is saved as `<version>/`: `models_dir`, else the Champion bundle's
+        parent; None with neither."""
+        return self.models_dir or (None if self.model_bundle is None else self.model_bundle.parent)
+
+    def champion(
+        self, metrics: Metrics | None = None, engine: sa.Engine | None = None
+    ) -> Champion | None:
         """The Champion model, loaded on first use; None when no bundle is configured (the rules
-        alone score, which is not Degraded mode)."""
+        alone score, which is not Degraded mode). Given the `engine`, it follows the Champion
+        model Promotion names in Postgres, so a Promotion or rollback reaches this process
+        without a restart."""
         if self.model_bundle is None:
             return None
-        return Champion.from_folder(
-            self.model_bundle,
-            timeout=self.scoring_timeout_ms / 1000,
-            retry_after=self.model_retry_seconds,
-            metrics=metrics,
+        options: dict[str, Any] = {
+            "timeout": self.scoring_timeout_ms / 1000,
+            "retry_after": self.model_retry_seconds,
+            "metrics": metrics,
+        }
+        models = self.models_folder()
+        if engine is None or models is None:
+            return Champion.from_folder(self.model_bundle, **options)
+        return FollowedChampion(
+            engine,
+            configured=self.model_bundle,
+            models=models,
+            refresh_seconds=self.challenger_refresh_seconds,
+            **options,
         )
 
     def challenger(self, engine: sa.Engine) -> ChallengerModel | None:
         """The Challenger model, following the row `txrisk retrain` writes; None when no models
         folder is known."""
-        folder = self.models_dir or (
-            None if self.model_bundle is None else self.model_bundle.parent
-        )
+        folder = self.models_folder()
         if folder is None:
             return None
         return ChallengerModel(engine, folder, refresh_seconds=self.challenger_refresh_seconds)
@@ -143,6 +165,12 @@ class ApiSettings(BaseModel):
             self.feature_config,
             kyc_limits={tier.name: tier.single_transaction_limit for tier in market.kyc_tiers},
         )
+
+    def promotion(self) -> PromotionConfig:
+        return load_promotion_config(self.promotion_config)
+
+    def evaluation(self) -> EvaluationConfig:
+        return load_evaluation_config(self.evaluation_config)
 
     def rules(self) -> RulesConfig:
         return load_rules_config(self.rules_config)

@@ -89,6 +89,7 @@ from txrisk.store import (
     restore,
     seed,
 )
+from txrisk.store.champion import champion_folder
 from txrisk.store.roles import APP_ROLE, PASSWORD_ENV, app_role_password
 
 PSEUDONYM_KEY_ENV = "TXRISK_PSEUDONYM_KEY"
@@ -223,6 +224,7 @@ def _train(args: argparse.Namespace) -> int:
         config=evaluation,
         seed=args.seed,
         baseline_bins=load_monitoring_config(args.monitoring_config).baseline.bins,
+        wallets=wallets,
     )
     folder = args.out / bundle.version
     bundle.save(folder)
@@ -656,6 +658,14 @@ def _monitor(args: argparse.Namespace) -> int:
         Path(os.environ[MODEL_BUNDLE_ENV]) if os.environ.get(MODEL_BUNDLE_ENV) else None
     )
     bundle = None
+    # After a Promotion or rollback the Champion model is the one Postgres names, saved with the
+    # other bundles; until one the configured bundle is.
+    models_dir = (
+        Path(os.environ[MODELS_DIR_ENV])
+        if os.environ.get(MODELS_DIR_ENV)
+        else (None if bundle_folder is None else bundle_folder.parent)
+    )
+    bundle_folder = champion_folder(engine, bundle_folder, models_dir)
     if bundle_folder is not None:
         try:
             bundle = ModelBundle.load(bundle_folder)
@@ -832,7 +842,7 @@ def _stored_scoring(
         engine,
         features=settings.features(),
         rules=settings.rules(),
-        bundle=settings.champion(metrics),
+        bundle=settings.champion(metrics, engine),
         cache=settings.history_cache(),
         metrics=metrics,
         challenger=settings.challenger(engine),

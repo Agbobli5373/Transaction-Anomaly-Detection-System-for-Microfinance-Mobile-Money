@@ -87,6 +87,15 @@ class Champion:
 
         return cls(load, **options)  # type: ignore[arg-type]
 
+    def switch(self, load: "Callable[[], ModelBundle]") -> None:
+        """Score with the bundle `load` returns from now on, loaded at the next `acquire`. A
+        Promotion or rollback does this; a model that was down is tried at once, not after its
+        pause, and Degraded mode ends with the first Transaction the new one scores."""
+        with self._lock:
+            self._load = load
+            self._bundle = None
+            self._retry_at = 0.0
+
     def acquire(self) -> "tuple[ModelBundle | None, str | None]":
         """The bundle to score with, or None and why not: the model is down or its breaker is
         open. Loads the bundle if it is not loaded and a retry is due."""
