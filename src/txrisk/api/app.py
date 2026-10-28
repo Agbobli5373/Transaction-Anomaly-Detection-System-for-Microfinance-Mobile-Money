@@ -82,7 +82,13 @@ def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _u
     engine = create_engine(settings.database_url)
     bundle = None if settings.model_bundle is None else ModelBundle.load(settings.model_bundle)
     rules = settings.rules()
-    scoring = StoredScoring(engine, features=settings.features(), rules=rules, bundle=bundle)
+    scoring = StoredScoring(
+        engine,
+        features=settings.features(),
+        rules=rules,
+        bundle=bundle,
+        cache=settings.history_cache(),
+    )
     if bundle is None:
         active = ActiveModel(
             model_version=RULES_ONLY,

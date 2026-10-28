@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from txrisk.features import FeatureConfig, load_feature_config
 from txrisk.generator import load_config
 from txrisk.scoring import RulesConfig, load_rules_config
+from txrisk.store.redis_history import RedisHistoryCache
 
 _PREFIX = "TXRISK_"
 
@@ -21,6 +22,10 @@ class ApiSettings(BaseModel):
     # The active model bundle's folder (`models/<version>/` from `txrisk train`); without one
     # the rules alone score.
     model_bundle: Path | None = None
+    # The Redis holding the recent-history cache (ADR 0006), e.g. redis://redis:6379/0; without
+    # one, history is read from Postgres alone. Every process that stores Transactions must use
+    # the same Redis (see store/redis_history.py). No credential belongs in the URL.
+    redis_url: str | None = None
     # The market config, for each KYC tier's single-transaction limit.
     generator_config: Path = Path("config/generator.toml")
     feature_config: Path = Path("config/features.toml")
@@ -81,6 +86,10 @@ class ApiSettings(BaseModel):
             if environ.get(_PREFIX + name.upper())
         }
         return cls.model_validate(values)
+
+    def history_cache(self) -> RedisHistoryCache | None:
+        """The recent-history cache, or None when no Redis is configured."""
+        return None if self.redis_url is None else RedisHistoryCache.from_url(self.redis_url)
 
     def features(self) -> FeatureConfig:
         market = load_config(self.generator_config).market
