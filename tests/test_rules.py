@@ -109,22 +109,28 @@ def test_mule_cash_out_is_only_about_cash_outs():
     assert not fires("MULE_CASHOUT", _fan_in(12), tx(counterparty="w-elsewhere"))
 
 
-# AGENT_STRUCTURING: a near-limit Cash-out (within 10% below the limit) that makes at least five
+# AGENT_STRUCTURING: a near-limit Cash-out (within 10% below the limit) that makes at least two
 # at the same Agent in 24h.
 
 
-def _agent_with(near_limit_cash_outs: int) -> Market:
+def _agent_with(near_limit_cash_outs: int, hours_ago: float = 1.0) -> Market:
     earlier = [
-        tx(NOW - (i + 1) * HOUR, "cash_out", amount=950.0, wallet=f"w-{i}", counterparty="A1")
+        tx(
+            NOW - (i + hours_ago) * HOUR,
+            "cash_out",
+            amount=950.0,
+            wallet=f"w-{i}",
+            counterparty="A1",
+        )
         for i in range(near_limit_cash_outs)
     ]
     return Market().record(*earlier)
 
 
-def test_agent_structuring_fires_on_the_fifth_near_limit_cash_out():
+def test_agent_structuring_fires_on_the_second_near_limit_cash_out():
     cash_out = tx(transaction_type="cash_out", amount=900.0, counterparty="A1")
 
-    assert fires("AGENT_STRUCTURING", _agent_with(4), cash_out)
+    assert fires("AGENT_STRUCTURING", _agent_with(1), cash_out)
 
 
 def test_agent_structuring_needs_this_cash_out_near_the_limit():
@@ -133,10 +139,118 @@ def test_agent_structuring_needs_this_cash_out_near_the_limit():
     assert not fires("AGENT_STRUCTURING", _agent_with(4), cash_out)
 
 
-def test_agent_structuring_needs_five_in_24_hours():
+def test_agent_structuring_needs_another_near_limit_cash_out_at_the_agent():
     cash_out = tx(transaction_type="cash_out", amount=950.0, counterparty="A1")
 
-    assert not fires("AGENT_STRUCTURING", _agent_with(3), cash_out)
+    assert not fires("AGENT_STRUCTURING", _agent_with(0), cash_out)
+    assert not fires(
+        "AGENT_STRUCTURING",
+        _agent_with(1),
+        tx(transaction_type="cash_out", amount=950.0, counterparty="A2"),
+    )
+
+
+def test_agent_structuring_counts_only_the_last_24_hours():
+    cash_out = tx(transaction_type="cash_out", amount=950.0, counterparty="A1")
+
+    assert fires("AGENT_STRUCTURING", _agent_with(1, hours_ago=24), cash_out)
+    assert not fires("AGENT_STRUCTURING", _agent_with(1, hours_ago=24.01), cash_out)
+
+
+# NEAR_LIMIT_CASH_IN: a Cash-in of at least 90% of the KYC tier limit and more than 5x the
+# Wallet's largest Cash-in of the last 30 days, once the Wallet is 30 days old.
+
+
+def _loaded(largest_cash_in: float, days_ago: float = 10, **market: object) -> Market:
+    earlier = tx(NOW - days_ago * DAY, "cash_in", amount=largest_cash_in, counterparty="A1")
+    return Market(**market).record(*routine(), earlier)  # type: ignore[arg-type]
+
+
+def test_near_limit_cash_in_fires_near_the_limit_above_five_times_the_largest_cash_in():
+    cash_in = tx(transaction_type="cash_in", amount=900.0, counterparty="A2")
+
+    assert fires("NEAR_LIMIT_CASH_IN", _loaded(179.0), cash_in)
+
+
+def test_near_limit_cash_in_needs_more_than_five_times_the_largest_cash_in():
+    cash_in = tx(transaction_type="cash_in", amount=900.0, counterparty="A2")
+
+    assert not fires("NEAR_LIMIT_CASH_IN", _loaded(180.0), cash_in)
+
+
+def test_near_limit_cash_in_needs_at_least_90_percent_of_the_limit():
+    cash_in = tx(transaction_type="cash_in", amount=899.0, counterparty="A2")
+
+    assert not fires("NEAR_LIMIT_CASH_IN", _loaded(100.0), cash_in)
+
+
+def test_near_limit_cash_in_needs_a_cash_in_in_the_last_30_days_to_compare_with():
+    cash_in = tx(transaction_type="cash_in", amount=950.0, counterparty="A2")
+
+    assert fires("NEAR_LIMIT_CASH_IN", _loaded(100.0, days_ago=29.9), cash_in)
+    assert not fires("NEAR_LIMIT_CASH_IN", _loaded(100.0, days_ago=30.1), cash_in)
+
+
+def test_near_limit_cash_in_is_only_about_cash_ins():
+    cash_out = tx(transaction_type="cash_out", amount=950.0, counterparty="A2")
+
+    assert not fires("NEAR_LIMIT_CASH_IN", _loaded(100.0), cash_out)
+
+
+def test_near_limit_cash_in_waits_until_the_wallet_is_30_days_old():
+    cash_in = tx(transaction_type="cash_in", amount=950.0, counterparty="A2")
+
+    def aged(age: timedelta) -> Market:
+        return _loaded(100.0, days_ago=5, registered={SUBJECT: NOW - age})
+
+    assert not fires("NEAR_LIMIT_CASH_IN", aged(30 * DAY - MINUTE), cash_in)
+    assert fires("NEAR_LIMIT_CASH_IN", aged(30 * DAY), cash_in)
+
+
+# RETURN_TO_NEW_SENDER: a Transfer to a first-time recipient who sent this Wallet money in the
+# last 24h.
+
+
+def _sent_by(sender: str, ago: timedelta, amount: float = 50.0) -> Market:
+    bait = tx(NOW - ago, amount=amount, wallet=sender, counterparty=SUBJECT)
+    return Market().record(*routine(), bait)
+
+
+def test_return_to_new_sender_fires_on_a_transfer_back_to_a_stranger_who_just_sent_money():
+    assert fires("RETURN_TO_NEW_SENDER", _sent_by("w-stranger", DAY), tx(counterparty="w-stranger"))
+
+
+def test_return_to_new_sender_needs_the_money_to_have_come_in_the_last_24_hours():
+    late = _sent_by("w-stranger", DAY + MINUTE)
+
+    assert not fires("RETURN_TO_NEW_SENDER", late, tx(counterparty="w-stranger"))
+
+
+def test_return_to_new_sender_needs_the_money_to_have_come_from_the_recipient():
+    other = _sent_by("w-other", HOUR)
+
+    assert not fires("RETURN_TO_NEW_SENDER", other, tx(counterparty="w-stranger"))
+
+
+def test_return_to_new_sender_needs_a_first_time_recipient():
+    # The routine's 50 GHS Transfers go to w-friend.
+    assert not fires(
+        "RETURN_TO_NEW_SENDER", _sent_by("w-friend", HOUR), tx(counterparty="w-friend")
+    )
+
+
+def test_return_to_new_sender_waits_for_history():
+    bait = tx(NOW - HOUR, wallet="w-stranger", counterparty=SUBJECT)
+
+    assert not fires("RETURN_TO_NEW_SENDER", Market().record(bait), tx(counterparty="w-stranger"))
+
+
+def test_return_to_new_sender_ignores_payments():
+    market = _sent_by("M1", HOUR)
+
+    assert not fires(
+        "RETURN_TO_NEW_SENDER", market, tx(transaction_type="payment", counterparty="M1")
+    )
 
 
 # FIRST_TIME_LARGE_TRANSFER: a Transfer to a new Counterparty of more than 3x the median.
