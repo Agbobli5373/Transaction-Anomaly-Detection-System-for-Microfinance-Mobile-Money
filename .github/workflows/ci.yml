@@ -170,7 +170,7 @@ jobs:
           for key in TXRISK_DEMO_SIGNIN_ANALYST TXRISK_DEMO_SIGNIN_SUPERVISOR TXRISK_DEMO_SIGNIN_ADMIN; do
             echo "$key=$(openssl rand -hex 16)"
           done > keycloak.env
-      - run: docker compose up --build --detach --wait api worker keycloak prometheus grafana jaeger
+      - run: docker compose up --build --detach --wait api worker keycloak prometheus grafana jaeger pushgateway alertmanager alert-sink
       - run: curl --fail --silent http://127.0.0.1:8000/v1/ready
       - run: curl --fail --silent http://127.0.0.1:8000/v1/openapi.json > /dev/null
       # /v1 refuses a caller without a credential, and accepts the demo Analyst signed in through
@@ -237,6 +237,24 @@ jobs:
           for uid in prometheus jaeger; do
             grafana "datasources/uid/$uid/health" | grep -q '"status":"OK"'
           done
+      # Model monitoring: Prometheus loaded the alerting rules and reaches Alertmanager, the
+      # Pushgateway and the alert sink are scraped, and Grafana has the Model health and Fraud
+      # outcomes dashboards.
+      - run: |
+          . ./.env
+          for _ in $(seq 30); do
+            up=$(curl --silent http://127.0.0.1:9090/api/v1/targets \
+              | python3 -c 'import json,sys; t = json.load(sys.stdin)["data"]["activeTargets"]; print(*sorted(x["labels"]["job"] for x in t if x["health"] == "up"))')
+            case " $up " in *alert-sink*alertmanager*pushgateway*) break ;; esac
+            sleep 2
+          done
+          case " $up " in *alert-sink*alertmanager*pushgateway*) ;; *) echo "targets up: $up"; exit 1 ;; esac
+          curl --fail --silent http://127.0.0.1:9090/api/v1/rules | grep -q AlertedInputDriftAction
+          curl --fail --silent http://127.0.0.1:9090/api/v1/alertmanagers | grep -q 'alertmanager:9093'
+          curl --fail --silent http://127.0.0.1:9093/-/ready
+          grafana() { curl --fail --silent --user "admin:$PGPASSWORD" "http://127.0.0.1:3001/api/$1"; }
+          grafana dashboards/uid/txrisk-model-health | grep -q '"title":"Model health"'
+          grafana dashboards/uid/txrisk-fraud-outcomes | grep -q '"title":"Fraud outcomes"'
       # Tracing is on in this run: the API's requests reach Jaeger.
       - run: |
           for _ in $(seq 30); do

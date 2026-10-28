@@ -56,6 +56,11 @@ GRANTS: dict[str, tuple[str, ...]] = {
     # Append-only: no UPDATE, DELETE, TRUNCATE. Aged entries leave only through audit_log_purge,
     # which the owner runs (see migration 0004).
     "audit_log": ("SELECT", "INSERT"),
+    # The scoring path stores the inputs it scored with, and replaces them on re-scoring;
+    # `txrisk monitor` (the owner) reads them.
+    "model_inputs": ("SELECT", "INSERT", "UPDATE"),
+    # Written and read by the monitoring job, which runs as the owner; the application only reads.
+    "monitoring_metrics": ("SELECT",),
 }
 
 

@@ -8,6 +8,10 @@ risk_assessments = 365
 alerts = 365
 sim_swaps = 365
 fraud_labels = 365
+# What `txrisk monitor` reads (the inputs each day's drift is measured on, 30 days is plenty) and
+# writes (its daily metrics).
+model_inputs = 30
+monitoring_metrics = 365
 # Days of real time, not event time: audit entries are stamped with the wall clock. Purged only
 # through audit_log_purge (migration 0004); the database refuses anything under 365.
 audit_log = 2555

@@ -7,7 +7,7 @@ import os
 import signal
 import sys
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -54,6 +54,7 @@ from txrisk.loadtest import (
 )
 from txrisk.models.bundle import train_bundle
 from txrisk.models.registry import MODEL_NAME, log_bundle
+from txrisk.monitoring import load_monitoring_config
 from txrisk.observability.logs import configure_logging
 from txrisk.observability.metrics import Metrics
 from txrisk.observability.tracing import configure_tracing, shutdown_tracing
@@ -93,6 +94,8 @@ from txrisk.store.roles import APP_ROLE, PASSWORD_ENV, app_role_password
 PSEUDONYM_KEY_ENV = "TXRISK_PSEUDONYM_KEY"
 DATABASE_URL_ENV = "TXRISK_DATABASE_URL"
 KAFKA_ENV = "TXRISK_KAFKA_BOOTSTRAP_SERVERS"
+MODEL_BUNDLE_ENV = "TXRISK_MODEL_BUNDLE"
+PUSHGATEWAY_ENV = "TXRISK_PUSHGATEWAY_URL"
 
 
 def _generate(args: argparse.Namespace) -> int:
@@ -216,6 +219,7 @@ def _train(args: argparse.Namespace) -> int:
         period_start=load_config(args.config).period.start,
         config=evaluation,
         seed=args.seed,
+        baseline_bins=load_monitoring_config(args.monitoring_config).baseline.bins,
     )
     folder = args.out / bundle.version
     bundle.save(folder)
@@ -617,6 +621,92 @@ def _scheduler(args: argparse.Namespace) -> int:
     return 0
 
 
+def _monitor(args: argparse.Namespace) -> int:
+    from txrisk.models.bundle import ModelBundle
+    from txrisk.monitoring import job
+    from txrisk.monitoring import metrics as exposition
+
+    configure_logging()
+    url = _database_url(args)
+    if url is None:
+        return 2
+    if sa.make_url(url).username == APP_ROLE:
+        print(
+            f"error: monitoring stores its metrics, which {APP_ROLE} may not; run it as the owner "
+            "(compose runs it in the job service)",
+            file=sys.stderr,
+        )
+        return 2
+    engine = create_engine(url)
+    with engine.connect() as connection:
+        pending = pending_migrations(connection)
+    if pending:
+        print(f"error: run `txrisk migrate` first; pending: {', '.join(pending)}", file=sys.stderr)
+        return 1
+    clock = SimulationClock(engine).peek()
+    if args.day is None and clock is None:
+        print("nothing monitored: the simulation clock has not started")
+        return 0
+    # The scheduler fires the job as the clock enters a day, so by default the day just ended.
+    day = args.day or job.latest_complete_day(clock)  # type: ignore[arg-type]
+    bundle_folder = args.bundle or (
+        Path(os.environ[MODEL_BUNDLE_ENV]) if os.environ.get(MODEL_BUNDLE_ENV) else None
+    )
+    bundle = None
+    if bundle_folder is not None:
+        try:
+            bundle = ModelBundle.load(bundle_folder)
+        except Exception as error:  # a bundle that will not load is reported, not fatal
+            print(f"warning: could not load the Champion model bundle: {error}", file=sys.stderr)
+    monitored = job.monitor_day(
+        engine,
+        model_version=None if bundle is None else bundle.version,
+        baseline=None if bundle is None else bundle.baseline,
+        config=load_monitoring_config(args.config),
+        evaluation=load_evaluation_config(args.evaluation_config),
+        day=day,
+        # Labels are read as of the clock; for a day named explicitly, as of that day's end.
+        as_of=clock if args.day is None else None,
+    )
+    print(
+        f"monitored {monitored.day} for "
+        f"{monitored.model_version or 'no Champion model'}: "
+        f"{len(monitored.metrics)} metrics stored"
+    )
+    if monitored.baseline_missing:
+        print("no baseline: the bundle carries none, so drift was not measured")
+    for name in monitored.psi_warnings:
+        print(f"warning: PSI of {name} is at or above the warning threshold")
+    for name in monitored.psi_actions:
+        print(f"action: PSI of {name} is at or above the action threshold")
+    gateway = args.pushgateway or os.environ.get(PUSHGATEWAY_ENV)
+    if gateway:
+        try:
+            exposition.push(gateway, monitored.metrics)
+        except OSError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        print(f"pushed to {gateway}")
+    engine.dispose()
+    return 0
+
+
+def _alert_sink(args: argparse.Namespace) -> int:
+    from txrisk.monitoring import sink
+
+    configure_logging()
+    server = sink.serve(sink.AlertSink(), args.host, args.port)
+    stop = threading.Event()
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signum, lambda received, _: stop.set())
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    logging.getLogger(__name__).info("alert sink listening on %s:%s", args.host, args.port)
+    stop.wait()
+    server.shutdown()
+    return 0
+
+
 def _worker(args: argparse.Namespace) -> int:
     settings = WorkerSettings.from_env()
     metrics = _observe("txrisk-worker", settings.metrics_port)
@@ -798,6 +888,7 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="a feature table from `txrisk features` to reuse instead of rebuilding it",
     )
+    tr.add_argument("--monitoring-config", type=Path, default=Path("config/monitoring.toml"))
     tr.add_argument("--seed", type=int, default=STACKED_SEED)
     tr.add_argument(
         "--out", type=Path, default=Path("models"), help="the bundle goes in <out>/<version>/"
@@ -1007,6 +1098,35 @@ def main(argv: list[str] | None = None) -> int:
         help="serve Prometheus metrics here (default: $TXRISK_METRICS_PORT)",
     )
     sc.set_defaults(handler=_scheduler)
+
+    mo = commands.add_parser(
+        "monitor",
+        help="compute the model monitoring metrics of a simulated day: drift against the training "
+        "baseline, Alert volume, Risk band mix, label-based performance, Fraud discovery sources",
+    )
+    mo.add_argument("--database-url", help=f"default: ${DATABASE_URL_ENV}")
+    mo.add_argument("--config", type=Path, default=Path("config/monitoring.toml"))
+    mo.add_argument("--evaluation-config", type=Path, default=Path("config/evaluation.toml"))
+    mo.add_argument(
+        "--bundle", type=Path, help=f"the Champion model's folder (default: ${MODEL_BUNDLE_ENV})"
+    )
+    mo.add_argument(
+        "--day",
+        type=date.fromisoformat,
+        help="the simulated day to monitor, YYYY-MM-DD (default: the day before the clock's)",
+    )
+    mo.add_argument(
+        "--pushgateway",
+        help=f"push the metrics to this Pushgateway for Prometheus (default: ${PUSHGATEWAY_ENV})",
+    )
+    mo.set_defaults(handler=_monitor)
+
+    snk = commands.add_parser(
+        "alert-sink", help="run the webhook that records the alerts Alertmanager sends"
+    )
+    snk.add_argument("--host", default="0.0.0.0")
+    snk.add_argument("--port", type=int, default=9095)
+    snk.set_defaults(handler=_alert_sink)
 
     wk = commands.add_parser(
         "worker",

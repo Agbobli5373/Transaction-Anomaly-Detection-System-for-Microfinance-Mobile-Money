@@ -18,6 +18,7 @@ from txrisk.store.tables import (
     billers,
     cases,
     merchants,
+    model_inputs,
     risk_assessment_history,
     risk_assessments,
     sim_swaps,
@@ -170,6 +171,31 @@ def save_assessment(
         .returning(risk_assessments.c.transaction_id)
     ).first()
     return inserted is not None
+
+
+def save_model_inputs(
+    connection: sa.Connection, assessment: RiskAssessment, *, assessed_at: datetime
+) -> None:
+    """Keep the model inputs the assessment was scored with, for drift monitoring; nothing for
+    an assessment that was not made by a model. An input that was empty is stored as null."""
+    if assessment.model_inputs is None:
+        return
+    connection.execute(
+        insert(model_inputs)
+        .values(
+            transaction_id=assessment.transaction_id,
+            assessed_at=assessed_at,
+            model_version=assessment.model_version,
+            inputs={k: _json_number(v) for k, v in assessment.model_inputs.items()},
+        )
+        .on_conflict_do_update(
+            index_elements=[model_inputs.c.transaction_id],
+            set_={
+                "model_version": assessment.model_version,
+                "inputs": {k: _json_number(v) for k, v in assessment.model_inputs.items()},
+            },
+        )
+    )
 
 
 def _assessment_values(assessment: RiskAssessment) -> dict[str, Any]:

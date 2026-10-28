@@ -161,6 +161,14 @@ _Avoid_: Candidate, test model
 Making a Challenger model the Champion model, allowed only when it passes its promotion gates.
 _Avoid_: Deployment, release
 
+**Training baseline**:
+The distribution of every model input, and of the Risk score, on the rows a Champion model was built from, kept inside its bundle for monitoring to compare live Transactions with. Never made from later data.
+_Avoid_: Reference data, Profile (that is a Wallet's recent behaviour)
+
+**Drift**:
+A Champion model's live inputs or Risk scores moving away from its Training baseline, measured by the population stability index (PSI): 0.1 is a warning, 0.25 needs action.
+_Avoid_: Decay, staleness
+
 **Degraded mode**:
 Scoring with Rule hits alone because the Champion model is unavailable. Risk scores produced this way are marked and later re-scored.
 _Avoid_: Fallback mode, safe mode

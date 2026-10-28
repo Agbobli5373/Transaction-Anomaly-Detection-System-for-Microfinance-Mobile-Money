@@ -32,6 +32,8 @@ if TYPE_CHECKING:  # the bundle module itself scores rules, so importing it here
 log = logging.getLogger(__name__)
 
 RULES_ONLY = "rules-only"
+# A stacked Risk score is stored, and returned, to this many decimals.
+RISK_SCORE_DECIMALS = 2
 
 
 class RiskBand(StrEnum):
@@ -56,6 +58,9 @@ class RiskAssessment:
     # assessment is `rules-only` too: the Champion model was down, so it is on the rules scale.
     model_version: str = RULES_ONLY
     degraded: bool = False
+    # The model inputs a bundle scored with, by column (NaN where a feature is empty), kept for
+    # drift monitoring. Not part of the assessment's identity or of what the API returns.
+    model_inputs: dict[str, float] | None = field(default=None, compare=False, repr=False)
 
 
 class Clock(Protocol):
@@ -227,7 +232,7 @@ class ScoringService:
         thresholds = bundle.thresholds
         return RiskAssessment(
             transaction_id=transaction.transaction_id,
-            risk_score=round(score, 2),
+            risk_score=round(score, RISK_SCORE_DECIMALS),
             # Banded before rounding, as the thresholds were set on unrounded scores.
             risk_band=_band(score, medium=thresholds.medium, high=thresholds.high),
             reasons=reasons,
@@ -237,4 +242,5 @@ class ScoringService:
                 "supervised": float(components["fraud_probability"].iloc[0]),
             },
             model_version=bundle.version,
+            model_inputs={str(k): float(v) for k, v in inputs.iloc[0].items()},
         )

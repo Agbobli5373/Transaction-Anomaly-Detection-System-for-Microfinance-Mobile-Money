@@ -134,6 +134,10 @@ class StoredScoring:
             first = records.save_assessment(
                 connection, assessment, assessed_at=transaction.occurred_at
             )
+            if first:
+                records.save_model_inputs(
+                    connection, assessment, assessed_at=transaction.occurred_at
+                )
             if first and assessment.risk_band is RiskBand.HIGH:
                 records.raise_alert(connection, transaction)
             # Read back, so this answer and every replay of it are the same stored assessment.
@@ -221,6 +225,7 @@ class StoredScoring:
         with self._engine.begin() as connection:
             if not records.replace_degraded_assessment(connection, assessment):
                 return None
+            records.save_model_inputs(connection, assessment, assessed_at=transaction.occurred_at)
             raised = assessment.risk_band is RiskBand.HIGH and records.raise_alert(
                 connection, transaction
             )

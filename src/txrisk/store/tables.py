@@ -213,3 +213,24 @@ audit_log = sa.Table(
     sa.Column("outcome", sa.Text, nullable=False),
     sa.Column("detail", JSONB, nullable=False),
 )
+
+# The model inputs each Transaction was scored with, for drift monitoring (migration 0007).
+model_inputs = sa.Table(
+    "model_inputs",
+    metadata,
+    sa.Column("transaction_id", sa.Text, primary_key=True),
+    sa.Column("assessed_at", _TIME, nullable=False),
+    sa.Column("model_version", sa.Text, nullable=False),
+    sa.Column("inputs", JSONB, nullable=False),
+)
+
+# What the daily monitoring job computed, a row per metric, simulated day and member.
+monitoring_metrics = sa.Table(
+    "monitoring_metrics",
+    metadata,
+    sa.Column("day", sa.Date, primary_key=True),
+    sa.Column("metric", sa.Text, primary_key=True),
+    sa.Column("dimension", sa.Text, primary_key=True, server_default=""),
+    sa.Column("member", sa.Text, primary_key=True, server_default=""),
+    sa.Column("value", sa.Double, nullable=False),
+)

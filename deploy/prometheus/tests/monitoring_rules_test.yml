@@ -1,0 +1,201 @@
+# Unit tests for ../rules/monitoring.yml: `promtool test rules deploy/prometheus/tests/monitoring_rules_test.yml`
+# (tests/test_monitoring_alerts.py runs it in the Prometheus image). Each case feeds the series the
+# monitor job pushes, thresholds included, and states which alerts fire.
+rule_files:
+  - ../rules/monitoring.yml
+
+evaluation_interval: 1m
+
+tests:
+  # PSI at 0.3 on one input is over the action threshold of 0.25; a quiet input beside it is not.
+  - interval: 1m
+    input_series:
+      - series: 'txrisk_monitoring_psi{feature="seconds_since_sim_swap", job="txrisk_monitor"}'
+        values: "0.3+0x5"
+      - series: 'txrisk_monitoring_psi{feature="log_amount", job="txrisk_monitor"}'
+        values: "0.02+0x5"
+      - series: 'txrisk_monitoring_psi_warn_threshold{job="txrisk_monitor"}'
+        values: "0.1+0x5"
+      - series: 'txrisk_monitoring_psi_action_threshold{job="txrisk_monitor"}'
+        values: "0.25+0x5"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: InputDriftAction
+        exp_alerts:
+          - exp_labels:
+              severity: action
+              feature: seconds_since_sim_swap
+              job: txrisk_monitor
+            exp_annotations:
+              summary: "Model input seconds_since_sim_swap has drifted far from its training baseline"
+              description: "PSI 0.300 is at or above the action threshold: investigate, and consider retraining."
+      # The same input is not also a warning: a warning is between the thresholds.
+      - eval_time: 2m
+        alertname: InputDriftWarning
+        exp_alerts: []
+
+  # PSI at 0.15 warns and does not need action.
+  - interval: 1m
+    input_series:
+      - series: 'txrisk_monitoring_psi{feature="amount_to_median_30d", job="txrisk_monitor"}'
+        values: "0.15+0x5"
+      - series: 'txrisk_monitoring_psi_warn_threshold{job="txrisk_monitor"}'
+        values: "0.1+0x5"
+      - series: 'txrisk_monitoring_psi_action_threshold{job="txrisk_monitor"}'
+        values: "0.25+0x5"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: InputDriftWarning
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              feature: amount_to_median_30d
+              job: txrisk_monitor
+            exp_annotations:
+              summary: "Model input amount_to_median_30d has drifted from its training baseline"
+              description: "PSI 0.150 is at or above the warning threshold."
+      - eval_time: 2m
+        alertname: InputDriftAction
+        exp_alerts: []
+
+  # The Risk score has its own alerts.
+  - interval: 1m
+    input_series:
+      - series: 'txrisk_monitoring_psi{feature="risk_score", job="txrisk_monitor"}'
+        values: "0.4+0x5"
+      - series: 'txrisk_monitoring_psi_warn_threshold{job="txrisk_monitor"}'
+        values: "0.1+0x5"
+      - series: 'txrisk_monitoring_psi_action_threshold{job="txrisk_monitor"}'
+        values: "0.25+0x5"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: RiskScoreDriftAction
+        exp_alerts:
+          - exp_labels:
+              severity: action
+              feature: risk_score
+              job: txrisk_monitor
+            exp_annotations:
+              summary: "The Risk score distribution has drifted far from its training baseline"
+              description: "PSI 0.400 is at or above the action threshold: the Risk bands no longer mean what they were set to."
+      - eval_time: 2m
+        alertname: InputDriftAction
+        exp_alerts: []
+
+  # The Alerts' own inputs drifting: the SIM-swap timing shift of day 100 shows here.
+  - interval: 1m
+    input_series:
+      - series: 'txrisk_monitoring_psi_alerted{feature="seconds_since_sim_swap", job="txrisk_monitor"}'
+        values: "0.6+0x5"
+      - series: 'txrisk_monitoring_psi_alerted{feature="log_amount", job="txrisk_monitor"}'
+        values: "0.05+0x5"
+      - series: 'txrisk_monitoring_psi_warn_threshold{job="txrisk_monitor"}'
+        values: "0.1+0x5"
+      - series: 'txrisk_monitoring_psi_action_threshold{job="txrisk_monitor"}'
+        values: "0.25+0x5"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: AlertedInputDriftAction
+        exp_alerts:
+          - exp_labels:
+              severity: action
+              feature: seconds_since_sim_swap
+              job: txrisk_monitor
+            exp_annotations:
+              summary: "Alerts have changed a lot in seconds_since_sim_swap against the High Transactions the model was banded on"
+              description: "PSI 0.600 among the last days' High Transactions is at or above the action threshold: what is being flagged, and so probably what fraud looks like, has shifted."
+      - eval_time: 2m
+        alertname: AlertedInputDriftWarning
+        exp_alerts: []
+
+  # Alert volume against the budget band of 0.5 to 1.5 times the budget.
+  - interval: 1m
+    input_series:
+      - series: 'txrisk_monitoring_alert_volume_ratio{job="txrisk_monitor"}'
+        values: "2.0+0x5"
+      - series: 'txrisk_monitoring_alert_volume_ratio_min{job="txrisk_monitor"}'
+        values: "0.5+0x5"
+      - series: 'txrisk_monitoring_alert_volume_ratio_max{job="txrisk_monitor"}'
+        values: "1.5+0x5"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: AlertVolumeOutsideBudgetBand
+        exp_alerts:
+          - exp_labels:
+              severity: action
+            exp_annotations:
+              summary: "Alert volume is outside the Alert budget band"
+              description: "The day's Alerts are 200% of the Alert budget."
+
+  - interval: 1m
+    input_series:
+      - series: 'txrisk_monitoring_alert_volume_ratio{job="txrisk_monitor"}'
+        values: "0.2+0x5"
+      - series: 'txrisk_monitoring_alert_volume_ratio_min{job="txrisk_monitor"}'
+        values: "0.5+0x5"
+      - series: 'txrisk_monitoring_alert_volume_ratio_max{job="txrisk_monitor"}'
+        values: "1.5+0x5"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: AlertVolumeOutsideBudgetBand
+        exp_alerts:
+          - exp_labels:
+              severity: action
+            exp_annotations:
+              summary: "Alert volume is outside the Alert budget band"
+              description: "The day's Alerts are 20% of the Alert budget."
+
+  # Inside the band: nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'txrisk_monitoring_alert_volume_ratio{job="txrisk_monitor"}'
+        values: "1.0+0x5"
+      - series: 'txrisk_monitoring_alert_volume_ratio_min{job="txrisk_monitor"}'
+        values: "0.5+0x5"
+      - series: 'txrisk_monitoring_alert_volume_ratio_max{job="txrisk_monitor"}'
+        values: "1.5+0x5"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: AlertVolumeOutsideBudgetBand
+        exp_alerts: []
+
+  # A segment's recall down 40% against a limit of 30% is a regression; precision down 10% is not.
+  - interval: 1m
+    input_series:
+      - series: 'txrisk_monitoring_label_drop_recall{dimension="channel", segment="ussd", job="txrisk_monitor"}'
+        values: "0.4+0x5"
+      - series: 'txrisk_monitoring_label_drop_precision{dimension="channel", segment="ussd", job="txrisk_monitor"}'
+        values: "0.1+0x5"
+      - series: 'txrisk_monitoring_label_drop_threshold{job="txrisk_monitor"}'
+        values: "0.3+0x5"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: LabelRecallRegression
+        exp_alerts:
+          - exp_labels:
+              severity: action
+              dimension: channel
+              segment: ussd
+              job: txrisk_monitor
+            exp_annotations:
+              summary: "Recall at High has fallen for channel = ussd"
+              description: "Down 40% from its recent mean, against Fraud labels known by now, on matured Transactions."
+      - eval_time: 2m
+        alertname: LabelPrecisionRegression
+        exp_alerts: []
+
+  # A bundle without a baseline is reported, not ignored.
+  - interval: 1m
+    input_series:
+      - series: 'txrisk_monitoring_baseline_available{job="txrisk_monitor"}'
+        values: "0+0x5"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: MonitoringHasNoBaseline
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: txrisk_monitor
+            exp_annotations:
+              summary: "The Champion model's bundle has no training baseline"
+              description: "Drift is not measured until the model is retrained with `txrisk train`."
