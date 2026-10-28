@@ -3,7 +3,8 @@ simulation clock. This scans `src/txrisk` for anything that reads, or waits on, 
 fails on any use that is not in `OPERATIONAL`.
 
 `OPERATIONAL` is the documentation: each entry is a use that is about running the system, not about
-what the data means, with the reason. Adding to it is a decision a reviewer should see. The audit log's timestamps (#15) will belong here too.
+what the data means, with the reason. Adding to it is a decision a reviewer should see. The audit log's
+timestamps (#15) will belong here too.
 """
 
 import ast
