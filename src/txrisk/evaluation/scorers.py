@@ -191,7 +191,13 @@ def stacked_scores(
         {
             "transaction_id": inputs.index.to_numpy(),
             "risk_score": risk_score.to_numpy(),
-            "risk_band": band(risk_score, bundle.thresholds).to_numpy(),
+            "risk_band": bundle.bands(
+                risk_score,
+                rule_scores,
+                feature_rows.set_index("transaction_id")["market_spend_index"]
+                .reindex(inputs.index)
+                .astype("float64"),
+            ).to_numpy(),
             "fraud_probability": (bundle.stacker.score(components) / 100).to_numpy(),
             "rules_score": rule_scores["rules_score"].to_numpy(),
             "critical": rule_scores["critical"].to_numpy(),

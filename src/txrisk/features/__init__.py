@@ -10,6 +10,7 @@ from txrisk.features.history import (
 )
 from txrisk.features.subject_wallet import SubjectWalletFeatures, subject_wallet_features
 from txrisk.features.table import (
+    BANDING_COLUMNS,
     FEATURE_COLUMNS,
     feature_table,
     features_frame,
@@ -20,6 +21,7 @@ from txrisk.features.table import (
 from txrisk.features.transaction import TransactionFeatures, transaction_features
 
 __all__ = [
+    "BANDING_COLUMNS",
     "FEATURE_COLUMNS",
     "FeatureConfig",
     "HistoryProvider",

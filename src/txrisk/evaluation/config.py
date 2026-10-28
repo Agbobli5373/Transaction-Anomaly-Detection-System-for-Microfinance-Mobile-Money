@@ -44,6 +44,10 @@ class EvaluationConfig(_Frozen):
     splits: Splits
     label_maturity_days: int = Field(ge=0)
     alert_budget_per_day: int = Field(gt=0)
+    # How fast the High threshold rises with the market spend index (0 keeps it fixed), and the
+    # largest budget reduction it may reach: see ADR 0010.
+    surge_elasticity: float = Field(default=0.0, ge=0)
+    surge_max_divisor: float = Field(default=3.0, gt=1)
     wallet_age_band_edges: list[int]
 
 

@@ -5,3 +5,8 @@
 min_history = 5
 # A Cash-out counts as near-limit when it is at most this share below its Wallet's KYC tier limit.
 near_limit_share = 0.10
+
+# The market spend index (ADR 0010): the market's spend in the last 6 and the last 24 complete
+# hours, each over the same hours on each of the previous 7 days; the larger ratio is the index.
+market_windows_hours = [6, 24]
+market_baseline_days = 7

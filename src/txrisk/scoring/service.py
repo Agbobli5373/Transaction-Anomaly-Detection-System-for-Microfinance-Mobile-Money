@@ -7,6 +7,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Protocol
 
+import numpy as np
 import pandas as pd
 
 from txrisk.features import (
@@ -230,11 +231,17 @@ class ScoringService:
             config=self._rules,
         )
         thresholds = bundle.thresholds
+        # Banded before rounding, as the thresholds were set on unrounded scores. On a busier day
+        # High starts higher (ADR 0010), but a Critical rule hit is judged by the plain threshold,
+        # which its score is floored at: it is High on any day.
+        index = features.market_spend_index
+        busy_high = thresholds.high_at(np.array([math.nan if index is None else index]))[0]
+        high = thresholds.high if critical else float(busy_high)
+        risk_band = _band(score, medium=thresholds.medium, high=high)
         return RiskAssessment(
             transaction_id=transaction.transaction_id,
             risk_score=round(score, RISK_SCORE_DECIMALS),
-            # Banded before rounding, as the thresholds were set on unrounded scores.
-            risk_band=_band(score, medium=thresholds.medium, high=thresholds.high),
+            risk_band=risk_band,
             reasons=reasons,
             component_scores={
                 "rules": rules_score,

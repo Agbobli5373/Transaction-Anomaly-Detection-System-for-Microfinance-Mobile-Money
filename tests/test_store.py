@@ -197,3 +197,25 @@ def test_postgres_history_gives_exactly_the_features_of_the_offline_replay(
     pd.testing.assert_frame_equal(
         features_frame(sample["transaction_id"].tolist(), served), offline
     )
+
+
+def _hourly_spend(engine: sa.Engine) -> dict[object, float]:
+    with engine.connect() as connection:
+        rows = connection.execute(
+            sa.text("SELECT hour, sum(amount) FROM market_hours GROUP BY hour ORDER BY hour")
+        )
+        return {hour: float(amount) for hour, amount in rows}
+
+
+def test_the_markets_spend_per_hour_is_kept_as_transactions_are_stored(
+    market: Market, data: Path, seeded: str
+):
+    engine = create_engine(seeded)
+    stored = market.transactions
+    expected = stored.groupby(stored["occurred_at"].dt.floor("h"))["amount"].sum().round(2)
+
+    assert _hourly_spend(engine) == pytest.approx(expected.to_dict())
+
+    # Seeding the same Transactions again stores none of them, so none is counted twice.
+    seed(engine, data, until=(pd.Timestamp(START, tz="UTC") + 30 * DAY).to_pydatetime())
+    assert _hourly_spend(engine) == pytest.approx(expected.to_dict())

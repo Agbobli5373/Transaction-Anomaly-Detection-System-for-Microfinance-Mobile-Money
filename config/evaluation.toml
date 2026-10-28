@@ -4,6 +4,13 @@
 label_maturity_days = 30
 # Alerts reviewers can handle per day; precision is also reported at this volume.
 alert_budget_per_day = 100
+# On a festive day the whole market spends more, every amount-driven score rises with it, and a
+# fixed High threshold raises twice the Alerts the budget allows, on the days Analysts are busiest
+# (#47). High therefore rises with the market spend index (config/features.toml): at index 1.2 it
+# is set as if the budget were 1.2 ** surge_elasticity times smaller, never by more than
+# surge_max_divisor. 0 keeps High fixed. See ADR 0010.
+surge_elasticity = 1.5
+surge_max_divisor = 3.0
 # Wallet age bands for segment metrics, in days: under 30, 30-180, over 180.
 wallet_age_band_edges = [30, 180]
 
