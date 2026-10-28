@@ -154,6 +154,22 @@ def test_a_bundle_carries_the_baseline_of_every_model_input_and_the_risk_score(
     assert bundle.baseline.risk_score.edges
 
 
+def test_the_risk_score_baseline_is_binned_on_scores_as_stored(market: Market, bundle: ModelBundle):
+    """The database keeps a stacked Risk score to two decimals, so the baseline must too: bins
+    cut between a score and its rounding would make every live day look drifted."""
+    assert bundle.baseline is not None
+    thresholds = _rows(market, Split.THRESHOLDS)
+    transactions = market.transactions[
+        (split_of(market.transactions["occurred_at"], START, CONFIG) == Split.THRESHOLDS)
+        .fillna(False)
+        .to_numpy(dtype=bool)
+    ]
+    scores = bundle.risk_scores(thresholds, rule_scores_table(transactions, market.features, RULES))
+
+    assert bundle.baseline.risk_score == fit_distribution(scores.round(2), bins=10)
+    assert all(round(edge, 2) == edge for edge in bundle.baseline.risk_score.edges)
+
+
 def test_the_baseline_also_holds_the_inputs_of_the_threshold_days_high_transactions(
     market: Market, bundle: ModelBundle
 ):

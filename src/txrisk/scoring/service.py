@@ -32,6 +32,8 @@ if TYPE_CHECKING:  # the bundle module itself scores rules, so importing it here
 log = logging.getLogger(__name__)
 
 RULES_ONLY = "rules-only"
+# A stacked Risk score is stored, and returned, to this many decimals.
+RISK_SCORE_DECIMALS = 2
 
 
 class RiskBand(StrEnum):
@@ -230,7 +232,7 @@ class ScoringService:
         thresholds = bundle.thresholds
         return RiskAssessment(
             transaction_id=transaction.transaction_id,
-            risk_score=round(score, 2),
+            risk_score=round(score, RISK_SCORE_DECIMALS),
             # Banded before rounding, as the thresholds were set on unrounded scores.
             risk_band=_band(score, medium=thresholds.medium, high=thresholds.high),
             reasons=reasons,

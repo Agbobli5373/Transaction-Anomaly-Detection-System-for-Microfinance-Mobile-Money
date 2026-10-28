@@ -26,6 +26,7 @@ from txrisk.models.stacked import Stacker, stack_components
 from txrisk.models.supervised import SupervisedModel, train_supervised
 from txrisk.monitoring.psi import Baseline, fit_baseline
 from txrisk.scoring.config import RulesConfig
+from txrisk.scoring.service import RISK_SCORE_DECIMALS
 from txrisk.scoring.table import rule_scores_table
 
 _MODEL_FILE = "bundle.pkl"
@@ -195,10 +196,12 @@ def train_bundle(
     # The baseline monitoring measures drift against: the inputs and Risk scores of the threshold
     # days, the latest days before the Champion goes live. Nothing from the evaluation days, whose
     # drift it exists to detect, and the Risk scores are the bundle's own (Critical floor included).
+    # Risk scores are stored to RISK_SCORE_DECIMALS, which is all monitoring can see of a live
+    # one, so the baseline is binned on them as stored.
     recent_risk = bundle.risk_scores(recent, rules_scores)
     baseline = fit_baseline(
         recent[INPUT_COLUMNS],
-        recent_risk,
+        recent_risk.round(RISK_SCORE_DECIMALS),
         bins=baseline_bins,
         alerted=(recent_risk >= thresholds.high).to_numpy(),
     )
