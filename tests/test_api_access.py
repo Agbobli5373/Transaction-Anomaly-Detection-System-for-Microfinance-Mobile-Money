@@ -1,6 +1,7 @@
 """Who may call what under /v1: each role, signed in through real Keycloak, and each API key
 scope, allowed and denied on every endpoint, against real Postgres."""
 
+import urllib.error
 from collections.abc import Iterator
 from dataclasses import replace
 from typing import Any
@@ -27,6 +28,8 @@ ENDPOINTS: dict[str, tuple[str, str, dict[str, Any] | None]] = {
     "rotate an api key": ("POST", "/v1/api-keys/k-none/rotate", None),
     "revoke an api key": ("DELETE", "/v1/api-keys/k-none", None),
 }
+# The clients compose allows: the workbench and the dev-only command-line sign-in.
+COMPOSE_CLIENTS = ("txrisk-workbench", "txrisk-demo-cli")
 API_KEYS = {"list api keys", "issue an api key", "rotate an api key", "revoke an api key"}
 
 # What each role may do; nothing else.
@@ -58,7 +61,9 @@ def allowed(response: Response) -> bool:
 
 @pytest.fixture
 def client(database: str, keycloak: Keycloak) -> Iterator[TestClient]:
-    app = create_app(settings(database, oidc_issuer=keycloak.realm_url))
+    app = create_app(
+        settings(database, oidc_issuer=keycloak.realm_url, oidc_allowed_clients=COMPOSE_CLIENTS)
+    )
     with TestClient(app) as client:
         yield client
 
@@ -139,6 +144,35 @@ def test_the_spec_documents_both_ways_to_authenticate(client: TestClient):
 )
 def test_an_invalid_credential_is_refused(client: TestClient, headers: dict[str, str]):
     assert client.get("/v1/alerts", headers=headers).status_code == 401
+
+
+def test_a_refused_api_key_is_not_challenged_as_a_bearer_token(client: TestClient):
+    response = client.get("/v1/alerts", headers=with_key("txrisk_0000000000000000_nope"))
+
+    assert response.status_code == 401
+    assert "WWW-Authenticate" not in response.headers
+    assert response.json() == {"detail": "invalid, expired or revoked API key"}
+
+
+def test_only_allowed_clients_tokens_are_accepted(database: str, keycloak: Keycloak):
+    """Production allows the workbench alone: a token the demo command-line client got with
+    the direct grant is refused, though it carries the API's audience and a valid role."""
+    access = demo_access(keycloak.realm_url, "analyst", sign_in=keycloak.sign_ins["analyst"])
+
+    with TestClient(create_app(settings(database, oidc_issuer=keycloak.realm_url))) as client:
+        response = client.get("/v1/alerts", headers=signed_in(access))
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "invalid bearer token"}
+
+
+@pytest.mark.parametrize("role", ["analyst", "supervisor", "admin"])
+def test_a_demo_user_cannot_sign_in_with_the_realm_placeholder(keycloak: Keycloak, role: str):
+    """The committed realm names each credential as a placeholder; it is never the value."""
+    with pytest.raises(urllib.error.HTTPError) as refused:
+        demo_access(keycloak.realm_url, role, sign_in="${TXRISK_DEMO_SIGNIN_" + role.upper() + "}")
+
+    assert refused.value.code == 401
 
 
 def test_a_token_and_a_key_together_are_refused(

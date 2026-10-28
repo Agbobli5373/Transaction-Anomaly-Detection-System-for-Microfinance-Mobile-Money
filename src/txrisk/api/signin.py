@@ -2,9 +2,10 @@
 
 The realm in `config/keycloak/txrisk-realm.json` has one demo user per role (`demo-analyst`,
 `demo-supervisor`, `demo-admin`) and a `txrisk-demo-cli` client that allows Keycloak's direct
-grant. Each demo user's sign-in value comes from `TXRISK_DEMO_SIGNIN_<ROLE>` in `.env`, which
-Keycloak substitutes into the realm when it imports it; none is committed. People using the
-workbench sign in through the browser instead.
+grant. Each demo user's sign-in value comes from `TXRISK_DEMO_SIGNIN_<ROLE>` in `keycloak.env`,
+which Keycloak substitutes into the realm when it imports it; none is committed. People using the
+workbench sign in through the browser instead. Development only: production has no demo users,
+and its API does not accept tokens from the demo client.
 """
 
 import json

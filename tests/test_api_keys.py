@@ -201,3 +201,33 @@ def test_txrisk_api_key_issues_a_working_key(
     assert admin.status_with(key, "/v1/models/active") == 403
     unknown_scope = ["api-key", "--name", "x", "--scope", "everything", "--database-url", database]
     assert main(unknown_scope) == 2
+
+
+def test_rotation_hands_on_the_expiry_rather_than_lifting_it(admin: Admin, wall_clock: WallClock):
+    expiring = admin.issue("alerts:read", expires_at="2030-06-01T12:00:00Z")
+
+    successor = admin.rotate(expiring["api_key"]["key_id"], {"overlap_minutes": 30}).json()
+
+    assert successor["api_key"]["expires_at"] == "2030-06-01T12:00:00Z"
+    wall_clock.advance(3 * 60 * MINUTE)
+    assert admin.status_with(expiring["key"]) == 401
+    assert admin.status_with(successor["key"]) == 401
+
+
+def test_a_key_is_rotated_once_so_only_one_successor_is_ever_live(admin: Admin):
+    original = admin.issue("alerts:read")
+    key_id = original["api_key"]["key_id"]
+    successor = admin.rotate(key_id).json()
+
+    again = admin.rotate(key_id)
+
+    assert again.status_code == 409
+    assert again.json() == {
+        "detail": "the API key has already been rotated; rotate its replacement"
+    }
+    listed = admin.get("/v1/api-keys").json()
+    assert len(listed) == 2
+    assert [k["key_id"] for k in listed if k["replaces"] == key_id] == [
+        successor["api_key"]["key_id"]
+    ]
+    assert admin.rotate(successor["api_key"]["key_id"]).status_code == 201

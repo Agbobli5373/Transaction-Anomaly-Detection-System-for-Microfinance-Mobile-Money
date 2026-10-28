@@ -33,6 +33,10 @@ class ApiSettings(BaseModel):
     # Where to fetch the realm's signing keys, when the API reaches Keycloak by another address
     # than the issuer's (in compose, http://keycloak:8080/...). Defaults to the issuer's.
     oidc_jwks_url: str | None = None
+    # The realm clients whose tokens the API accepts, comma-separated in
+    # TXRISK_OIDC_ALLOWED_CLIENTS: the token's `azp`. Production allows the workbench alone;
+    # compose adds txrisk-demo-cli, the dev-only command-line sign-in.
+    oidc_allowed_clients: tuple[str, ...] = ("txrisk-workbench",)
 
     # Browser origins allowed to call the API, comma-separated in TXRISK_CORS_ORIGINS; none by
     # default. A wildcard is refused: the allow-list is strict.
@@ -44,11 +48,11 @@ class ApiSettings(BaseModel):
     # How long a rotated API key stays valid alongside its replacement, unless the rotation says.
     api_key_rotation_overlap_minutes: int = Field(default=24 * 60, ge=0)
 
-    @field_validator("cors_origins", mode="before")
+    @field_validator("cors_origins", "oidc_allowed_clients", mode="before")
     @classmethod
     def _comma_separated(cls, value: object) -> object:
         if isinstance(value, str):
-            return tuple(origin.strip() for origin in value.split(",") if origin.strip())
+            return tuple(item.strip() for item in value.split(",") if item.strip())
         return value
 
     @field_validator("cors_origins")

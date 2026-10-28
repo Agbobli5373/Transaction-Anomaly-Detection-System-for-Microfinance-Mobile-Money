@@ -4,15 +4,17 @@ These are signed by a stand-in identity provider whose JWKS the API fetches over
 fetches Keycloak's; test_api_access.py covers the tokens real Keycloak issues.
 """
 
+import logging
 import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import jwt
 import pytest
 from api_helpers import settings, signed_in
 from fastapi.testclient import TestClient
-from idp_helpers import LocalIdentityProvider, new_signing_key
+from idp_helpers import LocalIdentityProvider, new_signing_key, serve_identity_provider
 
 from txrisk.api import create_app
 
@@ -40,8 +42,18 @@ def test_a_valid_token_for_a_role_is_accepted(client: TestClient, local_idp: Loc
         {"iss": "http://keycloak.example/realms/txrisk"},
         {"typ": "ID"},
         {"exp": None},
+        {"azp": "txrisk-demo-cli"},
+        {"azp": None},
     ],
-    ids=["expired", "another audience", "another issuer", "an id token", "no expiry"],
+    ids=[
+        "expired",
+        "another audience",
+        "another issuer",
+        "an id token",
+        "no expiry",
+        "a client not allowed",
+        "no client",
+    ],
 )
 def test_a_token_not_meant_for_this_api_now_is_refused(
     client: TestClient, local_idp: LocalIdentityProvider, spoilt: dict[str, Any]
@@ -119,3 +131,55 @@ def test_tokens_cannot_be_checked_while_keycloak_is_unreachable(
     assert response.status_code == 503
     assert response.json() == {"detail": "the identity provider is unavailable"}
     assert health.status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("spoilt", "reason"),
+    [
+        ({"exp": int(time.time()) - 60, "iat": int(time.time()) - 400}, "Signature has expired"),
+        ({"aud": "some-other-api"}, "Audience doesn't match"),
+        ({"iss": "http://keycloak.example/realms/txrisk"}, "Invalid issuer"),
+        ({"azp": "txrisk-demo-cli"}, "issued to client 'txrisk-demo-cli'"),
+    ],
+)
+def test_a_refused_token_learns_nothing_of_why_and_the_server_logs_it(
+    client: TestClient,
+    local_idp: LocalIdentityProvider,
+    caplog: pytest.LogCaptureFixture,
+    spoilt: dict[str, Any],
+    reason: str,
+):
+    with caplog.at_level(logging.INFO, logger="txrisk.api.auth"):
+        response = client.get(
+            "/v1/alerts", headers=signed_in(local_idp.access("analyst", **spoilt))
+        )
+
+    assert response.json() == {"detail": "invalid bearer token"}
+    assert reason not in response.text
+    assert any(reason in record.getMessage() for record in caplog.records)
+
+
+def test_a_failing_keycloak_is_asked_once_however_many_tokens_arrive(database: str):
+    """While Keycloak is failing, made-up key IDs cannot pile requests up behind fetches: one
+    fetch is tried, every request waiting for it gets its answer, and no other is tried until the
+    retry interval has passed."""
+    with serve_identity_provider(failing_after=1.0) as failing:
+        app = create_app(
+            settings(database, oidc_issuer=failing.issuer, oidc_jwks_url=failing.jwks_url)
+        )
+        with TestClient(app) as client:
+            forged = [
+                failing.sign(failing.claims("analyst"), key_id=f"made-up-{i}") for i in range(8)
+            ]
+            started = time.monotonic()
+            with ThreadPoolExecutor(8) as pool:
+                responses = list(
+                    pool.map(lambda t: client.get("/v1/alerts", headers=signed_in(t)), forged)
+                )
+            elapsed = time.monotonic() - started
+            again = client.get("/v1/alerts", headers=signed_in(forged[0]))
+
+    assert {r.status_code for r in responses} == {503}
+    assert again.status_code == 503
+    assert failing.fetches == 1
+    assert elapsed < 4

@@ -330,7 +330,9 @@ def _demo_sign_in(args: argparse.Namespace) -> int:
         print("error: pass --realm-url or set TXRISK_OIDC_ISSUER", file=sys.stderr)
         return 2
     if not os.environ.get(demo_signin_env(args.role)):
-        print(f"error: set {demo_signin_env(args.role)} (see .env.example)", file=sys.stderr)
+        print(
+            f"error: set {demo_signin_env(args.role)} (see keycloak.env.example)", file=sys.stderr
+        )
         return 2
     print(demo_access(realm_url, args.role))
     return 0

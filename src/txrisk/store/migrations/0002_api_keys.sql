@@ -22,3 +22,5 @@ CREATE TABLE api_keys (
 );
 
 CREATE INDEX api_keys_by_name ON api_keys (name, created_at);
+-- A key is rotated at most once, so it has at most one live successor.
+CREATE UNIQUE INDEX api_keys_one_replacement ON api_keys (replaces);

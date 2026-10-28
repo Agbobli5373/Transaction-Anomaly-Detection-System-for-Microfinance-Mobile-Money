@@ -16,6 +16,8 @@ x-txrisk: &txrisk
     # Tokens name the realm as browsers reach it; the API fetches its signing keys in-network.
     TXRISK_OIDC_ISSUER: http://localhost:8080/realms/txrisk
     TXRISK_OIDC_JWKS_URL: http://keycloak:8080/realms/txrisk/protocol/openid-connect/certs
+    # The workbench, and the dev-only command-line sign-in; production allows the workbench alone.
+    TXRISK_OIDC_ALLOWED_CLIENTS: txrisk-workbench,txrisk-demo-cli
 
 services:
   postgres:
@@ -35,23 +37,28 @@ services:
       timeout: 5s
       retries: 30
 
-  # Sign-in for people: the txrisk realm, its roles (analyst, supervisor, admin), clients and
-  # demo users, imported from config/keycloak/ at startup. Keycloak substitutes each demo user's
-  # sign-in value from TXRISK_DEMO_SIGNIN_<ROLE> in .env, and its bootstrap admin (for the
-  # console at http://localhost:8080/admin) comes from .env too. Dev mode keeps no state between
-  # runs: each start imports the realm afresh.
+  # Sign-in for people, for development only: the txrisk realm, its roles (analyst, supervisor,
+  # admin), clients and demo users, imported from config/keycloak/ at startup. Keycloak reads only
+  # keycloak.env (copy keycloak.env.example), never .env: each demo user's sign-in value
+  # TXRISK_DEMO_SIGNIN_<ROLE>, substituted into the realm, and optionally its bootstrap admin for
+  # the console at http://localhost:8080/admin. deploy/keycloak/start-dev.sh refuses to start
+  # unless every demo sign-in value is set. Dev mode keeps no state between runs: each start
+  # imports the realm afresh. Published on this machine only.
   keycloak:
     image: keycloak/keycloak:26.4.2
-    command: ["start-dev", "--import-realm"]
-    env_file: .env
+    entrypoint: ["bash", "/opt/txrisk/start-dev.sh"]
+    env_file:
+      - path: keycloak.env
+        required: false
     environment:
       KC_HOSTNAME: http://localhost:8080
       KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
       KC_HEALTH_ENABLED: "true"
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - ./config/keycloak:/opt/keycloak/data/import:ro
+      - ./deploy/keycloak/start-dev.sh:/opt/txrisk/start-dev.sh:ro
     healthcheck:
       # The image has no curl; bash asks the management port's readiness endpoint itself.
       test:

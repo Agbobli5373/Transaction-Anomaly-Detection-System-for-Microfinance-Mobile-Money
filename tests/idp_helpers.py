@@ -28,6 +28,8 @@ class LocalIdentityProvider:
         self.signing_key = new_signing_key()
         self.key_id = "local-key"
         self.jwks: dict[str, Any] = {"keys": [self._jwk(self.signing_key, self.key_id)]}
+        # How many times its JWKS has been asked for.
+        self.fetches = 0
 
     @staticmethod
     def _jwk(signing_key: rsa.RSAPrivateKey, key_id: str) -> dict[str, Any]:
@@ -44,6 +46,8 @@ class LocalIdentityProvider:
             "aud": AUDIENCE,
             "sub": str(uuid.uuid4()),
             "typ": "Bearer",
+            # The client the token was issued to; the workbench is the one production allows.
+            "azp": "txrisk-workbench",
             "iat": now,
             "exp": now + 300,
             "preferred_username": f"someone-{'-'.join(roles) or 'without-roles'}",
@@ -71,7 +75,11 @@ class LocalIdentityProvider:
 
 
 @contextmanager
-def serve_identity_provider() -> Iterator[LocalIdentityProvider]:
+def serve_identity_provider(
+    *, failing_after: float | None = None
+) -> Iterator[LocalIdentityProvider]:
+    """The provider, serving its JWKS until the block ends; with `failing_after`, its JWKS
+    endpoint instead answers 500 after that many seconds, like a struggling Keycloak."""
     provider: LocalIdentityProvider | None = None
 
     class Handler(BaseHTTPRequestHandler):
@@ -79,6 +87,11 @@ def serve_identity_provider() -> Iterator[LocalIdentityProvider]:
             assert provider is not None
             if self.path != "/certs":
                 self.send_error(404)
+                return
+            provider.fetches += 1
+            if failing_after is not None:
+                time.sleep(failing_after)
+                self.send_error(500)
                 return
             payload = json.dumps(provider.jwks).encode()
             self.send_response(200)

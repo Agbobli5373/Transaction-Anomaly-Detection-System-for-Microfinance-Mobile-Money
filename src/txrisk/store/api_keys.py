@@ -31,6 +31,10 @@ class InactiveApiKey(Exception):
     """The API key is revoked or expired, so it cannot be rotated."""
 
 
+class AlreadyRotated(Exception):
+    """The API key has already been rotated; rotate its replacement instead."""
+
+
 @dataclass(frozen=True)
 class ApiKeyRecord:
     key_id: str
@@ -142,12 +146,17 @@ def rotate(
     created_by: str,
     now: datetime,
 ) -> IssuedApiKey:
-    """Issue a replacement with the same name, scopes and rate limit, and let the old key run on
-    for `overlap` so the service can switch over without downtime. The replacement does not
-    expire; an old key that would expire sooner than the overlap keeps its earlier expiry.
+    """Issue a replacement with the same name, scopes, rate limit and expiry, and let the old
+    key run on for `overlap` so the service can switch over without downtime. Rotation replaces
+    the key, not its lifetime: a key due to expire hands its expiry on, and an old key that would
+    expire sooner than the overlap keeps its earlier expiry. A key has at most one replacement,
+    so there is only ever one live successor.
 
-    Raises `UnknownApiKey`, or `InactiveApiKey` if the old key is already revoked or expired.
+    Raises `UnknownApiKey`, `InactiveApiKey` if the old key is already revoked or expired, or
+    `AlreadyRotated` if it already has a replacement.
     """
+    # Locking the old key serialises concurrent rotations of it; the unique index on `replaces`
+    # backs that up.
     old_row = connection.execute(
         sa.select(api_keys).where(api_keys.c.key_id == key_id).with_for_update()
     ).one_or_none()
@@ -156,6 +165,11 @@ def rotate(
     old = _record(old_row)
     if not old.active(now):
         raise InactiveApiKey(key_id)
+    successor = connection.execute(
+        sa.select(api_keys.c.key_id).where(api_keys.c.replaces == key_id)
+    ).first()
+    if successor is not None:
+        raise AlreadyRotated(key_id)
     ends = now + overlap
     if old.expires_at is None or ends < old.expires_at:
         connection.execute(
@@ -168,6 +182,7 @@ def rotate(
         rate_limit_per_minute=old.rate_limit_per_minute,
         created_by=created_by,
         now=now,
+        expires_at=old.expires_at,
         replaces=key_id,
     )
 

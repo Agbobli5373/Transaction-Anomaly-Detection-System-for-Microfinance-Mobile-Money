@@ -8,6 +8,7 @@ import urllib.request
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 import sqlalchemy as sa
@@ -17,8 +18,12 @@ from txrisk.api.signin import demo_signin_env
 from txrisk.generator import GeneratorConfig, load_config
 from txrisk.store import create_engine, migrate
 
+if TYPE_CHECKING:
+    from testcontainers.core.container import DockerContainer
+
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "config" / "generator.toml"
 REALM_FOLDER = Path(__file__).resolve().parents[1] / "config" / "keycloak"
+KEYCLOAK_START = Path(__file__).resolve().parents[1] / "deploy" / "keycloak" / "start-dev.sh"
 # The same image compose runs.
 KEYCLOAK_IMAGE = "keycloak/keycloak:26.4.2"
 KEY = b"test-pseudonym-key"
@@ -109,20 +114,25 @@ class Keycloak:
     sign_ins: dict[str, str]
 
 
+def keycloak_container() -> "DockerContainer":
+    """The Keycloak container compose runs: the same image, realm and start script."""
+    from testcontainers.core.container import DockerContainer
+
+    return (
+        DockerContainer(KEYCLOAK_IMAGE)
+        .with_kwargs(entrypoint=["bash", "/opt/txrisk/start-dev.sh"])
+        .with_volume_mapping(REALM_FOLDER, "/opt/keycloak/data/import", "ro")
+        .with_volume_mapping(KEYCLOAK_START, "/opt/txrisk/start-dev.sh", "ro")
+    )
+
+
 @pytest.fixture(scope="session")
 def keycloak() -> Iterator[Keycloak]:
     """Keycloak in Docker, importing the committed realm with freshly generated sign-in values
     for its demo users, exactly as compose does. It takes about half a minute to start."""
-    from testcontainers.core.container import DockerContainer
-
     _need_docker()
     sign_ins = {role: secrets.token_urlsafe(16) for role in ("analyst", "supervisor", "admin")}
-    container = (
-        DockerContainer(KEYCLOAK_IMAGE)
-        .with_command("start-dev --import-realm")
-        .with_exposed_ports(8080)
-        .with_volume_mapping(REALM_FOLDER, "/opt/keycloak/data/import", "ro")
-    )
+    container = keycloak_container().with_exposed_ports(8080)
     for role, value in sign_ins.items():
         container.with_env(demo_signin_env(role), value)
     with container:

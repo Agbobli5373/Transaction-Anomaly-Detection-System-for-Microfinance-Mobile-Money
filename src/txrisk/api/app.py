@@ -100,7 +100,10 @@ def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _u
         None
         if settings.oidc_issuer is None or jwks_url is None
         else TokenVerifier(
-            issuer=settings.oidc_issuer, audience=settings.oidc_audience, jwks_url=jwks_url
+            issuer=settings.oidc_issuer,
+            audience=settings.oidc_audience,
+            jwks_url=jwks_url,
+            allowed_clients=settings.oidc_allowed_clients,
         )
     )
 
@@ -294,14 +297,15 @@ def _add_api_key_routes(
         responses={
             **_DENIED,
             **unknown,
-            409: {"description": "The key is already revoked or expired"},
+            409: {"description": "The key is revoked, expired or already rotated"},
         },
     )
     def rotate_api_key(
         key_id: str, principal: admin, rotation: Annotated[RotationIn | None, Body()] = None
     ) -> IssuedApiKeyOut:
-        """Issue a replacement with the same name, scopes and rate limit. The old key keeps
-        working for the overlap (a day by default), so the service switches without downtime."""
+        """Issue a replacement with the same name, scopes, rate limit and expiry. The old key
+        keeps working for the overlap (a day by default), so the service switches without
+        downtime. A key is rotated once; rotate its replacement next time."""
         minutes = None if rotation is None else rotation.overlap_minutes
         if minutes is None:
             minutes = settings.api_key_rotation_overlap_minutes
@@ -319,6 +323,10 @@ def _add_api_key_routes(
             raise HTTPException(404, "no such API key") from e
         except api_keys.InactiveApiKey as e:
             raise HTTPException(409, "the API key is revoked or expired; issue a new one") from e
+        except api_keys.AlreadyRotated as e:
+            raise HTTPException(
+                409, "the API key has already been rotated; rotate its replacement"
+            ) from e
         return IssuedApiKeyOut(key=issued.key, api_key=ApiKeyOut.of(issued.record, now))
 
     @v1.delete(

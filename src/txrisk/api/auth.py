@@ -15,11 +15,12 @@ also left on `request.state.principal`, for anything that records who did what.
 """
 
 import json
+import logging
 import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -34,6 +35,8 @@ from txrisk.api.hardening import RateLimiter, retry_after
 from txrisk.store import api_keys
 
 API_KEY_HEADER = "X-API-Key"
+
+_log = logging.getLogger(__name__)
 
 
 class Role(StrEnum):
@@ -91,9 +94,23 @@ class Principal:
 
 
 class _Unauthenticated(HTTPException):
-    def __init__(self, detail: str, *, invalid: bool = True) -> None:
-        challenge = 'Bearer realm="txrisk"' + (', error="invalid_token"' if invalid else "")
-        super().__init__(401, detail, headers={"WWW-Authenticate": challenge})
+    """A 401. Bearer-token failures carry the Bearer challenge; an API key has no standard
+    scheme to challenge with, so its failures carry none."""
+
+    def __init__(self, detail: str, *, challenge: str | None = 'Bearer realm="txrisk"') -> None:
+        headers = None if challenge is None else {"WWW-Authenticate": challenge}
+        super().__init__(401, detail, headers=headers)
+
+
+# One message for every bad bearer token, so a caller cannot tell which check failed; the server
+# logs the reason.
+_REFUSED_BEARER = "invalid bearer token"
+_REFUSED_BEARER_CHALLENGE = 'Bearer realm="txrisk", error="invalid_token"'
+
+
+def _invalid_token(reason: str) -> _Unauthenticated:
+    _log.info("refused a bearer token: %s", reason)
+    return _Unauthenticated(_REFUSED_BEARER, challenge=_REFUSED_BEARER_CHALLENGE)
 
 
 def _signing_keys(jwks: Mapping[str, Any]) -> dict[str, jwt.PyJWK]:
@@ -114,7 +131,10 @@ class TokenVerifier:
 
     The keys are fetched on first use, not at startup, so the API starts and scores for services
     while Keycloak is still coming up. They are fetched again when a token names a key ID not
-    seen before (Keycloak rotated its keys), at most once every `refresh_interval`.
+    seen before (Keycloak rotated its keys), at most once every `refresh_interval`, whether the
+    last fetch worked or failed: a flood of tokens naming made-up key IDs, or a slow Keycloak,
+    costs one short fetch per interval, not one per request. Fetches are one at a time; requests
+    arriving meanwhile wait for its result rather than fetching again.
     """
 
     def __init__(
@@ -123,49 +143,67 @@ class TokenVerifier:
         issuer: str,
         audience: str,
         jwks_url: str,
+        allowed_clients: Collection[str],
         algorithms: tuple[str, ...] = ("RS256",),
         leeway: timedelta = timedelta(seconds=10),
         refresh_interval: timedelta = timedelta(seconds=10),
+        fetch_timeout: timedelta = timedelta(seconds=2),
     ) -> None:
         self.issuer = issuer
         self.audience = audience
         self.jwks_url = jwks_url
+        self.allowed_clients = frozenset(allowed_clients)
         self._algorithms = list(algorithms)
         self._leeway = leeway
         self._refresh_interval = refresh_interval.total_seconds()
+        self._fetch_timeout = fetch_timeout.total_seconds()
         self._keys: dict[str, jwt.PyJWK] = {}
+        # When the last fetch was tried, and whether it failed.
         self._fetched_at: float | None = None
+        self._fetch_failed = False
         self._lock = threading.Lock()
 
     def _fetch(self) -> None:
         try:
-            with urllib.request.urlopen(self.jwks_url, timeout=5) as response:
-                jwks = json.load(response)
-        except (urllib.error.URLError, OSError, ValueError) as e:
-            raise HTTPException(503, "the identity provider is unavailable") from e
-        self._keys = _signing_keys(jwks)
-        self._fetched_at = time.monotonic()
+            with urllib.request.urlopen(self.jwks_url, timeout=self._fetch_timeout) as response:
+                keys = _signing_keys(json.load(response))
+        except (urllib.error.URLError, OSError, ValueError, AttributeError) as e:
+            _log.warning("could not fetch the realm's signing keys: %s", e)
+            self._fetch_failed = True
+        else:
+            self._keys = keys
+            self._fetch_failed = False
+        finally:
+            self._fetched_at = time.monotonic()
 
     def _key(self, key_id: str) -> jwt.PyJWK | None:
+        # Known keys never wait behind a fetch in progress.
+        known = self._keys.get(key_id)
+        if known is not None:
+            return known
         with self._lock:
-            stale = (
-                self._fetched_at is None
-                or time.monotonic() - self._fetched_at >= self._refresh_interval
-            )
-            if key_id not in self._keys and stale:
-                self._fetch()
+            if key_id not in self._keys:
+                due = (
+                    self._fetched_at is None
+                    or time.monotonic() - self._fetched_at >= self._refresh_interval
+                )
+                if due:
+                    self._fetch()
+                if key_id not in self._keys and self._fetch_failed:
+                    raise HTTPException(503, "the identity provider is unavailable")
             return self._keys.get(key_id)
 
     def verify(self, presented: str) -> Principal:
         """The person the access token was issued to. Raises a 401 for anything but a current,
-        correctly signed access token from this realm for this API."""
+        correctly signed access token from this realm, for this API, from an allowed client."""
         try:
             header = jwt.get_unverified_header(presented)
         except jwt.InvalidTokenError as e:
-            raise _Unauthenticated("malformed bearer token") from e
-        key = self._key(str(header.get("kid", "")))
+            raise _invalid_token(f"malformed: {e}") from e
+        key_id = str(header.get("kid", ""))
+        key = self._key(key_id)
         if key is None:
-            raise _Unauthenticated("bearer token signed with an unknown key")
+            raise _invalid_token(f"signed with unknown key {key_id!r}")
         try:
             claims = jwt.decode(
                 presented,
@@ -177,10 +215,13 @@ class TokenVerifier:
                 options={"require": ["exp", "iat", "iss", "aud", "sub"]},
             )
         except jwt.InvalidTokenError as e:
-            raise _Unauthenticated(f"invalid bearer token: {e}") from e
+            raise _invalid_token(str(e)) from e
         # Keycloak marks access tokens "Bearer"; ID and refresh tokens are not credentials here.
         if claims.get("typ", "Bearer") != "Bearer":
-            raise _Unauthenticated("not an access token")
+            raise _invalid_token(f"not an access token: typ {claims.get('typ')!r}")
+        # Every client in the realm may add this API's audience; only the allowed ones may call.
+        if claims.get("azp") not in self.allowed_clients:
+            raise _invalid_token(f"issued to client {claims.get('azp')!r}, which is not allowed")
         realm_access = claims.get("realm_access")
         granted = realm_access.get("roles", []) if isinstance(realm_access, dict) else []
         return Principal(
@@ -213,13 +254,13 @@ class Authenticator:
             return self.verifier.verify(bearer)
         if api_key is not None:
             return self._service(api_key)
-        raise _Unauthenticated(f"send a bearer token or an {API_KEY_HEADER} header", invalid=False)
+        raise _Unauthenticated(f"send a bearer token or an {API_KEY_HEADER} header")
 
     def _service(self, presented: str) -> Principal:
         with self.engine.connect() as connection:
             record = api_keys.authenticate(connection, presented, self.wall_clock())
         if record is None:
-            raise _Unauthenticated("invalid, expired or revoked API key")
+            raise _Unauthenticated("invalid, expired or revoked API key", challenge=None)
         wait = self.limiter.take(record.key_id, record.rate_limit_per_minute)
         if wait is not None:
             raise HTTPException(
