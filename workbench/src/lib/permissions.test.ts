@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import type { Role, User } from "./oidc";
-import { canAssign, canWork, hasCaseScreens, nextMoves, whyNotWorkable } from "./permissions";
+import {
+  canAssign,
+  canDraftReport,
+  canExportReport,
+  canWork,
+  hasCaseScreens,
+  nextMoves,
+  whyNotApprovable,
+  whyNotWorkable,
+} from "./permissions";
 
 const person = (...roles: Role[]): User => ({ sub: "sub-ama", name: "Ama", roles });
 const analyst = person("analyst");
@@ -58,5 +67,38 @@ describe("the moves a status allows", () => {
   it("never reopens a closed Case", () => {
     expect(nextMoves("closed_fraud")).toEqual([]);
     expect(nextMoves("closed_legitimate")).toEqual([]);
+  });
+});
+
+describe("Suspicious transaction reports", () => {
+  const draft = { status: "draft" } as const;
+  const approved = { status: "approved" } as const;
+  const legit = { status: "closed_legitimate", assignee_id: "sub-ama" } as const;
+
+  it("is drafted only from a Case closed as fraud, by its Analyst or a Supervisor", () => {
+    expect(canDraftReport(analyst, closed, null)).toBe(true);
+    expect(canDraftReport(analyst, closed, draft)).toBe(true);
+    expect(canDraftReport(supervisor, closed, null)).toBe(true);
+    expect(canDraftReport(person("analyst"), { ...closed, assignee_id: "sub-yaw" }, null)).toBe(false);
+    expect(canDraftReport(admin, closed, null)).toBe(false);
+    expect(canDraftReport(supervisor, legit, null)).toBe(false);
+    expect(canDraftReport(supervisor, mine, null)).toBe(false);
+  });
+
+  it("is final once approved", () => {
+    expect(canDraftReport(supervisor, closed, approved)).toBe(false);
+  });
+
+  it("is approved by a Supervisor only, and says why an Analyst cannot", () => {
+    expect(whyNotApprovable(supervisor, draft)).toBeNull();
+    expect(whyNotApprovable(analyst, draft)).toMatch(/Only a Supervisor/);
+    expect(whyNotApprovable(supervisor, approved)).toMatch(/approved/);
+  });
+
+  it("is exported by a Supervisor, and only once approved", () => {
+    expect(canExportReport(supervisor, approved)).toBe(true);
+    expect(canExportReport(supervisor, draft)).toBe(false);
+    expect(canExportReport(supervisor, null)).toBe(false);
+    expect(canExportReport(analyst, approved)).toBe(false);
   });
 });

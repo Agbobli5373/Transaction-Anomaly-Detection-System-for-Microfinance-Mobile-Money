@@ -20,6 +20,7 @@ from txrisk.scoring import RiskAssessment
 from txrisk.store.api_keys import ApiKeyRecord
 from txrisk.store.audit import AuditRecord
 from txrisk.store.cases import CaseSummary
+from txrisk.store.reports import Report, ReportFile, mask_phone_numbers
 from txrisk.store.tables import COUNTERPARTY_COLUMNS
 
 TransactionType = Literal["cash_in", "cash_out", "transfer", "payment", "bill_payment"]
@@ -357,12 +358,33 @@ class CaseEventOut(_Body):
     assignee_id: str | None
 
 
+class ReportOut(_Body):
+    report_id: int
+    case_id: int
+    # A draft is rewritten until a Supervisor approves it; an approved report is final and the
+    # only one that can be exported.
+    status: Literal["draft", "approved"]
+    summary: str
+    # Event times of the latest draft and of the approval, and who did each.
+    drafted_at: datetime
+    drafted_by_name: str
+    approved_at: datetime | None
+    approved_by_name: str | None
+
+    @classmethod
+    def of(cls, report: Report) -> "ReportOut":
+        return cls.model_validate(report.__dict__)
+
+
 class CaseDetail(_Body):
     case: CaseOut
     alerts: list[CaseAlertOut]
     # The Subject wallet's latest Transactions as Subject wallet, newest first, scored or not.
     recent_transactions: list[TransactionView]
     events: list[CaseEventOut]
+    # The Suspicious transaction report, once one is drafted; null before, and for any Case that
+    # is not closed as fraud.
+    report: ReportOut | None
 
 
 class AssignIn(_Body):
@@ -391,3 +413,83 @@ class WatchlistPage(_Body):
     items: list[WatchlistItem]
     # Pass as `before` for the next page; null on the last.
     next_before: str | None
+
+
+class ReportDraftIn(_Body):
+    # What the Analyst concludes, in their own words. Phone numbers in it are masked on export.
+    summary: str = Field(min_length=1, max_length=8000)
+
+
+class ExportedCase(_Body):
+    case_id: int
+    subject_wallet_id: str
+    opened_at: datetime
+    closed_at: datetime
+    closed_by_name: str
+
+
+class ExportedTransaction(_Body):
+    transaction: TransactionOut
+    # The Risk assessment with its Reasons (code, message and value).
+    assessment: AssessmentOut
+
+
+class ExportedNote(_Body):
+    kind: Literal["note", "transition"]
+    occurred_at: datetime
+    author: str
+    text: str
+
+
+class ReportExport(_Body):
+    """The Suspicious transaction report as a file, for the institution to file through its own
+    channel. Wallets appear only by pseudonymised ID, and phone numbers in free text are masked."""
+
+    format_version: Literal[1] = 1
+    report_id: int
+    case: ExportedCase
+    summary: str
+    drafted_by: str
+    drafted_at: datetime
+    approved_by: str
+    approved_at: datetime
+    # The Transactions Alerted on the Case, oldest first.
+    transactions: list[ExportedTransaction]
+    # The Case's notes, and the comments on its moves, oldest first.
+    notes: list[ExportedNote]
+
+    @classmethod
+    def of(cls, file: ReportFile) -> "ReportExport":
+        report, case = file.report, file.case
+        assert case.closed_at is not None and case.closed_by_name is not None
+        assert report.approved_at is not None and report.approved_by_name is not None
+        return cls(
+            report_id=report.report_id,
+            case=ExportedCase(
+                case_id=case.case_id,
+                subject_wallet_id=case.subject_wallet_id,
+                opened_at=case.opened_at,
+                closed_at=case.closed_at,
+                closed_by_name=case.closed_by_name,
+            ),
+            summary=mask_phone_numbers(report.summary),
+            drafted_by=report.drafted_by_name,
+            drafted_at=report.drafted_at,
+            approved_by=report.approved_by_name,
+            approved_at=report.approved_at,
+            transactions=[
+                ExportedTransaction(
+                    transaction=TransactionOut.of(t), assessment=AssessmentOut.of(a)
+                )
+                for t, a in file.transactions
+            ],
+            notes=[
+                ExportedNote(
+                    kind="note" if e.kind == "note" else "transition",
+                    occurred_at=e.occurred_at,
+                    author=e.actor_name,
+                    text=mask_phone_numbers(e.body or ""),
+                )
+                for e in file.notes
+            ],
+        )

@@ -139,6 +139,21 @@ case_events = sa.Table(
     sa.Column("assignee_id", sa.Text),
 )
 
+suspicious_transaction_reports = sa.Table(
+    "suspicious_transaction_reports",
+    metadata,
+    sa.Column("report_id", sa.BigInteger, sa.Identity(always=True), primary_key=True),
+    sa.Column("case_id", sa.BigInteger, sa.ForeignKey("cases.case_id"), nullable=False),
+    sa.Column("status", sa.Text, nullable=False),
+    sa.Column("summary", sa.Text, nullable=False),
+    sa.Column("drafted_at", _TIME, nullable=False),
+    sa.Column("drafted_by_id", sa.Text, nullable=False),
+    sa.Column("drafted_by_name", sa.Text, nullable=False),
+    sa.Column("approved_at", _TIME),
+    sa.Column("approved_by_id", sa.Text),
+    sa.Column("approved_by_name", sa.Text),
+)
+
 outbox = sa.Table(
     "outbox",
     metadata,
