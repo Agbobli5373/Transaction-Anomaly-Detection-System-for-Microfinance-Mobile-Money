@@ -12,8 +12,10 @@ COPY src ./src
 RUN uv sync --locked --no-dev --no-editable
 
 FROM python:3.12-slim
-# LightGBM needs OpenMP at runtime; `txrisk backup` and `txrisk restore` run pg_dump and pg_restore.
+# Upgrade first, so any OS fix Debian has published is in the image (the Trivy scan fails on
+# fixable High findings). LightGBM needs OpenMP at runtime; `txrisk backup` and `txrisk restore` run pg_dump and pg_restore.
 RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends libgomp1 postgresql-client-17 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --no-create-home txrisk \
