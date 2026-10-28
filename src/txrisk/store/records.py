@@ -16,6 +16,7 @@ from txrisk.store.tables import (
     agents,
     alerts,
     billers,
+    cases,
     merchants,
     risk_assessments,
     sim_swaps,
@@ -182,7 +183,7 @@ def save_assessment(
     return inserted is not None
 
 
-def _assessment(row: sa.Row[Any]) -> RiskAssessment:
+def assessment_from_row(row: sa.Row[Any]) -> RiskAssessment:
     return RiskAssessment(
         transaction_id=row.transaction_id,
         risk_score=row.risk_score,
@@ -198,17 +199,55 @@ def stored_assessment(connection: sa.Connection, transaction_id: str) -> RiskAss
     row = connection.execute(
         sa.select(risk_assessments).where(risk_assessments.c.transaction_id == transaction_id)
     ).one_or_none()
-    return None if row is None else _assessment(row)
+    return None if row is None else assessment_from_row(row)
+
+
+# The statuses of a Case that is still being worked: an Alert joins such a Case.
+_ACTIVE = ("open", "investigating")
+
+
+def _join_or_open_case(connection: sa.Connection, wallet_id: str, opened_at: datetime) -> int:
+    """The Subject wallet's active Case, opening one if it has none.
+
+    One active Case per wallet is a unique partial index, so concurrent Alerts for a wallet with
+    none cannot each open one: the loser's insert does nothing and it joins the winner's. A found
+    Case is locked FOR SHARE, so a Supervisor or Analyst closing it at this moment waits for this
+    Alert to commit and the closing then sees it; a Case closed first is simply not found.
+    """
+    while True:
+        found: int | None = connection.execute(
+            sa.select(cases.c.case_id)
+            .where(cases.c.subject_wallet_id == wallet_id, cases.c.status.in_(_ACTIVE))
+            .with_for_update(read=True)
+        ).scalar_one_or_none()
+        if found is not None:
+            return found
+        opened: int | None = connection.execute(
+            insert(cases)
+            .values(subject_wallet_id=wallet_id, status="open", opened_at=opened_at)
+            .on_conflict_do_nothing()
+            .returning(cases.c.case_id)
+        ).scalar_one_or_none()
+        if opened is not None:
+            return opened
 
 
 def raise_alert(connection: sa.Connection, transaction: Transaction) -> bool:
-    """Queue an Alert for the Transaction, raised at its event time; False if it has one."""
+    """Queue an Alert for the Transaction, raised at its event time, in its Subject wallet's
+    active Case (opening one if there is none); False if it has an Alert already."""
+    exists = connection.execute(
+        sa.select(sa.literal(1)).where(alerts.c.transaction_id == transaction.transaction_id)
+    ).first()
+    if exists is not None:
+        return False
+    case_id = _join_or_open_case(connection, transaction.subject_wallet_id, transaction.occurred_at)
     inserted = connection.execute(
         insert(alerts)
         .values(
             transaction_id=transaction.transaction_id,
             subject_wallet_id=transaction.subject_wallet_id,
             raised_at=transaction.occurred_at,
+            case_id=case_id,
         )
         .on_conflict_do_nothing(index_elements=[alerts.c.transaction_id])
         .returning(alerts.c.alert_id)
@@ -245,7 +284,7 @@ def list_alerts(
             transaction_id=row.transaction_id,
             subject_wallet_id=row.subject_wallet_id,
             raised_at=row.raised_at,
-            assessment=_assessment(row),
+            assessment=assessment_from_row(row),
         )
         for row in connection.execute(query)
     ]

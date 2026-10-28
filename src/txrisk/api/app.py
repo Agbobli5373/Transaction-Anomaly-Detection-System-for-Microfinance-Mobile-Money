@@ -33,6 +33,7 @@ from txrisk.api.auth import (
     TokenVerifier,
     require,
 )
+from txrisk.api.cases import add_case_routes
 from txrisk.api.hardening import RateLimiter, harden
 from txrisk.api.schemas import (
     ActiveModel,
@@ -324,6 +325,7 @@ def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _u
         return active
 
     _add_api_key_routes(v1, engine, settings, wall_clock)
+    add_case_routes(v1, engine)
 
     @v1.get("/audit", response_model=AuditPage, tags=["audit"], responses=_DENIED)
     def get_audit(

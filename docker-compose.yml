@@ -259,6 +259,21 @@ services:
       redis:
         condition: service_healthy
 
+  # Publishes the transactional outbox (the Fraud discoveries of Cases closed as fraud) to
+  # fraud.discovered. At-least-once: a crash republishes, and the Fraud label store is idempotent.
+  outbox:
+    <<: *txrisk-app
+    command: ["txrisk", "outbox"]
+    restart: unless-stopped
+    environment:
+      <<: *txrisk-app-environment
+      TXRISK_METRICS_PORT: "9102"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redpanda:
+        condition: service_healthy
+
   # Metrics: Prometheus scrapes every service's metrics
   # port over the compose network, and Grafana shows the provisioned Operations dashboard.
   prometheus:

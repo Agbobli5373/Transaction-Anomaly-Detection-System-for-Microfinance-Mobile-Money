@@ -44,6 +44,11 @@ GRANTS: dict[str, tuple[str, ...]] = {
     "simulation_clock": ("SELECT", "UPDATE"),
     # The scheduler records what it fired: it inserts a row per job, then updates it.
     "scheduled_jobs": ("SELECT", "INSERT", "UPDATE"),
+    # A Case moves through its states, and is assigned, in place; nothing is ever deleted.
+    "cases": ("SELECT", "INSERT", "UPDATE"),
+    "case_events": ("SELECT", "INSERT"),
+    # Events awaiting publication: inserted with the change, marked published by the publisher.
+    "outbox": ("SELECT", "INSERT", "UPDATE"),
     # Append-only: no UPDATE, DELETE, TRUNCATE. Aged entries leave only through audit_log_purge,
     # which the owner runs (see migration 0004).
     "audit_log": ("SELECT", "INSERT"),

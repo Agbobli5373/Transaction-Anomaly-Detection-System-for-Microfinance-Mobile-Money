@@ -53,6 +53,7 @@ def test_migrate_applies_each_migration_once(empty_database: str):
         "0002_api_keys",
         "0003_clock_scheduler_labels",
         "0004_audit_log",
+        "0005_cases",
     ]
     assert second == []
     with engine.connect() as connection:

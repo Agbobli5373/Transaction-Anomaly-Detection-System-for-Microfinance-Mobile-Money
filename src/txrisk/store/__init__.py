@@ -1,6 +1,7 @@
 """Postgres: the parties, the history the features read, Risk assessments, Alerts, Fraud
 labels, the simulation clock and retention."""
 
+from txrisk.store import cases
 from txrisk.store.backup import (
     BackupConfig,
     BackupError,
@@ -48,6 +49,7 @@ __all__ = [
     "TransactionConflict",
     "UnknownParty",
     "backup",
+    "cases",
     "check_restore",
     "create_app_engine",
     "create_engine",
