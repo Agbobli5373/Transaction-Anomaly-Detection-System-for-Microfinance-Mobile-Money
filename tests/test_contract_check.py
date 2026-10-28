@@ -62,6 +62,17 @@ def test_removing_a_property_is_breaking_even_when_nested():
     ]
 
 
+def test_a_shared_definition_is_checked_too():
+    base = {"$defs": {"Reason": {"properties": {"code": {"type": "string"}, "value": {}}}}}
+    current = {"$defs": {"Reason": {"properties": {"code": {"type": "integer"}}}}}
+
+    assert breaking_changes(base, current) == [
+        "$.$defs.Reason.code: type changed from ['string'] to ['integer']",
+        "$.$defs.Reason.value: property removed",
+    ]
+    assert breaking_changes(base, {"$defs": {}}) == ["$.$defs.Reason: definition removed"]
+
+
 def test_changing_a_type_or_narrowing_an_enum_is_breaking():
     changed = _with(
         properties={

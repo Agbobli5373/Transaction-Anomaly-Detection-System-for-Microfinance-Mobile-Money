@@ -1,14 +1,16 @@
 """Scoring that records what it scores: idempotent on Transaction ID, raising Alerts for High.
 
-The sync API uses it, and the stream workers are meant to: whichever path scores a Transaction
-first stores the assessment, and every later call gets that stored assessment back.
+The sync API and the stream workers both use it: whichever path scores a Transaction first
+stores the assessment, and every later call, from either path, gets that stored assessment back.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 
 import sqlalchemy as sa
 
-from txrisk.features import FeatureConfig, Transaction
+from txrisk.features import FeatureConfig, HistoryProvider, Transaction
 from txrisk.models.bundle import ModelBundle
 from txrisk.scoring import FixedClock, RiskAssessment, RiskBand, RulesConfig, ScoringService
 from txrisk.store import records
@@ -30,11 +32,15 @@ class StoredScoring:
         features: FeatureConfig,
         rules: RulesConfig,
         bundle: ModelBundle | None = None,
+        history: Callable[[sa.Connection], HistoryProvider] = PostgresHistory,
     ) -> None:
+        """`history` gives the history the features read, over the connection an assessment
+        runs in; by default it is Postgres itself."""
         self._engine = engine
         self._features = features
         self._rules = rules
         self._bundle = bundle
+        self._history = history
 
     def assess(self, transaction: Transaction) -> Scored:
         """The Transaction's Risk assessment, scored and stored with the Transaction if it is new.
@@ -52,7 +58,7 @@ class StoredScoring:
             if missing:
                 raise records.UnknownParty(", ".join(missing))
             service = ScoringService(
-                PostgresHistory(connection),
+                self._history(connection),
                 FixedClock(transaction.occurred_at),
                 features=self._features,
                 rules=self._rules,
@@ -76,6 +82,14 @@ class StoredScoring:
             stored = records.stored_assessment(connection, transaction.transaction_id)
         assert stored is not None
         return Scored(stored, replayed=not first)
+
+    def record_sim_swap(self, wallet_id: str, occurred_at: datetime) -> bool:
+        """Store a SIM swap as history, for the Transactions after it; False if it was already
+        stored. Raises `records.UnknownParty` for an unregistered Wallet."""
+        with self._engine.begin() as connection:
+            if not records.wallet_exists(connection, wallet_id):
+                raise records.UnknownParty(f"wallet_id={wallet_id}")
+            return records.add_sim_swap(connection, wallet_id, occurred_at)
 
     @staticmethod
     def _stored(connection: sa.Connection, transaction: Transaction) -> RiskAssessment | None:

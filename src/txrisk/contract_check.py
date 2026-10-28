@@ -6,6 +6,7 @@ for the committed snapshot and for `oasdiff`, which judges the spec's breaking c
 `*.json` under `<base>` must still be accepted by what `<current>` allows, since a consumer
 built against the base would otherwise break. Adding an optional property or a new schema is
 fine; removing or retyping a property, narrowing an enum, or requiring a new property is not.
+Only properties, items and `$defs` are compared; a change inside `anyOf`/`allOf` is not seen.
 """
 
 import argparse
@@ -54,6 +55,12 @@ def breaking_changes(base: Any, current: Any, path: str = "$") -> list[str]:
             found += breaking_changes(schema, current_properties[name], f"{path}.{name}")
     for name in sorted(set(current.get("required", [])) - set(base.get("required", []))):
         found.append(f"{path}.{name}: newly required")
+    # Models shared through `$ref` live in `$defs`; a removed one is caught by its users.
+    for name, schema in base.get("$defs", {}).items():
+        if name not in current.get("$defs", {}):
+            found.append(f"{path}.$defs.{name}: definition removed")
+        else:
+            found += breaking_changes(schema, current["$defs"][name], f"{path}.$defs.{name}")
     if "items" in base and "items" in current:
         found += breaking_changes(base["items"], current["items"], f"{path}[]")
     return found

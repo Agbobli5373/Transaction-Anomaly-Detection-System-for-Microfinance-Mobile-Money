@@ -74,7 +74,10 @@ jobs:
       - run: uv run pip-audit --requirement requirements.audit.txt --no-deps --disable-pip
 
   # Trivy: the built image's OS packages and libraries, and the repo's Dockerfile and compose
-  # file for misconfigurations. High and critical findings fail the build.
+  # file for misconfigurations. High and critical findings fail the build. The image scan
+  # ignores findings with no fixed version (Debian's util-linux, ncurses, systemd, acl and perl
+  # CVEs are unpatched today, and nothing in the image can be rebuilt to fix them); the build
+  # fails as soon as a fix exists. The Dockerfile and compose scan has no such exception.
   trivy:
     runs-on: ubuntu-latest
     steps:
@@ -98,7 +101,7 @@ jobs:
           docker run --rm \
             -v /var/run/docker.sock:/var/run/docker.sock \
             -v ~/.cache/trivy:/root/.cache/trivy \
-            "$TRIVY_IMAGE" image --severity HIGH,CRITICAL --exit-code 1 txrisk:ci
+            "$TRIVY_IMAGE" image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 txrisk:ci
       - name: Scan the Dockerfile and compose file
         run: |
           docker run --rm \
@@ -137,7 +140,8 @@ jobs:
           # Event schemas are every schemas/*.json; there is nothing to compare until they exist.
           uv run python -m txrisk.contract_check schemas ../base/schemas schemas
 
-  # The compose stack starts: Postgres, the migration job, then an API that reports ready.
+  # The compose stack starts: Postgres, Redpanda, the migration job, an API that reports ready,
+  # and a scoring worker that creates the event topics.
   compose:
     runs-on: ubuntu-latest
     steps:
@@ -147,9 +151,19 @@ jobs:
           generated=$(openssl rand -hex 16)
           grep -v -E '^(POSTGRES_|PG)PASSWORD=' .env.example > .env
           for key in POSTGRES_PASSWORD PGPASSWORD; do echo "$key=$generated" >> .env; done
-      - run: docker compose up --build --detach --wait api
+      - run: docker compose up --build --detach --wait api worker
       - run: curl --fail --silent http://127.0.0.1:8000/v1/ready
       - run: curl --fail --silent http://127.0.0.1:8000/v1/openapi.json > /dev/null
+      # The worker is consuming once its topics exist and it has joined its consumer group.
+      - run: |
+          for _ in $(seq 30); do
+            if docker compose exec -T redpanda rpk group describe txrisk-scoring 2>/dev/null \
+                | grep -q 'transaction.created'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
       - if: failure()
         run: docker compose logs
       - if: always()
