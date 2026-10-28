@@ -67,12 +67,22 @@ def add_agent(connection: sa.Connection, agent_id: str, *, region: str) -> None:
     )
 
 
-def add_sim_swap(connection: sa.Connection, wallet_id: str, occurred_at: datetime) -> None:
-    connection.execute(
+def add_sim_swap(connection: sa.Connection, wallet_id: str, occurred_at: datetime) -> bool:
+    """Store the SIM swap; False if it was already stored."""
+    inserted = connection.execute(
         insert(sim_swaps)
         .values(wallet_id=wallet_id, occurred_at=occurred_at)
         .on_conflict_do_nothing()
-    )
+        .returning(sim_swaps.c.wallet_id)
+    ).first()
+    return inserted is not None
+
+
+def wallet_exists(connection: sa.Connection, wallet_id: str) -> bool:
+    found = connection.execute(
+        sa.select(sa.literal(1)).where(wallets.c.wallet_id == wallet_id)
+    ).first()
+    return found is not None
 
 
 # The key each Counterparty column refers to.

@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://txrisk.example/schemas/score.produced.v1.json",
+  "$defs": {
+    "ComponentScores": {
+      "additionalProperties": false,
+      "description": "Each component of the Risk score on a 0-1 scale; null without a model for it.",
+      "properties": {
+        "rules": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Rules"
+        },
+        "anomaly": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Anomaly"
+        },
+        "supervised": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Supervised"
+        }
+      },
+      "required": [
+        "rules",
+        "anomaly",
+        "supervised"
+      ],
+      "title": "ComponentScores",
+      "type": "object"
+    },
+    "ScoredReason": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "description": "Stable, for filtering and counting.",
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The actual value involved: a number, a word, or null where none applies.",
+          "title": "Value"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "value"
+      ],
+      "title": "Reason",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The Risk assessment of a Transaction, published to `score.produced` once it is stored.\n\nA Transaction has one stored Risk assessment, so every `score.produced` for a transaction ID\ncarries the same assessment: a redelivered `transaction.created` republishes it unchanged.",
+  "properties": {
+    "transaction_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Transaction Id",
+      "type": "string"
+    },
+    "subject_wallet_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Subject Wallet Id",
+      "type": "string"
+    },
+    "assessed_at": {
+      "description": "The simulation clock when it was scored: the Transaction's own event time (ADR 0005).",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$",
+      "title": "Assessed At",
+      "type": "string"
+    },
+    "risk_score": {
+      "maximum": 100,
+      "minimum": 0,
+      "title": "Risk Score",
+      "type": "number"
+    },
+    "risk_band": {
+      "enum": [
+        "Low",
+        "Medium",
+        "High"
+      ],
+      "title": "Risk Band",
+      "type": "string"
+    },
+    "reasons": {
+      "description": "At most three, Critical rule hits first, then by contribution.",
+      "items": {
+        "$ref": "#/$defs/ScoredReason"
+      },
+      "maxItems": 3,
+      "title": "Reasons",
+      "type": "array"
+    },
+    "component_scores": {
+      "$ref": "#/$defs/ComponentScores"
+    },
+    "model_version": {
+      "description": "The model version that scored it.",
+      "minLength": 1,
+      "title": "Model Version",
+      "type": "string"
+    },
+    "degraded": {
+      "description": "True when the rules alone scored because the Champion model was unavailable.",
+      "title": "Degraded",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "transaction_id",
+    "subject_wallet_id",
+    "assessed_at",
+    "risk_score",
+    "risk_band",
+    "reasons",
+    "component_scores",
+    "model_version",
+    "degraded"
+  ],
+  "title": "score.produced",
+  "type": "object"
+}
