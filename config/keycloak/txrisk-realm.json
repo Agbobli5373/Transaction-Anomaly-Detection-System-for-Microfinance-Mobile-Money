@@ -1,0 +1,128 @@
+{
+  "realm": "txrisk",
+  "displayName": "Transaction risk scoring",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": false,
+  "bruteForceProtected": true,
+  "roles": {
+    "realm": [
+      {
+        "name": "analyst",
+        "description": "Analyst: investigates Cases and records findings."
+      },
+      {
+        "name": "supervisor",
+        "description": "Supervisor: assigns Cases to Analysts and approves Suspicious transaction reports."
+      },
+      {
+        "name": "admin",
+        "description": "Admin: issues and rotates API keys, and promotes models."
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "txrisk-workbench",
+      "name": "Case workbench",
+      "description": "The Case workbench: people sign in through the browser, with PKCE.",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:3000/*"],
+      "webOrigins": ["http://localhost:3000"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "protocolMappers": [
+        {
+          "name": "txrisk-api audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "txrisk-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "txrisk-demo-cli",
+      "name": "Demo sign-in from the command line",
+      "description": "For local demos and tests only: signs a demo user in with the direct grant, so curl can call the API.",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "protocolMappers": [
+        {
+          "name": "txrisk-api audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "txrisk-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "demo-analyst",
+      "firstName": "Demo",
+      "lastName": "Analyst",
+      "email": "demo-analyst@txrisk.invalid",
+      "emailVerified": true,
+      "enabled": true,
+      "realmRoles": ["analyst"],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${TXRISK_DEMO_SIGNIN_ANALYST}",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "demo-supervisor",
+      "firstName": "Demo",
+      "lastName": "Supervisor",
+      "email": "demo-supervisor@txrisk.invalid",
+      "emailVerified": true,
+      "enabled": true,
+      "realmRoles": ["supervisor"],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${TXRISK_DEMO_SIGNIN_SUPERVISOR}",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "demo-admin",
+      "firstName": "Demo",
+      "lastName": "Admin",
+      "email": "demo-admin@txrisk.invalid",
+      "emailVerified": true,
+      "enabled": true,
+      "realmRoles": ["admin"],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${TXRISK_DEMO_SIGNIN_ADMIN}",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

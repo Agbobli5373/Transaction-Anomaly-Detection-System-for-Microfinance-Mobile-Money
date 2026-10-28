@@ -1,6 +1,7 @@
-# The development stack: Postgres, Redpanda, the migration job, the scoring API and the scoring
-# workers. Every service reads .env (copy .env.example and fill it in); no credential is written here.
-#   docker compose up --build             # Postgres, Redpanda, migrations, the API on :8000, a worker
+# The development stack: Postgres, Keycloak, Redpanda, the migration job, the scoring API and
+# the scoring workers. The txrisk services read .env (copy .env.example) and Keycloak reads
+# keycloak.env (copy keycloak.env.example); no credential is written here.
+#   docker compose up --build             # Postgres, Keycloak, Redpanda, migrations, the API on :8000, a worker
 #   docker compose run --rm seed          # load data/generated as history (after `make generate`)
 #   docker compose run --rm produce       # publish the live days of data/generated as events
 #   docker compose up --scale worker=3    # more workers share transaction.created's partitions
@@ -15,6 +16,11 @@ x-txrisk: &txrisk
   environment:
     # No credential in the URL: libpq reads the database password from PGPASSWORD in .env.
     TXRISK_DATABASE_URL: postgresql://txrisk@postgres:5432/txrisk
+    # Tokens name the realm as browsers reach it; the API fetches its signing keys in-network.
+    TXRISK_OIDC_ISSUER: http://localhost:8080/realms/txrisk
+    TXRISK_OIDC_JWKS_URL: http://keycloak:8080/realms/txrisk/protocol/openid-connect/certs
+    # The workbench, and the dev-only command-line sign-in; production allows the workbench alone.
+    TXRISK_OIDC_ALLOWED_CLIENTS: txrisk-workbench,txrisk-demo-cli
     TXRISK_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
 
 services:
@@ -34,6 +40,40 @@ services:
       interval: 2s
       timeout: 5s
       retries: 30
+
+  # Sign-in for people, for development only: the txrisk realm, its roles (analyst, supervisor,
+  # admin), clients and demo users, imported from config/keycloak/ at startup. Keycloak reads only
+  # keycloak.env (copy keycloak.env.example), never .env: each demo user's sign-in value
+  # TXRISK_DEMO_SIGNIN_<ROLE>, substituted into the realm, and optionally its bootstrap admin for
+  # the console at http://localhost:8080/admin. deploy/keycloak/start-dev.sh refuses to start
+  # unless every demo sign-in value is set. Dev mode keeps no state between runs: each start
+  # imports the realm afresh. Published on this machine only.
+  keycloak:
+    image: keycloak/keycloak:26.4.2
+    entrypoint: ["bash", "/opt/txrisk/start-dev.sh"]
+    env_file:
+      - path: keycloak.env
+        required: false
+    environment:
+      KC_HOSTNAME: http://localhost:8080
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./config/keycloak:/opt/keycloak/data/import:ro
+      - ./deploy/keycloak/start-dev.sh:/opt/txrisk/start-dev.sh:ro
+    healthcheck:
+      # The image has no curl; bash asks the management port's readiness endpoint itself.
+      test:
+        - CMD
+        - bash
+        - -c
+        - exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.0\r\n\r\n' >&3 && grep -q UP <&3
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
 
   # The event stream (ADR 0004): one broker, reachable as redpanda:9092 inside compose and as
   # localhost:19092 from the host.
@@ -110,6 +150,10 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      # Services can score with API keys before Keycloak is up; people's tokens are checked once
+      # it is.
+      keycloak:
+        condition: service_started
     healthcheck:
       test:
         - CMD
