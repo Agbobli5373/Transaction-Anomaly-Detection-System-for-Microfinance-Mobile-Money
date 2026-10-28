@@ -99,6 +99,11 @@ INPUT_REASONS: dict[str, InputReason] = {
         lambda v: f"Amount is {v:.1f}x this Wallet's 30-day median",
         ("FIRST_TIME_LARGE_TRANSFER",),
     ),
+    "amount_to_largest_cash_in_30d": _always(
+        "AMOUNT_VS_LARGEST_CASH_IN",
+        lambda v: f"Amount is {v:.1f}x this Wallet's largest Cash-in in 30 days",
+        ("NEAR_LIMIT_CASH_IN",),
+    ),
     "seconds_since_last_transaction": _always(
         "TIME_SINCE_LAST", lambda v: f"{_duration(v)} since this Wallet's last Transaction"
     ),
@@ -118,6 +123,11 @@ INPUT_REASONS: dict[str, InputReason] = {
         "RECEIVER_FAN_IN",
         lambda v: f"The receiving Wallet got money from {v:.0f} different Wallets in 24 hours",
         ("MULE_CASHOUT",),
+    ),
+    "received_from_counterparty_24h": _count(
+        "RECEIVED_FROM_COUNTERPARTY",
+        lambda v: f"The recipient sent this Wallet {v:,.0f} GHS in the last 24 hours",
+        ("RETURN_TO_NEW_SENDER",),
     ),
     "agent_cash_out_count_24h": _count(
         "AGENT_CASH_OUTS",
@@ -156,7 +166,7 @@ INPUT_REASONS: dict[str, InputReason] = {
     "amount_to_kyc_limit": _always(
         "NEAR_KYC_LIMIT",
         lambda v: f"Amount is {v:.0%} of the KYC tier limit",
-        ("AGENT_STRUCTURING",),
+        ("AGENT_STRUCTURING", "NEAR_LIMIT_CASH_IN"),
     ),
     "log_amount": InputReason(
         "AMOUNT",

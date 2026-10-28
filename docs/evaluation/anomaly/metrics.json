@@ -9,256 +9,256 @@
   "fraud": 974,
   "fraud_discovered": 302,
   "ranking": {
-    "roc_auc": 0.9062555713684368,
-    "pr_auc": 0.25735412559884574
+    "roc_auc": 0.9299978155060344,
+    "pr_auc": 0.33931115830838365
   },
   "at_high": {
-    "flagged": 6390,
-    "precision": 0.08169014084507042,
-    "recall": 0.5359342915811088,
-    "false_positive_rate": 0.011016594355403444,
-    "per_day": 213.0
+    "flagged": 5520,
+    "precision": 0.10253623188405797,
+    "recall": 0.5811088295687885,
+    "false_positive_rate": 0.009300649017837195,
+    "per_day": 184.0
   },
   "at_medium_or_higher": {
-    "flagged": 22104,
-    "precision": 0.028908794788273615,
-    "recall": 0.6560574948665298,
-    "false_positive_rate": 0.040298431806192046
+    "flagged": 20115,
+    "precision": 0.0341039025602784,
+    "recall": 0.704312114989733,
+    "false_positive_rate": 0.03647604153563966
   },
   "at_alert_budget": {
     "budget_per_day": 100,
     "alerts": 3000,
-    "precision": 0.15166666666666667
+    "precision": 0.16866666666666666
   },
   "recall_by_scenario": {
     "account_takeover_drain": {
       "fraud": 180,
-      "recall_at_high": 0.6944444444444444
+      "recall_at_high": 0.7388888888888889
     },
     "agent_structuring": {
       "fraud": 48,
-      "recall_at_high": 0.6458333333333334
+      "recall_at_high": 0.6666666666666666
     },
     "mule_fan_in": {
       "fraud": 144,
-      "recall_at_high": 0.09027777777777778
+      "recall_at_high": 0.1111111111111111
     },
     "reversal_scam": {
       "fraud": 81,
-      "recall_at_high": 0.0
+      "recall_at_high": 0.024691358024691357
     },
     "sim_swap_takeover": {
       "fraud": 383,
-      "recall_at_high": 0.6553524804177546
+      "recall_at_high": 0.6945169712793734
     },
     "social_engineering_push": {
       "fraud": 138,
-      "recall_at_high": 0.7391304347826086
+      "recall_at_high": 0.8478260869565217
     }
   },
   "recall_against": {
-    "ground_truth": 0.5359342915811088,
-    "discovered_labels": 0.6059602649006622
+    "ground_truth": 0.5811088295687885,
+    "discovered_labels": 0.6688741721854304
   },
   "segments": {
     "region": {
       "Ahafo": {
         "transactions": 9394,
         "fraud": 9,
-        "flagged": 179,
-        "precision": 0.0335195530726257,
+        "flagged": 124,
+        "precision": 0.04838709677419355,
         "recall": 0.6666666666666666,
-        "false_positive_rate": 0.01843367075119872
+        "false_positive_rate": 0.012573255194459244
       },
       "Ashanti": {
         "transactions": 92863,
         "fraud": 177,
-        "flagged": 927,
-        "precision": 0.11434735706580366,
-        "recall": 0.5988700564971752,
-        "false_positive_rate": 0.00885786418660855
+        "flagged": 886,
+        "precision": 0.12189616252821671,
+        "recall": 0.6101694915254238,
+        "false_positive_rate": 0.008393932201195433
       },
       "Bono": {
         "transactions": 23935,
         "fraud": 35,
-        "flagged": 527,
-        "precision": 0.030360531309297913,
-        "recall": 0.45714285714285713,
-        "false_positive_rate": 0.021380753138075314
+        "flagged": 389,
+        "precision": 0.043701799485861184,
+        "recall": 0.4857142857142857,
+        "false_positive_rate": 0.015564853556485356
       },
       "Bono East": {
         "transactions": 22020,
         "fraud": 47,
-        "flagged": 485,
-        "precision": 0.05360824742268041,
-        "recall": 0.5531914893617021,
-        "false_positive_rate": 0.020889273198925955
+        "flagged": 335,
+        "precision": 0.08358208955223881,
+        "recall": 0.5957446808510638,
+        "false_positive_rate": 0.013971692531743504
       },
       "Central": {
         "transactions": 52224,
         "fraud": 91,
-        "flagged": 547,
-        "precision": 0.08226691042047532,
-        "recall": 0.4945054945054945,
-        "false_positive_rate": 0.009629217578117508
+        "flagged": 489,
+        "precision": 0.10224948875255624,
+        "recall": 0.5494505494505495,
+        "false_positive_rate": 0.008420769953772084
       },
       "Eastern": {
         "transactions": 50792,
         "fraud": 96,
-        "flagged": 503,
-        "precision": 0.09741550695825049,
-        "recall": 0.5104166666666666,
-        "false_positive_rate": 0.008955341644311188
+        "flagged": 456,
+        "precision": 0.10964912280701754,
+        "recall": 0.5208333333333334,
+        "false_positive_rate": 0.008008521382357582
       },
       "Greater Accra": {
         "transactions": 94076,
         "fraud": 169,
-        "flagged": 797,
-        "precision": 0.09159347553324969,
-        "recall": 0.4319526627218935,
-        "false_positive_rate": 0.007709755396296336
+        "flagged": 758,
+        "precision": 0.11213720316622691,
+        "recall": 0.5029585798816568,
+        "false_positive_rate": 0.007166664891861097
       },
       "North East": {
         "transactions": 11029,
         "fraud": 22,
-        "flagged": 104,
-        "precision": 0.08653846153846154,
-        "recall": 0.4090909090909091,
-        "false_positive_rate": 0.008630871263741256
+        "flagged": 118,
+        "precision": 0.0847457627118644,
+        "recall": 0.45454545454545453,
+        "false_positive_rate": 0.009811937857726901
       },
       "Northern": {
         "transactions": 36243,
         "fraud": 63,
-        "flagged": 326,
-        "precision": 0.0950920245398773,
-        "recall": 0.49206349206349204,
-        "false_positive_rate": 0.008153676064123825
+        "flagged": 333,
+        "precision": 0.1021021021021021,
+        "recall": 0.5396825396825397,
+        "false_positive_rate": 0.008264234383637369
       },
       "Oti": {
         "transactions": 12507,
         "fraud": 13,
-        "flagged": 74,
-        "precision": 0.10810810810810811,
+        "flagged": 81,
+        "precision": 0.09876543209876543,
         "recall": 0.6153846153846154,
-        "false_positive_rate": 0.005282535617096206
+        "false_positive_rate": 0.005842804546182167
       },
       "Savannah": {
         "transactions": 9396,
         "fraud": 24,
-        "flagged": 344,
-        "precision": 0.046511627906976744,
+        "flagged": 241,
+        "precision": 0.06639004149377593,
         "recall": 0.6666666666666666,
-        "false_positive_rate": 0.034997865983781476
+        "false_positive_rate": 0.024007682458386685
       },
       "Upper East": {
         "transactions": 23407,
         "fraud": 46,
-        "flagged": 482,
-        "precision": 0.06016597510373444,
-        "recall": 0.6304347826086957,
-        "false_positive_rate": 0.019391293180942598
+        "flagged": 356,
+        "precision": 0.09550561797752809,
+        "recall": 0.7391304347826086,
+        "false_positive_rate": 0.013783656521553016
       },
       "Upper West": {
         "transactions": 16367,
         "fraud": 34,
-        "flagged": 137,
-        "precision": 0.10948905109489052,
-        "recall": 0.4411764705882353,
-        "false_positive_rate": 0.007469540194697851
+        "flagged": 117,
+        "precision": 0.1452991452991453,
+        "recall": 0.5,
+        "false_positive_rate": 0.006122573930080206
       },
       "Volta": {
         "transactions": 28770,
         "fraud": 51,
-        "flagged": 267,
-        "precision": 0.11235955056179775,
-        "recall": 0.5882352941176471,
-        "false_positive_rate": 0.008252376475504022
+        "flagged": 265,
+        "precision": 0.12830188679245283,
+        "recall": 0.6666666666666666,
+        "false_positive_rate": 0.00804345555207354
       },
       "Western": {
         "transactions": 36144,
         "fraud": 69,
-        "flagged": 506,
-        "precision": 0.09486166007905138,
-        "recall": 0.6956521739130435,
-        "false_positive_rate": 0.012695772695772696
+        "flagged": 419,
+        "precision": 0.11933174224343675,
+        "recall": 0.7246376811594203,
+        "false_positive_rate": 0.010228690228690229
       },
       "Western North": {
         "transactions": 14458,
         "fraud": 28,
-        "flagged": 185,
-        "precision": 0.08108108108108109,
-        "recall": 0.5357142857142857,
-        "false_positive_rate": 0.01178101178101178
+        "flagged": 153,
+        "precision": 0.12418300653594772,
+        "recall": 0.6785714285714286,
+        "false_positive_rate": 0.009286209286209286
       }
     },
     "kyc_tier": {
       "enhanced": {
         "transactions": 81346,
         "fraud": 119,
-        "flagged": 851,
-        "precision": 0.05875440658049354,
-        "recall": 0.42016806722689076,
-        "false_positive_rate": 0.009861253031627415
+        "flagged": 739,
+        "precision": 0.07442489851150202,
+        "recall": 0.46218487394957986,
+        "false_positive_rate": 0.008420845285434646
       },
       "medium": {
         "transactions": 217921,
         "fraud": 353,
-        "flagged": 2350,
-        "precision": 0.08808510638297873,
-        "recall": 0.5864022662889519,
-        "false_positive_rate": 0.009849794087365788
+        "flagged": 2029,
+        "precision": 0.10892065056678167,
+        "recall": 0.6260623229461756,
+        "false_positive_rate": 0.008310045594940432
       },
       "minimum": {
         "transactions": 234358,
         "fraud": 502,
-        "flagged": 3189,
-        "precision": 0.08309814989024773,
-        "recall": 0.5278884462151394,
-        "false_positive_rate": 0.012503420908593322
+        "flagged": 2752,
+        "precision": 0.10537790697674419,
+        "recall": 0.5776892430278885,
+        "false_positive_rate": 0.010527846195949644
       }
     },
     "channel": {
       "app": {
         "transactions": 167481,
         "fraud": 509,
-        "flagged": 3130,
-        "precision": 0.10159744408945687,
-        "recall": 0.6247544204322201,
-        "false_positive_rate": 0.016841147018661812
+        "flagged": 2865,
+        "precision": 0.11797556719022688,
+        "recall": 0.6640471512770137,
+        "false_positive_rate": 0.015134274010013654
       },
       "ussd": {
         "transactions": 366144,
         "fraud": 465,
-        "flagged": 3260,
-        "precision": 0.06257668711656442,
-        "recall": 0.43870967741935485,
-        "false_positive_rate": 0.008357056325356391
+        "flagged": 2655,
+        "precision": 0.08587570621468926,
+        "recall": 0.49032258064516127,
+        "false_positive_rate": 0.006636968488756533
       }
     },
     "wallet_age_band": {
       "30-180d": {
         "transactions": 146900,
         "fraud": 96,
-        "flagged": 1101,
-        "precision": 0.04904632152588556,
-        "recall": 0.5625,
-        "false_positive_rate": 0.0071319582572681945
+        "flagged": 833,
+        "precision": 0.07082833133253301,
+        "recall": 0.6145833333333334,
+        "false_positive_rate": 0.005272335903653852
       },
       "<30d": {
         "transactions": 38138,
         "fraud": 0,
-        "flagged": 896,
+        "flagged": 1475,
         "precision": 0.0,
         "recall": null,
-        "false_positive_rate": 0.023493628402118622
+        "false_positive_rate": 0.03867533693429126
       },
       ">=180d": {
         "transactions": 348587,
         "fraud": 878,
-        "flagged": 4393,
-        "precision": 0.10653312087411791,
-        "recall": 0.5330296127562643,
-        "false_positive_rate": 0.01128817488186961
+        "flagged": 3212,
+        "precision": 0.15784557907845578,
+        "recall": 0.5774487471526196,
+        "false_positive_rate": 0.00777949377209103
       }
     }
   }

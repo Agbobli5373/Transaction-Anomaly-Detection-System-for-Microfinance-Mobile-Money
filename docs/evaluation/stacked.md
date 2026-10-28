@@ -24,33 +24,34 @@ Full numbers are in [stacked/metrics.json](stacked/metrics.json).
 
 **The Risk score is the chance of discovered fraud × 100, not the chance of fraud.** The stacker learns from Fraud labels, and an undiscovered fraud counts as legitimate, so its probability inherits the same target as the supervised model's calibration. Here, only about two frauds in three are ever discovered. Correcting for that would need the discovery rate, which only Ground truth knows, and Ground truth may not reach training (ADR 0007). So no correction is applied.
 
-At a fraud rate of about 0.2%, most scores are far below 1. High starts at a Risk score of **0.16**, and Medium at 0.094. The Risk score therefore keeps two decimals; rounded to whole numbers, nearly every alert would read 0. A Critical rule hit raises the score to at least the High threshold.
+At a fraud rate of about 0.2%, most scores are far below 1. High starts at a Risk score of **0.17**, and Medium at 0.088. The Risk score therefore keeps two decimals; rounded to whole numbers, nearly every alert would read 0. A Critical rule hit raises the score to at least the High threshold.
 
 ## The stacker's weights
 
 | Component | Weight (log-odds per unit) |
 |---|---|
-| Rules score (0–1) | 7.37 |
-| Anomaly score (0–1) | 1.29 |
-| Supervised log-odds | 0.34 |
-| Intercept | −6.28 |
+| Rules score (0–1) | 6.13 |
+| Anomaly score (0–1) | 1.59 |
+| Supervised log-odds | 0.37 |
+| Intercept | −6.06 |
 
-- **The rules count for much more than their PR-AUC suggests.** One High-severity hit (a rules score of 0.5) adds 3.7 to the log-odds, and a Critical hit (0.9) adds 6.6. When a rule fires, it is right far more often than its coarse ranking shows.
+- **The rules count for much more than their PR-AUC suggests.** One High-severity hit (a rules score of 0.5) adds 3.1 to the log-odds, and a Critical hit (0.9) adds 5.5. When a rule fires, it is right far more often than its coarse ranking shows.
+- **The rules weight was 7.37 before #46.** Two things lowered it. The structuring rules now fire 51 times on the calibration days, and Agent structuring is never discovered, so to the stacker those hits are legitimate: with the models unchanged, that alone takes the weight to 7.20. The rest comes from the models' two new inputs, which make the Anomaly score count for more (1.59 against 1.29). See [Agent structuring and the Reversal scam](#agent-structuring-and-the-reversal-scam).
 - **The supervised model's log-odds are scaled down by about two thirds.** It is class-weighted, so its raw log-odds are overconfident. The stacker learns its own scaling for them, which is why it takes the raw probability rather than the calibrated one.
-- **The Anomaly score adds a little.** Going from a typical Transaction (0.5) to the most unusual (1.0) adds about 0.65 to the log-odds.
+- **The Anomaly score adds a little.** Going from a typical Transaction (0.5) to the most unusual (1.0) adds about 0.8 to the log-odds.
 
 ## Against each component alone
 
 | | Rules only | Anomaly score | Supervised only | Stacked |
 |---|---|---|---|---|
-| PR-AUC | 0.475 | 0.257 | 0.708 | **0.725** |
-| ROC-AUC | 0.884 | 0.906 | 0.921 | **0.968** |
-| High a day | 10.3 | 213 | 120 | 117 |
-| Precision / recall at High | **0.89** / 0.28 | 0.08 / 0.54 | 0.22 / 0.82 | 0.23 / **0.83** |
-| Precision at the Alert budget (top 100 a day) | 0.199 | 0.152 | 0.260 | **0.267** |
-| Recall within the Alert budget (top 100 a day) | 0.61 | 0.47 | 0.80 | **0.82** |
-| Recall at Medium or higher | 0.68 | 0.66 | **0.89** | 0.86 |
-| Recall at High, against discovered labels | 0.43 | 0.61 | 0.88 | **0.90** |
+| PR-AUC | 0.487 | 0.339 | 0.686 | **0.753** |
+| ROC-AUC | 0.891 | 0.930 | 0.892 | **0.962** |
+| High a day | 13.4 | 184 | 120 | 123 |
+| Precision / recall at High | **0.83** / 0.34 | 0.10 / 0.58 | 0.21 / 0.78 | 0.22 / **0.85** |
+| Precision at the Alert budget (top 100 a day) | 0.205 | 0.169 | 0.248 | **0.274** |
+| Recall within the Alert budget (top 100 a day) | 0.63 | 0.52 | 0.77 | **0.84** |
+| Recall at Medium or higher | 0.70 | 0.70 | 0.86 | **0.89** |
+| Recall at High, against discovered labels | 0.46 | 0.67 | 0.84 | **0.90** |
 
 ![Precision-recall curve](stacked/pr_curve.png) ![ROC curve](stacked/roc_curve.png)
 
@@ -60,12 +61,14 @@ Recall at each scorer's own High band, and within the top 100 a day.
 
 | Scenario | Fraud | Rules at High | Anomaly at High | Supervised at High | Stacked at High | Supervised, top 100 | Stacked, top 100 |
 |---|---|---|---|---|---|---|---|
-| SIM-swap takeover | 383 | 0.32 | 0.66 | **0.90** | 0.87 | **0.90** | 0.86 |
-| Account takeover drain | 180 | 0.62 | 0.69 | 0.95 | **0.99** | 0.94 | **0.98** |
-| Mule fan-in | 144 | 0.12 | 0.09 | 0.72 | **0.74** | 0.62 | **0.73** |
-| Social-engineering push | 138 | 0.10 | 0.74 | 0.96 | **1.00** | 0.96 | **1.00** |
-| Reversal scam | 81 | 0.00 | 0.00 | **0.41** | 0.38 | **0.40** | **0.40** |
-| Agent structuring | 48 | 0.19 | **0.65** | 0.29 | 0.42 | 0.27 | **0.40** |
+| SIM-swap takeover | 383 | 0.32 | 0.69 | 0.83 | **0.85** | 0.81 | **0.84** |
+| Account takeover drain | 180 | 0.62 | 0.74 | **0.95** | **0.95** | **0.94** | **0.94** |
+| Mule fan-in | 144 | 0.12 | 0.11 | 0.84 | **0.90** | 0.80 | **0.87** |
+| Social-engineering push | 138 | 0.10 | 0.85 | 0.94 | **0.97** | 0.94 | **0.98** |
+| Reversal scam | 81 | 0.48 | 0.02 | 0.06 | **0.51** | 0.09 | **0.51** |
+| Agent structuring | 48 | 0.58 | **0.67** | 0.38 | 0.65 | 0.25 | **0.65** |
+
+Before #46, the stacked recall at High was 0.42 on Agent structuring and 0.38 on the Reversal scam.
 
 ## Reliability: is the probability honest?
 
@@ -73,12 +76,12 @@ The stacker's own probability is the Risk score ÷ 100 before the Critical floor
 
 | Against | Probability | Brier score | ECE |
 |---|---|---|---|
-| Eventual Fraud discovery (what both are fitted to) | supervised, calibrated | **0.000733** | **0.00048** |
-| | stacked | 0.000832 | 0.00060 |
-| Ground truth | supervised, calibrated | **0.001052** | **0.00105** |
-| | stacked | 0.001190 | 0.00111 |
+| Eventual Fraud discovery (what both are fitted to) | supervised, calibrated | **0.000738** | **0.00056** |
+| | stacked | 0.000828 | 0.00057 |
+| Ground truth | supervised, calibrated | **0.001051** | 0.00113 |
+| | stacked | 0.001159 | **0.00108** |
 
-- **The stacked probability is a little less honest than the supervised one, though it ranks better.** It understates the mid-range. In its 0.1–0.2 bin, 45% of Transactions are eventually discovered as fraud, and 67% in its 0.2–0.3 bin. A logistic stacker can only scale and shift log-odds, while centred isotonic calibration can bend.
+- **The stacked probability is a little less honest than the supervised one, though it ranks better.** It understates the mid-range. In its 0.1–0.2 bin, 62% of Transactions are eventually discovered as fraud, and 59% in its 0.2–0.3 bin. A logistic stacker can only scale and shift log-odds, while centred isotonic calibration can bend.
 - **Against Ground truth it runs lower still.** That is the discovery gap from [What the Risk score means](#what-the-risk-score-means): the price of training only on what the operation would know (ADR 0007).
 - If the Risk score is ever read as a probability rather than as a rank, recalibrating the stacked output on the calibration days with centred isotonic regression is the next step. Both judge scorers at the Alert budget, which depends only on rank.
 
@@ -94,7 +97,7 @@ Each Risk assessment gives up to three Reasons. Critical rule hits come first; a
 - **Messages state the value without judging it** (`WALLET_AGE`: "Wallet registered 400 days ago"), because the model can be pushed up by a long history as well as a short one. A count of zero is never a Reason.
 - **Inputs that only say what kind of Transaction it is** (its type, channel and direction) give no Reason.
 
-The riskiest evaluation Transactions, by scenario:
+The riskiest evaluation Transactions, by scenario, from the bundle before #46. In the current bundle, the structured Cash-outs and loading Cash-ins lead with `AGENT_STRUCTURING` and `NEAR_LIMIT_CASH_IN`, and the Reversal scam's replies with `RETURN_TO_NEW_SENDER`:
 
 | Scenario | Risk score | Reasons |
 |---|---|---|
@@ -114,6 +117,77 @@ In a random 400 of the High alerts, every one had at least one Reason. The commo
 - `FIRST_TIME_LARGE_TRANSFER` (116)
 - `DEVICE_AGE` (18)
 - `RECEIVER_FAN_IN` (17)
+
+## Agent structuring and the Reversal scam
+
+The checkpoint review found these two scenarios weakest at High: 0.42 for Agent structuring and 0.38 for the Reversal scam (#46). Neither has a single Fraud label before day 90. None of the 484 Agent structuring Transactions in the dataset is ever discovered, and the Reversal scam starts on day 100. So no model can learn them, and the fix had to come from what an operation can see.
+
+**What the misses showed.** This is the bundle before #46, on the evaluation days.
+
+*Agent structuring.* There were 4 instances: 24 loading Cash-ins at the accomplices' own Agents, and 24 near-limit Cash-outs at one Agent.
+
+- **Cash-outs: 20 of 24 at High.** Every `AGENT_STRUCTURING` hit was High, at Risk scores of 2.5–18.7. The rule is not diluted inside the combined rules score: one High hit adds 3.7 to the log-odds, and that clears High. The 4 misses were the second to fourth near-limit Cash-out at their Agent, before the rule's count of five. Each had only `AMOUNT_VS_MEDIAN`, `NEW_REGION` or `ODD_HOUR` (a rules score of 0.25–0.39), and a supervised raw probability between 3×10⁻⁵ and 10⁻¹⁶.
+- **Cash-ins: 0 of 24 at High.** Only Low rules touched them (`NEAR_KYC_LIMIT`, `ODD_HOUR`). The Anomaly score was 0.88–1.00, which adds about 1.2 to the log-odds. No Cash-in is ever fraud in the labels, so the supervised raw probability was 2×10⁻⁵. They scored 0.015–0.07, against a High threshold of 0.16.
+- **The stacker could not fix this with separate rule-severity inputs.** Structuring has no label to give such an input weight.
+
+*The Reversal scam.* There were 42 instances: 40 baits, where the fraudster sends 20–100 GHS to a stranger, and 41 replies, where the victim sends back 3–10× as much, or what they can.
+
+- **Replies: 31 of 41 at High,** mostly through `FIRST_TIME_LARGE_TRANSFER` with `AMOUNT_VS_MEDIAN`. Of the 10 misses, 9 had at most one Medium or Low rule, because the reply was not far above the victim's usual amount. The tenth had both rules, but a supervised raw probability of 10⁻¹⁴.
+- **Baits: 0 of 40 at High.** A bait is a small Transfer from an ordinary Wallet to a stranger. Nothing about it is unusual when it happens, and what comes after cannot be seen yet. So any point-in-time scorer tops out at about 41 of 81 (0.51).
+- **The signal the system lacked:** the reply goes to a Wallet that sent the victim money minutes earlier, and that the victim has never paid. No feature held what a Counterparty had sent the Subject wallet.
+
+**The fix.** There are two new point-in-time features in the shared feature function. Every model sees them too.
+
+- `amount_to_largest_cash_in_30d`: the amount over the Wallet's largest Cash-in of the last 30 days. It is empty in cold start or with no Cash-in in that window.
+- `received_from_counterparty_24h`: for a Transfer, what its Counterparty Transferred to the Subject wallet in the last 24 hours.
+
+They feed three rule changes in `config/rules.toml`:
+
+| Rule | Fires on | Severity |
+|---|---|---|
+| `AGENT_STRUCTURING` | Now from the **second** near-limit Cash-out at an Agent in 24 hours, not the fifth | High |
+| `NEAR_LIMIT_CASH_IN` (new) | A Cash-in of at least 90% of the KYC tier limit and more than 5× the Wallet's largest Cash-in of the last 30 days. It waits until the Wallet is 30 days old. | High |
+| `RETURN_TO_NEW_SENDER` (new) | A Transfer to a first-time recipient who Transferred to this Wallet in the last 24 hours | High |
+
+**How it was chosen.** Only the train, calibration and threshold days were used, with the Fraud labels known on day 90. Neither scenario has a label on those days, so the label-based measures barely move whichever candidate is chosen. Alert volume and the logic of each rule carried the decision. The table below has the models unchanged; the stacker and thresholds are refitted for each candidate. The figures are threshold-day hits on top of the rules before, PR-AUC against the fraud discovered by day 90, and the new-Wallet false positive rate ÷ the other bands.
+
+| Candidate (threshold days) | Extra hits (a day) | PR-AUC | New-Wallet FPR ratio |
+|---|---|---|---|
+| Before | — | 0.249 | 0.14 |
+| `AGENT_STRUCTURING` from the third | 17 (0.6) | 0.249 | 0.14 |
+| **`AGENT_STRUCTURING` from the second** | **27 (0.9)** | 0.248 | 0.15 |
+| … and `RETURN_TO_NEW_SENDER` | **0** | 0.248 | 0.15 |
+| … and `NEAR_LIMIT_CASH_IN` above 3× | 120 (4.0) | 0.248 | 0.14 |
+| … and **`NEAR_LIMIT_CASH_IN` above 5×** | **44 (1.5)** | 0.248 | 0.14 |
+| … and `NEAR_LIMIT_CASH_IN` above 10× | 18 (0.6) | 0.248 | 0.14 |
+| … and `NEAR_LIMIT_CASH_IN` above 5×, with no Wallet-age wait | 60 (2.0) | 0.248 | 0.21 |
+
+- **`AGENT_STRUCTURING` from the second Cash-out.** There are only about 6 near-limit Cash-outs a day across 300 Agents, so two at one Agent within a day is already rare. Firing on the second costs under one Alert a day, and it reaches every structured Cash-out but the first at each Agent.
+- **`RETURN_TO_NEW_SENDER` fires on any amount.** It never fired on the 90 days before the scam began. A ratio threshold would only drop the victims who could not afford to send back as much as they got.
+- **`NEAR_LIMIT_CASH_IN` at 5×,** the same multiple `AMOUNT_VS_MEDIAN` uses. It costs about 1.5 Alerts a day, 1.5% of the budget; 3× would cost 4. Like the usual-amount rules in [New Wallets](#new-wallets), it waits until a Wallet is 30 days old. Without the wait, the new-Wallet ratio rises from 0.14 to 0.21.
+- **High severity for both new rules.** A lone Medium hit adds only about 1.8 to the log-odds, which leaves a Cash-in below High.
+- **Whether the models should see the new features.** On the threshold days, against the fraud discovered by day 90, the supervised model's PR-AUC rises from 0.246 to 0.283 with them, but its ROC-AUC falls from 0.950 to 0.929. Precision at the Alert budget is unchanged. Every feature is a model input, as before.
+- **The structuring rules' precision cannot be measured from labels.** What the volume buys is known only in hindsight, from Ground truth on the evaluation days, as reporting. `AGENT_STRUCTURING` fired 26 times (22 fraud), `NEAR_LIMIT_CASH_IN` 40 times (7 fraud), and `RETURN_TO_NEW_SENDER` 39 times (all fraud).
+
+**The result.** The evaluation days were scored once, at the end:
+
+| | Before | After |
+|---|---|---|
+| Agent structuring recall at High | 0.42 (20 of 48) | **0.65** (31) |
+| … structured Cash-outs / loading Cash-ins | 20 / 0 of 24 | 24 / 7 of 24 |
+| Reversal scam recall at High | 0.38 (31 of 81) | **0.51** (41) |
+| PR-AUC | 0.725 | **0.753** |
+| Precision at the Alert budget | 0.267 | **0.274** |
+| High a day, threshold days | 100 | 100 |
+| High a day, evaluation days | 116.6 | 123.3 |
+| Recall at High | 0.83 | **0.85** |
+| New-Wallet false positive rate ÷ the other two bands | 0.24 | 0.40 |
+
+**What is still missed.**
+
+- **Agent structuring:** 17 of 24 loading Cash-ins. They are near the limit, but within 5× of a Cash-in the Wallet made in the last month, so they look like that Wallet's own large loads.
+- **The Reversal scam:** 39 of 40 baits and 1 reply. The one bait at High got there on its model scores alone; nothing marks a bait when it happens. That reply fired `RETURN_TO_NEW_SENDER`, but the supervised model was strongly against it and it scored 0.10.
+- **The new-Wallet ratio rose to 0.40,** from 49 to 85 false Alerts in 30 days. That comes from the models, not the new rules. None of the 85 has a new or changed Rule hit, and 68 have no Rule hit at all. They are pushed by the Anomaly score, which now weighs 1.59 against 1.29. The ratio stays well inside #45's limit of 1.5.
 
 ## New Wallets
 
@@ -193,15 +267,12 @@ Of the stacked time, about 15 ms goes on building the one-row model inputs, 14 m
 
 ## What this says
 
-- **Stacking adds little to ranking but helps where the components disagree.** PR-AUC moves only from 0.708 to 0.725, but ROC-AUC rises from 0.921 to 0.969, and High holds as much fraud on fewer alerts (117 a day against 120). Most of the ranking already comes from the supervised model.
-- **Agent structuring improves the most.** Recall at High rises from 0.29 to 0.42. The supervised model never sees a discovered structuring case. The rule and the Anomaly score both see this fraud, and the stacker learns to trust them.
-- **SIM-swap takeover and the Reversal scam lose a little,** at 0.87 against 0.90 and 0.38 against 0.41. Both depend on the supervised model's generalisation:
-  - The drifted SIM-swap pattern after day 100 waits too long for the SIM-swap rule to fire.
-  - The Reversal scam never appears in training.
-
-  The stacker scales the supervised model's log-odds down, so these lose some of their lead.
-- **It still over-alerts at Easter.** High averages 117 a day, but it reaches 202–241 a day on days 92–95 (3–6 April), the busier, spendier festive season. Outside it, the daily count stays between 60 and 124.
+- **Stacking adds most where the components disagree.** PR-AUC rises from the supervised model's 0.686 to 0.753, and ROC-AUC from 0.892 to 0.962. High holds 85% of the fraud on 123 Alerts a day.
+- **Agent structuring and the Reversal scam now come from rules.** No label exists for either, so neither model can learn them. Recall at High is 0.65 on Agent structuring and 0.51 on the Reversal scam, against 0.42 and 0.38 before #46; see [Agent structuring and the Reversal scam](#agent-structuring-and-the-reversal-scam).
+- **Mule fan-in gains most from the new inputs:** 0.90 against 0.74. A mule's money arrives by Transfer, so its Cash-out is typically 3× its largest Cash-in of the last 30 days, against 0.2× for a legitimate Cash-out (`amount_to_largest_cash_in_30d`).
+- **SIM-swap takeover, Account takeover drain and Social-engineering push lose a little:** 0.85 against 0.87, 0.95 against 0.99, and 0.97 against 1.00. The models changed with their new inputs, and the High threshold rose slightly (0.168 against 0.164).
+- **It still over-alerts at Easter.** High averages 123 a day, but it reaches 213–269 a day on days 92–95 (3–6 April), the busier, spendier festive season. Outside it, the daily count stays between 67 and 160.
 - **Segments:**
-  - The false positive rate at High is 0.40–0.70% across regions, tiers and channels.
-  - For Wallets under 30 days old it is now 0.13%, down from 1.11%; see [New Wallets](#new-wallets).
-  - Recall is lowest on the enhanced tier (0.61) and over USSD (0.79 against 0.86 on the App).
+  - The false positive rate at High is 0.41–0.66% across regions, tiers and channels.
+  - For Wallets under 30 days old it is 0.22%, against 1.11% before #45 and 0.13% after it; see [New Wallets](#new-wallets).
+  - Recall is lowest on the enhanced tier (0.63). USSD and the App are close (0.84 and 0.86).

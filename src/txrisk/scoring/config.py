@@ -41,6 +41,13 @@ class AgentStructuring(_Rule):
     min_near_limit_cash_outs_24h: int = Field(gt=0)
 
 
+class NearLimitCashIn(_Rule):
+    min_share_of_limit: float = Field(gt=0, le=1)
+    above_largest_multiple: float = Field(gt=0)
+    # A younger Wallet has no settled size of Cash-in yet, so a first large one says little.
+    min_wallet_age_days: float = Field(ge=0)
+
+
 class AboveMedian(_Rule):
     above_median_multiple: float = Field(gt=0)
     # A younger Wallet is still settling into its usual amounts and Counterparties, so a large
@@ -62,6 +69,8 @@ class Rules(_Frozen):
     NEW_DEVICE_BURST: NewDeviceBurst
     MULE_CASHOUT: MuleCashOut
     AGENT_STRUCTURING: AgentStructuring
+    NEAR_LIMIT_CASH_IN: NearLimitCashIn
+    RETURN_TO_NEW_SENDER: _Rule
     FIRST_TIME_LARGE_TRANSFER: AboveMedian
     AMOUNT_VS_MEDIAN: AboveMedian
     NEAR_KYC_LIMIT: NearKycLimit
