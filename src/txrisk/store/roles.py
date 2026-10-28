@@ -31,7 +31,11 @@ GRANTS: dict[str, tuple[str, ...]] = {
     "billers": ("SELECT", "INSERT"),
     "sim_swaps": ("SELECT", "INSERT"),
     "transactions": ("SELECT", "INSERT"),
-    "risk_assessments": ("SELECT", "INSERT"),
+    # UPDATE is for re-scoring after Degraded mode (the API and workers do it once the model
+    # recovers); a trigger (migration 0005) refuses any update but replacing a degraded assessment.
+    "risk_assessments": ("SELECT", "INSERT", "UPDATE"),
+    # Replaced assessments are kept here, append-only.
+    "risk_assessment_history": ("SELECT", "INSERT"),
     "alerts": ("SELECT", "INSERT"),
     # Keys are revoked and rotated (expiry set) in place, never deleted.
     "api_keys": ("SELECT", "INSERT", "UPDATE"),

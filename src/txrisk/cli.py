@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import sqlalchemy as sa
 
+from txrisk.api import ApiSettings
 from txrisk.benchmark import run_paysim
 from txrisk.benchmark.paysim import SCORERS as PAYSIM_SCORERS
 from txrisk.evaluation import load_evaluation_config
@@ -43,7 +44,7 @@ from txrisk.events import (
 )
 from txrisk.features import FeatureConfig, feature_table, load_feature_config
 from txrisk.generator import generate, load_config, write_dataset
-from txrisk.models.bundle import ModelBundle, train_bundle
+from txrisk.models.bundle import train_bundle
 from txrisk.models.registry import MODEL_NAME, log_bundle
 from txrisk.observability.logs import configure_logging
 from txrisk.observability.metrics import Metrics
@@ -58,6 +59,7 @@ from txrisk.scheduler import (
     load_scheduler_config,
 )
 from txrisk.scoring import RULES_ONLY, load_rules_config
+from txrisk.scoring import Metrics as ScoringMetrics
 from txrisk.store import (
     BackupError,
     FraudLabels,
@@ -567,14 +569,7 @@ def _worker(args: argparse.Namespace) -> int:
     if pending:
         print(f"error: run `txrisk migrate` first; pending: {', '.join(pending)}", file=sys.stderr)
         return 1
-    bundle = None if settings.model_bundle is None else ModelBundle.load(settings.model_bundle)
-    scoring = StoredScoring(
-        engine,
-        features=settings.features(),
-        rules=settings.rules(),
-        bundle=bundle,
-        cache=settings.history_cache(),
-    )
+    scoring = _stored_scoring(settings, engine, metrics)
     topics = settings.topics()
     ensure_topics(settings.kafka_bootstrap_servers, topics, partitions=settings.topic_partitions)
     worker = ScoringWorker(
@@ -594,13 +589,50 @@ def _worker(args: argparse.Namespace) -> int:
     logging.getLogger(__name__).info(
         "scoring %s with %s, history from %s",
         topics.transactions,
-        bundle.version if bundle else RULES_ONLY,
+        "the Champion model" if settings.model_bundle else RULES_ONLY,
         "Redis, then Postgres" if settings.redis_url else "Postgres",
     )
     worker.run(lambda: bool(stopping))
     engine.dispose()
     shutdown_tracing()
     return 0
+
+
+def _stored_scoring(
+    settings: ApiSettings, engine: sa.Engine, metrics: ScoringMetrics
+) -> StoredScoring:
+    """Scoring as the API and the worker run it; a bundle that will not load means Degraded mode."""
+    scoring = StoredScoring(
+        engine,
+        features=settings.features(),
+        rules=settings.rules(),
+        bundle=settings.champion(metrics),
+        cache=settings.history_cache(),
+        metrics=metrics,
+    )
+    health = scoring.model_health()  # loads the bundle now, so a bad one is logged at startup
+    if health.degraded:
+        logging.getLogger(__name__).warning("starting in Degraded mode: %s", health.reason)
+    return scoring
+
+
+def _rescore(args: argparse.Namespace) -> int:
+    metrics = _observe("txrisk-rescore")
+    settings = ApiSettings.from_env()
+    engine = create_app_engine(settings.database_url)
+    with engine.connect() as connection:
+        pending = pending_migrations(connection)
+    if pending:
+        print(f"error: run `txrisk migrate` first; pending: {', '.join(pending)}", file=sys.stderr)
+        return 1
+    result = _stored_scoring(settings, engine, metrics).rescore_degraded(limit=args.limit)
+    engine.dispose()
+    print(
+        f"re-scored {result.rescored} Transactions, raising {result.alerts_raised} Alerts; "
+        f"{result.remaining} still degraded"
+        + (f" (stopped: {result.stopped})" if result.stopped else "")
+    )
+    return 3 if result.stopped else 0
 
 
 def _schemas(args: argparse.Namespace) -> int:
@@ -869,6 +901,14 @@ def main(argv: list[str] | None = None) -> int:
         help="score transaction.created into score.produced, configured by TXRISK_* variables",
     )
     wk.set_defaults(handler=_worker)
+
+    rsc = commands.add_parser(
+        "rescore",
+        help="re-score Transactions scored in Degraded mode with the Champion model, "
+        "configured by TXRISK_* variables; exits 3 if the model is not healthy",
+    )
+    rsc.add_argument("--limit", type=int, help="re-score at most this many (default: all)")
+    rsc.set_defaults(handler=_rescore)
 
     sch = commands.add_parser("schemas", help="write the event topics' JSON Schemas")
     sch.add_argument("--out", type=Path, default=Path("schemas"))

@@ -26,12 +26,20 @@ curl localhost:8000/v1/ready
 ```
 
 - `POST /v1/score` scores a Transaction and stores it with its Risk assessment. It is idempotent on `transaction_id`: a repeat returns the stored assessment (with an `Idempotent-Replayed: true` header) and never raises a second Alert. Only the High Risk band raises an Alert.
-- `GET /v1/transactions/{id}`, `GET /v1/alerts`, `GET /v1/models/active`, `GET /v1/health` (liveness) and `GET /v1/ready` (database reachable and migrated).
+- `GET /v1/transactions/{id}`, `GET /v1/alerts`, `GET /v1/models/active`, `GET /v1/health` (liveness) and `GET /v1/ready` (database reachable and migrated; also whether scoring is degraded).
 - `POST /v1/api-keys`, `GET /v1/api-keys`, `POST /v1/api-keys/{key_id}/rotate` and `DELETE /v1/api-keys/{key_id}` manage API keys.
 - `GET /v1/audit` reads the audit log (Admins only; see below).
 - The OpenAPI spec is at `/v1/openapi.json`, and interactive docs at `/v1/docs`.
 
 Each Transaction is scored with the clock at its own `occurred_at` (ADR 0005), against the history stored strictly before it, so the API gives exactly the offline scores. Set `TXRISK_MODEL_BUNDLE=/models/<version>` in `.env` to score with a bundle from `make train` (`./models` is mounted at `/models`); without one the rules alone score. Schema changes are plain SQL files in `src/txrisk/store/migrations/`, applied only by `txrisk migrate`, which compose runs as its own job before the API starts. Ground truth and Benign anomalies are never loaded into Postgres, and `seed` loads no Fraud discoveries: Fraud labels arrive only through `fraud.discovered` events (ADR 0007).
+
+### Degraded mode
+
+If the Champion model bundle (`TXRISK_MODEL_BUNDLE`) is missing, corrupt or fails to load, or scoring with it fails or takes longer than `TXRISK_SCORING_TIMEOUT_MS` (default 5000: the first call after a load is cold and slow), the API and the workers keep scoring from Rule hits alone (ADR 0009). The assessment has `degraded: true` and `model_version: "rules-only"`, and its `risk_score` and `risk_band` are on the **rules scale** (whole numbers, High from 50, a Critical rule at least 90), not the model's (a probability x 100, High near the bundle's threshold). Critical rules still force High. `GET /v1/ready` stays 200 and reports `degraded`, `reason` and `awaiting_rescore`.
+
+Once the model is healthy again the degraded Transactions are re-scored and their stored assessments replaced (the old ones are kept in `risk_assessment_history`). An Alert already raised is kept and never duplicated; a Transaction that re-scores to High raises its Alert once. The API and workers re-score after recovering; `txrisk rescore [--limit N]` does it on demand (exit code 3 while the model is still down), for the scheduler. After a failure the model is skipped for `TXRISK_MODEL_RETRY_SECONDS` (default 30) before it is tried again.
+
+Counters (`txrisk_degraded_assessments_total{reason}`, `txrisk_rescored_total`, `txrisk_model_load_failures_total`) go through the small `txrisk.scoring.Metrics` interface, held in process for now; the observability work wires it to Prometheus.
 
 `make backup` takes a Postgres backup into the compose `backups` volume (a one-off job for a scheduler or host cron, pruned to the retention count in `config/backup.toml`); CI restores one into a fresh database and checks it against its source. Restore procedure: `docs/runbooks/restore.md`.
 

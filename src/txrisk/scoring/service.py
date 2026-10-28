@@ -1,7 +1,8 @@
 """The scoring service: one entry point that turns a Transaction into a Risk assessment."""
 
+import logging
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Protocol
@@ -19,12 +20,16 @@ from txrisk.models import inputs_for
 from txrisk.models.anomaly import AnomalyModel
 from txrisk.models.supervised import SupervisedModel
 from txrisk.observability.tracing import span
+from txrisk.scoring.champion import Champion, ModelTimeout
 from txrisk.scoring.config import RulesConfig, Severity
+from txrisk.scoring.metrics import DEGRADED_ASSESSMENTS, Metrics
 from txrisk.scoring.reasons import Reason, rule_reasons, stacked_reasons
 from txrisk.scoring.rules import RuleHit, rule_hits
 
 if TYPE_CHECKING:  # the bundle module itself scores rules, so importing it here would cycle
     from txrisk.models.bundle import ModelBundle
+
+log = logging.getLogger(__name__)
 
 RULES_ONLY = "rules-only"
 
@@ -45,6 +50,10 @@ class RiskAssessment:
     reasons: tuple[Reason, ...]
     # Each component on a 0-1 scale; components without a model yet are None.
     component_scores: dict[str, float | None] = field(default_factory=dict)
+    # Which scale `risk_score` and `risk_band` are on: a bundle version means the stacked scale
+    # (the chance of discovered fraud x 100, High near the bundle's threshold, about 0.2), and
+    # `rules-only` the rules scale (High from `bands.high` in config/rules.toml, 50). A degraded
+    # assessment is `rules-only` too: the Champion model was down, so it is on the rules scale.
     model_version: str = RULES_ONLY
     degraded: bool = False
 
@@ -88,18 +97,26 @@ class ScoringService:
         rules: RulesConfig,
         anomaly: AnomalyModel | None = None,
         supervised: SupervisedModel | None = None,
-        bundle: "ModelBundle | None" = None,
+        bundle: "ModelBundle | Champion | None" = None,
+        metrics: Metrics | None = None,
     ) -> None:
         """Without a `bundle` the rules alone set the Risk score, and `anomaly` and `supervised`
         are only reported as components. With one, its stacked Risk score, Risk bands and
-        Reasons are used, and it reports every component itself."""
+        Reasons are used, and it reports every component itself.
+
+        A `Champion` can be down or slow: then the assessment is made from Rule hits alone and
+        marked degraded (Degraded mode), on the rules scale and bands. A bare bundle is wrapped
+        in a Champion with no timeout, so it only degrades if scoring with it raises."""
         self._history = history
         self._clock = clock
         self._features = features
         self._rules = rules
         self._anomaly = anomaly
         self._supervised = supervised
-        self._bundle = bundle
+        if bundle is not None and not isinstance(bundle, Champion):
+            bundle = Champion.of(bundle)
+        self._champion = bundle
+        self._metrics = metrics
 
     def assess(self, transaction: Transaction) -> RiskAssessment:
         with span("features.compute"):
@@ -108,11 +125,61 @@ class ScoringService:
             )
         hits = rule_hits(transaction, features, self._rules.rules)
         rules_score, critical = combine_hits(hits, self._rules)
-        if self._bundle is not None:
-            with span("model.score", model_version=self._bundle.version):
-                return self._stacked(
-                    self._bundle, transaction, features, hits, rules_score, critical
+        if self._champion is not None:
+            return self._with_champion(
+                self._champion, transaction, features, hits, rules_score, critical
+            )
+        return self._rules_only(transaction, features, hits, rules_score, critical)
+
+    def _with_champion(
+        self,
+        champion: Champion,
+        transaction: Transaction,
+        features: TransactionFeatures,
+        hits: list[RuleHit],
+        rules_score: float,
+        critical: bool,
+    ) -> RiskAssessment:
+        """The stacked assessment, or the rules-only one marked degraded if the Champion model
+        is unavailable, times out or raises."""
+        bundle, reason = champion.acquire()
+        if bundle is not None:
+            try:
+                with span("model.score", model_version=bundle.version):
+                    assessment = champion.call(
+                        lambda: self._stacked(
+                            bundle, transaction, features, hits, rules_score, critical
+                        )
+                    )
+            except ModelTimeout as e:
+                champion.failed(str(e))
+                reason, kind = str(e), "timeout"
+            except Exception as e:  # any failure of the model must not stop scoring
+                log.warning(
+                    "scoring %s with the model failed", transaction.transaction_id, exc_info=True
                 )
+                reason = f"{type(e).__name__}: {e}"
+                champion.failed(reason)
+                kind = "error"
+            else:
+                champion.succeeded()
+                return assessment
+        else:
+            kind = "unavailable"
+        if self._metrics is not None:
+            self._metrics.increment(DEGRADED_ASSESSMENTS, reason=kind)
+        log.warning("degraded mode (%s): %s", kind, reason)
+        rules_only = self._rules_only(transaction, features, hits, rules_score, critical)
+        return replace(rules_only, degraded=True)
+
+    def _rules_only(
+        self,
+        transaction: Transaction,
+        features: TransactionFeatures,
+        hits: list[RuleHit],
+        rules_score: float,
+        critical: bool,
+    ) -> RiskAssessment:
         score = 100 * rules_score
         if critical:
             score = max(score, self._rules.critical_floor)
