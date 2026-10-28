@@ -147,6 +147,45 @@ make purge                        # one retention purge now
 - **Scheduler** (`txrisk scheduler`, `config/scheduler.toml`) fires each named job once per simulated day or week as the clock crosses it, so a replayed week fires the weekly jobs within minutes. The last period fired is kept in Postgres (`scheduled_jobs`), so restarts and a second scheduler never fire a period twice; periods the clock jumped over are not made up. A job runs as a detached one-off compose container (`--launcher compose`, `docker compose run` of the `job` service) or as a Kubernetes Job (`--launcher kubernetes`, in a cluster, named for the job and period).
 - **Retention** (`txrisk purge`, `config/retention.toml`) deletes rows older than each table's period, measured on the simulation clock, and the scheduler runs it daily. The audit log is kept longest (a validated rule, and at least 365 days), but by wall-clock age, because its entries are stamped with the wall clock; see Audit log. `purge` deletes, so it runs as the owner role (compose's `job` service, which the scheduler launches, uses the owner; `txrisk purge` refuses `txrisk_app`).
 
+## Case workbench
+
+`workbench/` is a Next.js (App Router, strict TypeScript) app where Analysts and Supervisors work Cases. It uses the txrisk API only (no database access), through a client typed from `contracts/openapi.json` (`npm run api-types` regenerates `src/lib/api-types.ts`; CI fails if the committed file differs from the spec).
+
+```bash
+# .env needs AUTH_SECRET (openssl rand -hex 32), and keycloak.env the demo sign-in values
+make workbench                            # the API, Keycloak and the workbench, built and started
+docker compose run --rm seed-cases --tag demo --count 5 --medium 40   # demo Cases and Medium Transactions
+open http://localhost:3000                # sign in as demo-analyst, demo-supervisor or demo-admin
+```
+
+Outside Docker: `cd workbench && cp .env.example .env` (set `AUTH_SECRET`), then `npm ci && npm run dev`. `npm run lint`, `typecheck`, `test` (Vitest) and `build` are the checks; `npm run e2e` runs Playwright (see below).
+
+- **Screens.** The Case queue (filters: status, assignee, Wallet; cursor pagination), the Case view (each Alert's Risk score, Risk band and Reasons with their stated values, the Subject wallet's 20 latest Transactions, notes and event history, and the controls below) and the Medium watch list (filters: Wallet, region, Transaction type; cursor pagination).
+- **Roles.** The workbench only hides or disables what a role cannot do; the API enforces it and its 403 and 409 answers are shown as they come. An **Analyst** sees the Cases assigned to them and the unassigned open ones, and can add notes and move Cases assigned to them (on other Cases the controls are disabled, with the reason). A **Supervisor** sees every Case, assigns a Case to an Analyst and works any Case. An **Admin** has no Case screens (a page says so). Only the moves the status allows are offered: open to investigating, investigating to closed as fraud or legitimate; a closed Case never reopens. The API has no directory of Analysts, so a Supervisor assigns by the Analyst's ID (their Keycloak subject), which an Analyst sees in the page header after signing in.
+- **Sign-in and tokens.** Sign-in is the OIDC authorization code flow with PKCE (S256) against the `txrisk-workbench` Keycloak client, implemented in `src/lib/oidc.ts` on `jose`. The tokens stay on the Next.js server: the browser holds only an `httpOnly`, `SameSite=Lax` cookie (`Secure` and `__Host-` prefixed when `WORKBENCH_PUBLIC_URL` is https) that is an encrypted session ID, sealed with `AUTH_SECRET` (set it in `.env`; at least 32 characters; the server refuses to start without it). The session itself lives in the server's memory, so a restart signs people out and one workbench replica is assumed (put `session-store.ts` on Redis to scale out). Pages and server actions call the API from the server with the person's access token; none reaches browser JavaScript, `localStorage` or the page (the Playwright test checks). An access token is refreshed shortly before it expires; if the refresh is refused or the session passes its 8-hour limit, the person is signed out here and at Keycloak's end-session endpoint (the id token goes in that redirect as `id_token_hint`, which is how OIDC names the session to end). Sign out is a POST, checked for same-origin.
+- **Hardening.** `src/proxy.ts` sets a per-request-nonce `Content-Security-Policy` (`script-src 'self' 'nonce-...' 'strict-dynamic'`, no inline styles or eval, `frame-ancestors 'none'`, `form-action` for this site and Keycloak only), `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy: same-origin`, `Permissions-Policy`, cross-origin isolation headers and `Cache-Control: no-store`. Phone-shaped numbers in free text (notes, comments) are masked on screen; the API already carries pseudonymised Wallet IDs, and nothing sensitive is logged (only the reason a sign-in failed). The pages are keyboard-operable with labelled controls, AA-contrast colours and responsive tables; the Playwright tests run axe (WCAG 2 A and AA) on every screen and check a phone-width layout.
+- **Dev-only Keycloak settings.** The `txrisk-workbench` client in `config/keycloak/txrisk-realm.json` is a public client with PKCE required, redirect URI and post-logout redirect `http://localhost:3000/*`, web origin `http://localhost:3000`, and no secret. Another origin means changing it there and `WORKBENCH_PUBLIC_URL`, and `TXRISK_CORS_ORIGINS` is not needed (the browser never calls the API).
+- **Docker.** `workbench/Dockerfile` is multi-stage (`npm ci`, build, then Next.js's standalone output on `node:22-slim`), runs as the non-root `node` user and is scanned by Trivy in CI. Compose publishes it on 127.0.0.1:3000 and gives it `AUTH_SECRET` from `.env`; the browser reaches Keycloak as `localhost:8080` and the server reaches it as `keycloak:8080`.
+- **End-to-end tests.** `workbench/e2e/` drives the real stack (API, Keycloak, Postgres) with Playwright: sign in through Keycloak as the demo Analyst, open a Case, add a note and close it; a Supervisor assigns a Case and the Analyst sees it; an Analyst has no assignment control and the API's 403 is shown when the disabled form is forced; the Medium watch list filters and pages. The tests need no backdoor: `txrisk seed-cases` (`src/txrisk/store/demo_cases.py`) runs as the database owner and creates Wallets, routine Transactions, a High assessment with Reasons, its Alert and the Case, through the same store functions scoring uses, so the Cases look like real ones. The demo users' sign-in values are read from the environment, never written in a test:
+
+```bash
+docker compose up --build --detach --wait api keycloak workbench
+cd workbench && npm ci && npx playwright install chromium
+(set -a; . ../keycloak.env; set +a; npx playwright test)   # PW_CHROMIUM_PATH=... uses an installed Chromium
+```
+
+The tests change Cases and expect a fresh database (CI always has one; locally `docker compose down --volumes` between runs). `E2E_SEED_COMMAND` replaces the compose seeding service where it cannot run (`uv run txrisk seed-cases`, with `TXRISK_DATABASE_URL` the owner's).
+
+Where things run on this machine (all published on 127.0.0.1 only unless noted):
+
+| What | Where |
+| --- | --- |
+| Case workbench | <http://localhost:3000> |
+| Keycloak (sign-in, admin console if configured) | <http://localhost:8080> |
+| Scoring API (docs at `/v1/docs`; published on all interfaces) | <http://localhost:8000> |
+| Grafana, Prometheus, Jaeger | <http://localhost:3001>, <http://localhost:9090>, <http://localhost:16686> |
+| Postgres (published on all interfaces) | `localhost:5432` |
+
 ## Observability
 
 `docker compose up` also starts Prometheus, Grafana and Jaeger, all bound to this machine only. Set `GF_SECURITY_ADMIN_PASSWORD` in `.env` first (Grafana refuses to start without it).
@@ -169,9 +208,10 @@ make purge                        # one retention purge now
 - `check`: ruff, `ruff format --check`, strict mypy and pytest with coverage. Coverage is gated at 80% on the **core logic only** (features, rules and scoring, the store's scoring and records, and the evaluation thresholds), as `[tool.coverage.report]` in `pyproject.toml` lists. Check it locally with `uv run pytest --cov`.
 - `smoke`: the training smoke test, `generate -> features -> train -> evaluate` through the CLI on a tiny market (`uv run pytest -m smoke`).
 - `audit`: `pip-audit` over the locked dependencies. It has no severity filter, so any known vulnerability fails the build.
-- `trivy`: Trivy scans the built image, and the Dockerfile and compose file, and fails on high and critical findings. The image scan passes `--ignore-unfixed`: it skips vulnerabilities for which Debian has published no fixed version yet, because rebuilding cannot remove them (on 2026-10-28: 47 High findings in the Debian 13.7 base's util-linux, ncurses, systemd, acl and perl packages, all without a fix; the Python dependencies had none). The image build runs `apt-get upgrade`, so the gate fails as soon as a fix exists. There is no `.trivyignore` and the severity threshold is not lowered; the Dockerfile and compose scan has no exception, and neither has `pip-audit`.
+- `trivy`: Trivy scans the two built images (the API's and the workbench's), and the Dockerfiles and compose file, and fails on high and critical findings. Both image scans pass `--ignore-unfixed`: it skips vulnerabilities for which Debian has published no fixed version yet, because rebuilding cannot remove them (on 2026-10-28: 47 High findings in the Debian 13.7 base's util-linux, ncurses, systemd, acl and perl packages, all without a fix; the Python dependencies had none). The image builds run `apt-get upgrade`, so the gate fails as soon as a fix exists. There is no `.trivyignore` and the severity threshold is not lowered; the Dockerfile and compose scan has no exception, and neither has `pip-audit`.
 - `contracts`: a breaking change to the OpenAPI spec (`oasdiff breaking`) or to any `schemas/*.json` event schema, compared with the base commit, fails the build. `contracts/openapi.json` is the committed snapshot of `/v1/openapi.json`; after an API change, regenerate it with `make openapi`. A test fails while the snapshot is stale.
 - `compose`: the compose stack starts and reports ready; Prometheus scrapes the API and worker, Grafana loads its provisioned datasources and the Operations dashboard, and Jaeger receives the API's traces.
+- `workbench`: in `workbench/`, `npm ci`, lint, strict typecheck, a check that the committed API types match `contracts/openapi.json`, the production build, Vitest and `npm audit --audit-level=high`; then the compose stack (API, Keycloak, Postgres, the workbench image) starts with throwaway settings and Playwright runs against it (Chromium is cached; the report is uploaded when it fails).
 - `restore`: a backup restores into a fresh database and matches its source.
 - `publish`: on pushes to main, once the jobs above pass, pushes `ghcr.io/<owner>/<repo>:<commit sha>` using `GITHUB_TOKEN` (`packages: write`).
 
@@ -180,7 +220,7 @@ make purge                        # one retention purge now
 Branch protection cannot be set from CI or by the agents that built it. In the repository, go to Settings > Branches > Add branch ruleset (or classic rule) for `main` and turn on:
 
 - Require a pull request before merging.
-- Require status checks to pass before merging, and require branches to be up to date. Add the checks `check`, `smoke`, `audit`, `trivy`, `contracts`, `compose` and `restore`.
+- Require status checks to pass before merging, and require branches to be up to date. Add the checks `check`, `smoke`, `audit`, `trivy`, `contracts`, `compose`, `restore` and `workbench`.
 - Block force pushes and deletion of `main`.
 
 `publish` runs only on main, so it is not a required check.
