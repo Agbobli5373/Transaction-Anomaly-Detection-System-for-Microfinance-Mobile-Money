@@ -57,6 +57,7 @@ from txrisk.scoring import RULES_ONLY, load_rules_config
 from txrisk.store import (
     BackupError,
     FraudLabels,
+    RedisHistoryCache,
     SimulationClock,
     StoredScoring,
     backup,
@@ -331,6 +332,11 @@ def _seed(args: argparse.Namespace) -> int:
     counts = seed(engine, args.data, until=until)
     stored = ", ".join(f"{n:,} {table}" for table, n in counts.items())
     print(f"seeded history before day {until_day} ({until:%Y-%m-%d}): {stored}")
+    # Seeding stores Transactions behind the history cache's back, so whatever it holds is stale.
+    redis_url = os.environ.get("TXRISK_REDIS_URL")
+    if redis_url and counts["transactions"]:
+        RedisHistoryCache.from_url(redis_url).flush()
+        print("flushed the recent-history cache")
     return 0
 
 
@@ -498,7 +504,11 @@ def _worker(args: argparse.Namespace) -> int:
         return 1
     bundle = None if settings.model_bundle is None else ModelBundle.load(settings.model_bundle)
     scoring = StoredScoring(
-        engine, features=settings.features(), rules=settings.rules(), bundle=bundle
+        engine,
+        features=settings.features(),
+        rules=settings.rules(),
+        bundle=bundle,
+        cache=settings.history_cache(),
     )
     topics = settings.topics()
     ensure_topics(settings.kafka_bootstrap_servers, topics, partitions=settings.topic_partitions)
@@ -516,7 +526,10 @@ def _worker(args: argparse.Namespace) -> int:
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda received, _: stopping.append(received))
     logging.getLogger(__name__).info(
-        "scoring %s with %s", topics.transactions, bundle.version if bundle else RULES_ONLY
+        "scoring %s with %s, history from %s",
+        topics.transactions,
+        bundle.version if bundle else RULES_ONLY,
+        "Redis, then Postgres" if settings.redis_url else "Postgres",
     )
     worker.run(lambda: bool(stopping))
     engine.dispose()

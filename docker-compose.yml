@@ -1,7 +1,7 @@
-# The development stack: Postgres, Keycloak, Redpanda, the migration job, the scoring API and
+# The development stack: Postgres, Redis, Keycloak, Redpanda, the migration job, the scoring API and
 # the scoring workers. The txrisk services read .env (copy .env.example) and Keycloak reads
 # keycloak.env (copy keycloak.env.example); no credential is written here.
-#   docker compose up --build             # Postgres, Keycloak, Redpanda, migrations, the API on :8000, a worker
+#   docker compose up --build             # Postgres, Redis, Keycloak, Redpanda, migrations, the API on :8000, a worker
 #   docker compose run --rm seed          # load data/generated as history (after `make generate`)
 #   docker compose run --rm produce       # publish the live days of data/generated as events
 #   docker compose up --scale worker=3    # more workers share transaction.created's partitions
@@ -24,6 +24,8 @@ x-txrisk: &txrisk
     # The workbench, and the dev-only command-line sign-in; production allows the workbench alone.
     TXRISK_OIDC_ALLOWED_CLIENTS: txrisk-workbench,txrisk-demo-cli
     TXRISK_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+    # The recent-history cache (ADR 0006). Every service that stores Transactions must use it.
+    TXRISK_REDIS_URL: redis://redis:6379/0
 
 services:
   postgres:
@@ -43,6 +45,19 @@ services:
       timeout: 5s
       retries: 30
 
+  # The recent-history cache (ADR 0006): reachable as redis:6379 on the compose network only, with
+  # no published port, so it takes no password. A cache holds nothing Postgres does not, and
+  # nothing is persisted: restarting it just means reads fall back to Postgres until it refills.
+  # Anywhere beyond a development machine, run an authenticated Redis and pass its credential
+  # through .env, never in a committed URL.
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
   # Sign-in for people, for development only: the txrisk realm, its roles (analyst, supervisor,
   # admin), clients and demo users, imported from config/keycloak/ at startup. Keycloak reads only
   # keycloak.env (copy keycloak.env.example), never .env: each demo user's sign-in value
@@ -117,6 +132,8 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
 
   # One-off: `docker compose run --rm produce`, standing in for the ledger. Publishes the
   # Transactions and SIM swaps from the day `seed` stops at, in event-time order.
@@ -175,6 +192,8 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
       # Services can score with API keys before Keycloak is up; people's tokens are checked once
       # it is.
       keycloak:
@@ -201,6 +220,8 @@ services:
       migrate:
         condition: service_completed_successfully
       redpanda:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
 volumes:
