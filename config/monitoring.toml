@@ -1,0 +1,48 @@
+# `txrisk monitor`: the daily model monitoring job, run on the simulation clock (ADR 0005).
+
+# Population stability index of each model input and of the Risk score, the latest simulated
+# day against the Champion's training baseline: at least `warn` is a warning, at least `action`
+# needs action (an Alertmanager alert). 0.1 and 0.25 are the usual rules of thumb.
+[psi]
+warn = 0.1
+action = 0.25
+# A day with fewer scored Transactions than this has too little to measure; PSI is skipped.
+min_rows = 500
+# Inputs that only grow as the data ages (how much history a Wallet has, how old a device is): their
+# PSI against any past window is large by construction, whatever the model's population does, so
+# these are not measured.
+ignore = ["history_count", "device_age_seconds"]
+# Fraud is about 0.1% of Transactions, so a change in how it looks (the Reversal scam, a SIM-swap
+# takeover that waits longer) hardly moves the whole population's PSI. It does move the Alerts':
+# the inputs of High Transactions over the last `alerted_window_days` days, against those of the
+# High Transactions in the baseline, needing at least `alerted_min_rows` of them.
+alerted_window_days = 7
+alerted_min_rows = 200
+
+# The baseline `txrisk train` stores in the bundle: each column's training distribution as this
+# many quantile bins plus one for missing values, so a bundle holds a bounded few KB of it.
+[baseline]
+bins = 10
+
+# The day's Alert volume must stay within this share of the Alert budget
+# (alert_budget_per_day in config/evaluation.toml) or an alert fires.
+[alert_volume]
+min_share_of_budget = 0.5
+max_share_of_budget = 1.5
+
+# Label-based performance at High, by segment, over Transactions older than the Label maturity
+# window (config/evaluation.toml), against the Fraud labels known at the simulated time (ADR 0007).
+[labels]
+# The matured Transactions judged: this many days of them, ending at the maturity cutoff.
+window_days = 30
+# A segment with fewer known Fraud labels than this is reported but never alerts: its recall
+# is noise.
+min_positives = 10
+# A metric regresses when it falls this far, relatively, below its mean over the previous
+# `reference_days` monitored days.
+max_relative_drop = 0.3
+reference_days = 7
+
+# How Fraud discoveries are split by source (complaint, chargeback, case) and by Channel.
+[discoveries]
+window_days = 30

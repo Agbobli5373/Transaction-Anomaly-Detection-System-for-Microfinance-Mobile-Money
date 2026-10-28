@@ -20,6 +20,8 @@ from txrisk.store.clock import SimulationClock
 from txrisk.store.tables import (
     alerts,
     fraud_labels,
+    model_inputs,
+    monitoring_metrics,
     risk_assessments,
     sim_swaps,
     transactions,
@@ -34,6 +36,9 @@ class RetentionDays(BaseModel):
     alerts: int = Field(ge=1)
     sim_swaps: int = Field(ge=1)
     fraud_labels: int = Field(ge=1)
+    # What monitoring reads: the inputs a day's drift is measured on, and its computed history.
+    model_inputs: int = Field(default=30, ge=1)
+    monitoring_metrics: int = Field(default=365, ge=1)
     # Days of real time, and at least a year: the database refuses less (see migration 0004).
     audit_log: int = Field(ge=365)
 
@@ -51,6 +56,8 @@ class RetentionDays(BaseModel):
             self.alerts,
             self.sim_swaps,
             self.fraud_labels,
+            self.model_inputs,
+            self.monitoring_metrics,
         )
         if self.audit_log <= others:
             raise ValueError(f"audit_log must be kept longer than every other table ({others})")
@@ -76,6 +83,12 @@ _PURGED = (
     (transactions, transactions.c.occurred_at, "transactions"),
     (sim_swaps, sim_swaps.c.occurred_at, "sim_swaps"),
     (fraud_labels, fraud_labels.c.discovered_at, "fraud_labels"),
+    (model_inputs, model_inputs.c.assessed_at, "model_inputs"),
+    (
+        monitoring_metrics,
+        sa.cast(monitoring_metrics.c.day, sa.DateTime(timezone=True)),
+        "monitoring_metrics",
+    ),
 )
 
 

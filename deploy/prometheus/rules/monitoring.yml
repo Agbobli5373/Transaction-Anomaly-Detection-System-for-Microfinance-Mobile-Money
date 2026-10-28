@@ -1,0 +1,107 @@
+# Alerting rules for model monitoring. The monitor job (`txrisk monitor`) pushes its metrics, and
+# the thresholds it judged them by (config/monitoring.toml), to the Pushgateway, so the rules
+# compare each metric with the pushed threshold: one place to change a limit, and the alerts always
+# agree with the dashboards. A rule fires while the latest monitored day is over its limit.
+#
+# Severity: `warning` is worth a look, `action` needs someone to act (retrain, re-band, investigate).
+groups:
+  - name: model-monitoring
+    rules:
+      - alert: InputDriftWarning
+        expr: |
+          (txrisk_monitoring_psi{feature!="risk_score"} >= on() group_left() txrisk_monitoring_psi_warn_threshold)
+          unless
+          (txrisk_monitoring_psi{feature!="risk_score"} >= on() group_left() txrisk_monitoring_psi_action_threshold)
+        labels:
+          severity: warning
+        annotations:
+          summary: "Model input {{ $labels.feature }} has drifted from its training baseline"
+          description: "PSI {{ $value | printf \"%.3f\" }} is at or above the warning threshold."
+
+      - alert: InputDriftAction
+        expr: |
+          txrisk_monitoring_psi{feature!="risk_score"} >= on() group_left() txrisk_monitoring_psi_action_threshold
+        labels:
+          severity: action
+        annotations:
+          summary: "Model input {{ $labels.feature }} has drifted far from its training baseline"
+          description: "PSI {{ $value | printf \"%.3f\" }} is at or above the action threshold: investigate, and consider retraining."
+
+      - alert: RiskScoreDriftWarning
+        expr: |
+          (txrisk_monitoring_psi{feature="risk_score"} >= on() group_left() txrisk_monitoring_psi_warn_threshold)
+          unless
+          (txrisk_monitoring_psi{feature="risk_score"} >= on() group_left() txrisk_monitoring_psi_action_threshold)
+        labels:
+          severity: warning
+        annotations:
+          summary: "The Risk score distribution has drifted from its training baseline"
+          description: "PSI {{ $value | printf \"%.3f\" }} is at or above the warning threshold."
+
+      - alert: RiskScoreDriftAction
+        expr: |
+          txrisk_monitoring_psi{feature="risk_score"} >= on() group_left() txrisk_monitoring_psi_action_threshold
+        labels:
+          severity: action
+        annotations:
+          summary: "The Risk score distribution has drifted far from its training baseline"
+          description: "PSI {{ $value | printf \"%.3f\" }} is at or above the action threshold: the Risk bands no longer mean what they were set to."
+
+      # Drift among the Alerts (High Transactions of the last days): where a change in how fraud
+      # looks shows, as the whole population's PSI barely moves for a tiny share of it.
+      - alert: AlertedInputDriftWarning
+        expr: |
+          (txrisk_monitoring_psi_alerted >= on() group_left() txrisk_monitoring_psi_warn_threshold)
+          unless
+          (txrisk_monitoring_psi_alerted >= on() group_left() txrisk_monitoring_psi_action_threshold)
+        labels:
+          severity: warning
+        annotations:
+          summary: "Alerts have changed in {{ $labels.feature }} against the High Transactions the model was banded on"
+          description: "PSI {{ $value | printf \"%.3f\" }} among the last days' High Transactions is at or above the warning threshold."
+
+      - alert: AlertedInputDriftAction
+        expr: |
+          txrisk_monitoring_psi_alerted >= on() group_left() txrisk_monitoring_psi_action_threshold
+        labels:
+          severity: action
+        annotations:
+          summary: "Alerts have changed a lot in {{ $labels.feature }} against the High Transactions the model was banded on"
+          description: "PSI {{ $value | printf \"%.3f\" }} among the last days' High Transactions is at or above the action threshold: what is being flagged, and so probably what fraud looks like, has shifted."
+
+      - alert: AlertVolumeOutsideBudgetBand
+        expr: |
+          (txrisk_monitoring_alert_volume_ratio > on() txrisk_monitoring_alert_volume_ratio_max)
+          or
+          (txrisk_monitoring_alert_volume_ratio < on() txrisk_monitoring_alert_volume_ratio_min)
+        labels:
+          severity: action
+        annotations:
+          summary: "Alert volume is outside the Alert budget band"
+          description: "The day's Alerts are {{ $value | humanizePercentage }} of the Alert budget."
+
+      - alert: LabelPrecisionRegression
+        expr: |
+          txrisk_monitoring_label_drop_precision > on() group_left() txrisk_monitoring_label_drop_threshold
+        labels:
+          severity: action
+        annotations:
+          summary: "Precision at High has fallen for {{ $labels.dimension }} = {{ $labels.segment }}"
+          description: "Down {{ $value | humanizePercentage }} from its recent mean, against Fraud labels known by now, on matured Transactions."
+
+      - alert: LabelRecallRegression
+        expr: |
+          txrisk_monitoring_label_drop_recall > on() group_left() txrisk_monitoring_label_drop_threshold
+        labels:
+          severity: action
+        annotations:
+          summary: "Recall at High has fallen for {{ $labels.dimension }} = {{ $labels.segment }}"
+          description: "Down {{ $value | humanizePercentage }} from its recent mean, against Fraud labels known by now, on matured Transactions."
+
+      - alert: MonitoringHasNoBaseline
+        expr: txrisk_monitoring_baseline_available == 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "The Champion model's bundle has no training baseline"
+          description: "Drift is not measured until the model is retrained with `txrisk train`."

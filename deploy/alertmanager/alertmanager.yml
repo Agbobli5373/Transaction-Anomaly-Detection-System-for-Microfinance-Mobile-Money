@@ -1,0 +1,15 @@
+# Routes every alert to the webhook sink (`txrisk alert-sink`), which records it and shows in
+# Grafana's Model health dashboard. Replace the receiver with a pager or chat integration to be
+# told for real; put its credential in the environment, never in this file.
+route:
+  receiver: alert-sink
+  group_by: [alertname, feature]
+  group_wait: 5s
+  group_interval: 1m
+  repeat_interval: 12h
+
+receivers:
+  - name: alert-sink
+    webhook_configs:
+      - url: http://alert-sink:9095/alerts
+        send_resolved: true
