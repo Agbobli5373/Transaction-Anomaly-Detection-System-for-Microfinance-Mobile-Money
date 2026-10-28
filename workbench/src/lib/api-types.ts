@@ -308,6 +308,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Models
+         * @description The Champion and Challenger models, every version retraining has made, and the latest
+         *     Promotions and rollbacks. For every role, or the `models:read` scope.
+         */
+        get: operations["list_models_v1_models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/models/active": {
         parameters: {
             query?: never;
@@ -324,6 +345,94 @@ export interface paths {
         get: operations["get_active_model_v1_models_active_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/models/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Roll Back
+         * @description Put back the Champion model that the latest Promotion replaced, in one call and with
+         *     no gates (a bad Promotion must be quick to undo). One step: it cannot be repeated until
+         *     there is another Promotion. Admins only. Audited.
+         */
+        post: operations["roll_back_v1_models_rollback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/models/{version}/card": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Model Card
+         * @description The model card of a version: intended use, the data it learned from, its scores by
+         *     segment and its limitations, as data and as a Markdown page. For every role, or the
+         *     `models:read` scope.
+         */
+        get: operations["get_model_card_v1_models__version__card_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/models/{version}/gates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Gates
+         * @description Run the backtest and shadow gates for the Challenger model now, without promoting it.
+         *     Admins only. Audited.
+         */
+        get: operations["get_gates_v1_models__version__gates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/models/{version}/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Promote
+         * @description Make the Challenger model the Champion model, if it passes both gates, which are
+         *     checked here, now, whatever anyone has seen before. Admins only; manual, never
+         *     automatic. The workers and the API switch within a few seconds. Audited with the gate
+         *     results, whether or not it is allowed.
+         */
+        post: operations["promote_v1_models__version__promote_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -577,6 +686,34 @@ export interface components {
             /** Next Before */
             next_before: number | null;
         };
+        /**
+         * BacktestOut
+         * @description The backtest gate: the Champion and Challenger models on the latest matured window.
+         */
+        BacktestOut: {
+            challenger: components["schemas"]["ModelResultOut"] | null;
+            champion: components["schemas"]["ModelResultOut"] | null;
+            /** Failures */
+            failures: string[];
+            /** Passed */
+            passed: boolean;
+            /** Positives */
+            positives: number;
+            /** Segments */
+            segments: components["schemas"]["SegmentFprOut"][];
+            /** Transactions */
+            transactions: number;
+            /**
+             * Window End
+             * Format: date-time
+             */
+            window_end: string;
+            /**
+             * Window Start
+             * Format: date-time
+             */
+            window_start: string;
+        };
         /** CaseAlertOut */
         CaseAlertOut: {
             /** Alert Id */
@@ -707,6 +844,17 @@ export interface components {
             assessment: components["schemas"]["AssessmentOut"];
             transaction: components["schemas"]["TransactionOut"];
         };
+        /** GatesOut */
+        GatesOut: {
+            backtest: components["schemas"]["BacktestOut"];
+            /** Champion Version */
+            champion_version: string;
+            /** Passed */
+            passed: boolean;
+            shadow: components["schemas"]["ShadowOut"];
+            /** Version */
+            version: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -718,10 +866,81 @@ export interface components {
             /** Key */
             key: string;
         };
+        /**
+         * ModelCardOut
+         * @description The model card of one version: intended use, data, scores by segment and limitations.
+         */
+        ModelCardOut: {
+            /** Card */
+            card: {
+                [key: string]: unknown;
+            };
+            /** Markdown */
+            markdown: string;
+            /** Version */
+            version: string;
+        };
+        /** ModelList */
+        ModelList: {
+            /** Challenger */
+            challenger: string | null;
+            /** Champion */
+            champion: string | null;
+            /** History */
+            history: components["schemas"]["PromotionOut"][];
+            /** Models */
+            models: components["schemas"]["ModelVersionOut"][];
+        };
+        /** ModelResultOut */
+        ModelResultOut: {
+            /** Pr Auc */
+            pr_auc: number | null;
+            /** Precision At Budget */
+            precision_at_budget: number | null;
+        };
+        /** ModelVersionOut */
+        ModelVersionOut: {
+            /** Roles */
+            roles: ("champion" | "challenger")[];
+            /** Trained Cutoff */
+            trained_cutoff: string | null;
+            /** Trigger */
+            trigger: string | null;
+            /** Version */
+            version: string;
+        };
         /** NoteIn */
         NoteIn: {
             /** Text */
             text: string;
+        };
+        /**
+         * PromotionOut
+         * @description A Promotion or a rollback of the Champion model.
+         */
+        PromotionOut: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "promote" | "rollback";
+            /** Actor Name */
+            actor_name: string;
+            /** From Version */
+            from_version: string;
+            /** Gates */
+            gates: {
+                [key: string]: unknown;
+            };
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /** Promotion Id */
+            promotion_id: number;
+            /** To Version */
+            to_version: string;
         };
         /**
          * Readiness
@@ -827,6 +1046,47 @@ export interface components {
         RotationIn: {
             /** Overlap Minutes */
             overlap_minutes?: number | null;
+        };
+        /** SegmentFprOut */
+        SegmentFprOut: {
+            /** Challenger Fpr */
+            challenger_fpr: number | null;
+            /** Champion Fpr */
+            champion_fpr: number | null;
+            /** Judged */
+            judged: boolean;
+            /** Member */
+            member: string;
+            /** Negatives */
+            negatives: number;
+            /** Passed */
+            passed: boolean;
+            /** Segment */
+            segment: string;
+        };
+        /**
+         * ShadowOut
+         * @description The shadow gate: what the Challenger model did scoring beside the Champion.
+         */
+        ShadowOut: {
+            /** Alert Budget Per Day */
+            alert_budget_per_day: number;
+            /** Alerts Per Day */
+            alerts_per_day: number | null;
+            /** Days */
+            days: number;
+            /** Errors */
+            errors: number;
+            /** Failures */
+            failures: string[];
+            /** High */
+            high: number;
+            /** P95 Latency Ms */
+            p95_latency_ms: number | null;
+            /** Passed */
+            passed: boolean;
+            /** Scored */
+            scored: number;
         };
         /** Status */
         Status: {
@@ -1808,6 +2068,40 @@ export interface operations {
             };
         };
     };
+    list_models_v1_models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelList"];
+                };
+            };
+            /** @description No credential, or an invalid, expired or revoked one */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller's roles or scopes do not permit this */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     get_active_model_v1_models_active_get: {
         parameters: {
             query?: never;
@@ -1846,6 +2140,203 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    roll_back_v1_models_rollback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromotionOut"];
+                };
+            };
+            /** @description No credential, or an invalid, expired or revoked one */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller's roles or scopes do not permit this */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description There is no Promotion to roll back: `detail` says so */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_model_card_v1_models__version__card_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelCardOut"];
+                };
+            };
+            /** @description No credential, or an invalid, expired or revoked one */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller's roles or scopes do not permit this */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such model version */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_gates_v1_models__version__gates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatesOut"];
+                };
+            };
+            /** @description No credential, or an invalid, expired or revoked one */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller's roles or scopes do not permit this */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Cannot be judged: `detail` says why */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    promote_v1_models__version__promote_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromotionOut"];
+                };
+            };
+            /** @description No credential, or an invalid, expired or revoked one */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller's roles or scopes do not permit this */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not the Challenger model, or a gate did not pass, or the Champion model changed meanwhile: `detail` has the `message` and the `gates` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };
