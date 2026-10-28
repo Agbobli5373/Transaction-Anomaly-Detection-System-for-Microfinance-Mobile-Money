@@ -71,6 +71,10 @@ OPERATIONAL: dict[tuple[str, str], str] = {
         "times how long a request or a scoring took, for the latency metrics: it measures work "
         "and never decides anything"
     ),
+    ("observability/logs.py", "datetime.datetime.fromtimestamp"): (
+        "writes when a log line was emitted, from the record's own creation time; the time is "
+        "only printed"
+    ),
     ("api/app.py", "datetime.datetime.now"): (
         "the wall clock handed to API key expiry and per-key rate limits: keys expire and "
         "requests are limited in real time, while scoring runs on the Transaction's event time"

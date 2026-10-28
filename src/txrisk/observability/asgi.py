@@ -21,6 +21,8 @@ CORRELATION_HEADER = "X-Correlation-ID"
 # Probes every few seconds would drown the log; they are logged at debug level.
 _PROBES = {"/v1/health", "/v1/ready"}
 _UNMATCHED = "unmatched"
+# Any other method is one label, so a caller cannot grow the metrics by inventing methods.
+_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
 
 log = logging.getLogger("txrisk.api")
 
@@ -71,8 +73,9 @@ class Observability:
                     server.set_attribute("http.status_code", status)
                     if status >= 500:
                         server.set_status(trace.Status(trace.StatusCode.ERROR))
-                    self.metrics.http_requests.labels(method, route, str(status)).inc()
-                    self.metrics.http_seconds.labels(method, route).observe(seconds)
+                    label = method if method in _METHODS else "OTHER"
+                    self.metrics.http_requests.labels(label, route, str(status)).inc()
+                    self.metrics.http_seconds.labels(label, route).observe(seconds)
                     log.log(
                         logging.DEBUG if scope["path"] in _PROBES else logging.INFO,
                         "%s %s -> %d",
