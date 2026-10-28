@@ -304,6 +304,7 @@ def test_health_readiness_and_the_openapi_spec_are_under_v1(client: TestClient):
         "/v1/models/active",
         "/v1/models/rollback",
         "/v1/models/{version}/card",
+        "/v1/models/{version}/evaluation",
         "/v1/models/{version}/gates",
         "/v1/models/{version}/promote",
         "/v1/audit",

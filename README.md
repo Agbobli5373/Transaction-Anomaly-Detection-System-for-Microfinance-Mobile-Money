@@ -189,10 +189,26 @@ Where things run on this machine (all published on 127.0.0.1 only unless noted):
 | What | Where |
 | --- | --- |
 | Case workbench | <http://localhost:3000> |
+| Evaluation pages | <http://localhost:8501> |
 | Keycloak (sign-in, admin console if configured) | <http://localhost:8080> |
 | Scoring API (docs at `/v1/docs`; published on all interfaces) | <http://localhost:8000> |
 | Grafana, Prometheus, Jaeger | <http://localhost:3001>, <http://localhost:9090>, <http://localhost:16686> |
 | Postgres (published on all interfaces) | `localhost:5432` |
+
+## Evaluation pages
+
+`evaluation-pages/` is a Streamlit app where ML engineers browse model versions. It reads the txrisk API only: its image installs the locked `pages` dependency group alone (no txrisk code, database driver or model), and the compose service gets no database setting, just `TXRISK_API_URL` and one API key.
+
+```bash
+docker compose exec api txrisk api-key --name evaluation-pages --scope models:read   # shown once
+# put it in .env as TXRISK_EVALUATION_API_KEY, then:
+make evaluation-pages                     # http://localhost:8501, published on this machine only
+uv run txrisk evaluate --scorer bundle --bundle models/<version> --data data/generated --features data/features/features.parquet
+```
+
+- **Pages.** *Model versions* lists the Champion and Challenger models, every version retraining made and the Promotion history. *Model version* shows one version: headline metrics (PR-AUC, ROC-AUC, precision, recall and false positive rate at High, precision at the Alert budget), the PR and ROC curves, recall at High by Fraud scenario and by region, KYC tier, Channel and Wallet age band, recall against Ground truth next to recall against discovered Fraud labels (and the share of Fraud never discovered), and the model card's own metrics by segment. *Compare versions* puts two versions side by side (the Champion and the Challenger by default) with their differences, overlaid curves and per-scenario and per-segment recall.
+- **Where the numbers come from.** The model card's metrics are on the calibration days against the Fraud labels known when the version went live, and every version has them. Scenario recall and the Ground truth gap exist only offline, so `txrisk evaluate --scorer bundle --bundle models/<version>` judges a saved bundle on the evaluation days and saves its report in `models/<version>/evaluation/`. `GET /v1/models/{version}/evaluation` serves that file to any role or a key with `models:read` (404 without one), so Ground truth stays out of the API's own inputs (ADR 0007); the API only serves a finished report. The reports also hold the curves as at most 200 points. A version with no report is listed and the pages say how to make one. The Challengers retraining makes have no report until someone runs the command, and the evaluation days (91-120) are the days the live replay uses, so judge a retrained version on them with that in mind.
+- **Access.** The key is read from `TXRISK_EVALUATION_API_KEY` in the gitignored `.env` (compose passes it to this container alone, in `environment`, never an `env_file`). Without it the pages show how to issue one; a key without `models:read` is refused by the API and the pages say so. The tests (`tests/test_evaluation_pages.py`) drive the pages with Streamlit's `AppTest` against a stand-in for the API, check that they only issue `GET /v1/models...` and that nothing in them can reach a database.
 
 ## Observability
 
@@ -302,7 +318,7 @@ See [docs/runbooks/kubernetes.md](docs/runbooks/kubernetes.md).
 - `check`: ruff, `ruff format --check`, strict mypy and pytest with coverage. Coverage is gated at 80% on the **core logic only** (features, rules and scoring, the store's scoring and records, and the evaluation thresholds), as `[tool.coverage.report]` in `pyproject.toml` lists. Check it locally with `uv run pytest --cov`.
 - `smoke`: the training smoke test, `generate -> features -> train -> evaluate` through the CLI on a tiny market (`uv run pytest -m smoke`).
 - `audit`: `pip-audit` over the locked dependencies. It has no severity filter, so any known vulnerability fails the build.
-- `trivy`: Trivy scans the two built images (the API's and the workbench's), and the Dockerfiles, compose file and Helm chart, and fails on high and critical findings. Both image scans pass `--ignore-unfixed`: it skips vulnerabilities for which Debian has published no fixed version yet, because rebuilding cannot remove them (on 2026-10-28: 47 High findings in the Debian 13.7 base's util-linux, ncurses, systemd, acl and perl packages, all without a fix; the Python dependencies had none). The image builds run `apt-get upgrade`, so the gate fails as soon as a fix exists. The severity threshold is not lowered and there is no ignore file for the image scans or `pip-audit`; the one accepted configuration finding (`.trivyignore.yaml`, with its reason) is read-only root filesystems in the Helm chart.
+- `trivy`: Trivy scans the three built images (the API's, the workbench's and the evaluation pages'), and the Dockerfiles, compose file and Helm chart, and fails on high and critical findings. Each image scan passes `--ignore-unfixed`: it skips vulnerabilities for which Debian has published no fixed version yet, because rebuilding cannot remove them (on 2026-10-28: 47 High findings in the Debian 13.7 base's util-linux, ncurses, systemd, acl and perl packages, all without a fix; the Python dependencies had none). The image builds run `apt-get upgrade`, so the gate fails as soon as a fix exists. The severity threshold is not lowered and there is no ignore file for the image scans or `pip-audit`; the one accepted configuration finding (`.trivyignore.yaml`, with its reason) is read-only root filesystems in the Helm chart.
 - `contracts`: a breaking change to the OpenAPI spec (`oasdiff breaking`) or to any `schemas/*.json` event schema, compared with the base commit, fails the build. `contracts/openapi.json` is the committed snapshot of `/v1/openapi.json`; after an API change, regenerate it with `make openapi`. A test fails while the snapshot is stale.
 - `compose`: the compose stack starts and reports ready; Prometheus scrapes the API and worker, Grafana loads its provisioned datasources and the Operations dashboard, and Jaeger receives the API's traces.
 - `workbench`: in `workbench/`, `npm ci`, lint, strict typecheck, a check that the committed API types match `contracts/openapi.json`, the production build, Vitest and `npm audit --audit-level=high`; then the compose stack (API, Keycloak, Postgres, the workbench image) starts with throwaway settings and Playwright runs against it (Chromium is cached; the report is uploaded when it fails).

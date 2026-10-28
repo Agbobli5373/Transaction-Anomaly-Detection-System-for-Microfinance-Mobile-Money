@@ -395,6 +395,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/models/{version}/evaluation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Model Evaluation
+         * @description The offline evaluation of a version: ranking scores, PR and ROC curves, recall by
+         *     Fraud scenario and segment, and recall against Ground truth and discovered Fraud labels.
+         *     It is a report `txrisk evaluate --scorer bundle` saved in the bundle's folder: the API
+         *     only serves it, and never sees Ground truth itself (ADR 0007). For every role, or the
+         *     `models:read` scope.
+         */
+        get: operations["get_model_evaluation_v1_models__version__evaluation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/models/{version}/gates": {
         parameters: {
             query?: never;
@@ -877,6 +901,20 @@ export interface components {
             };
             /** Markdown */
             markdown: string;
+            /** Version */
+            version: string;
+        };
+        /**
+         * ModelEvaluationOut
+         * @description The offline evaluation report saved with one version (`txrisk evaluate --scorer bundle`):
+         *     ranking scores, the PR and ROC curves, recall by Fraud scenario and by segment, and recall
+         *     against Ground truth and against discovered Fraud labels.
+         */
+        ModelEvaluationOut: {
+            /** Evaluation */
+            evaluation: {
+                [key: string]: unknown;
+            };
             /** Version */
             version: string;
         };
@@ -2219,6 +2257,58 @@ export interface operations {
                 content?: never;
             };
             /** @description No such model version */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_model_evaluation_v1_models__version__evaluation_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelEvaluationOut"];
+                };
+            };
+            /** @description No credential, or an invalid, expired or revoked one */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller's roles or scopes do not permit this */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such model version, or no evaluation report saved with it */
             404: {
                 headers: {
                     [name: string]: unknown;

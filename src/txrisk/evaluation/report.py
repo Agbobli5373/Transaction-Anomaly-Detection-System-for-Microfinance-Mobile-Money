@@ -16,6 +16,7 @@ import matplotlib
 
 matplotlib.use("Agg")  # files only, no display
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 from sklearn.metrics import precision_recall_curve, roc_curve
 
@@ -50,6 +51,31 @@ def _segments(
             }
         result[segment] = groups
     return result
+
+
+CURVE_POINTS = 200
+
+
+def _thinned(x: np.ndarray, y: np.ndarray) -> dict[str, list[float]]:
+    """At most CURVE_POINTS evenly spaced points of a curve, the first and last among them."""
+    keep = np.unique(np.linspace(0, len(x) - 1, num=min(len(x), CURVE_POINTS)).astype(int))
+    return {"x": [round(float(v), 6) for v in x[keep]], "y": [round(float(v), 6) for v in y[keep]]}
+
+
+def _curves(frame: pd.DataFrame) -> dict[str, Any]:
+    """The PR and ROC curves as points, for pages that draw them; empty with one class only."""
+    if frame["fraud"].nunique() < 2:
+        return {}
+    precision, recall, _ = precision_recall_curve(frame["fraud"], frame["risk_score"])
+    false_positive_rate, true_positive_rate, _ = roc_curve(frame["fraud"], frame["risk_score"])
+    return {
+        "pr": {"x_label": "Recall", "y_label": "Precision", **_thinned(recall, precision)},
+        "roc": {
+            "x_label": "False positive rate",
+            "y_label": "Recall",
+            **_thinned(false_positive_rate, true_positive_rate),
+        },
+    }
 
 
 def _plot(frame: pd.DataFrame, out: Path, scorer: str) -> None:
@@ -206,6 +232,7 @@ def report_metrics(
             ).recall,
         },
         "segments": _segments(frame, high, segments),
+        "curves": _curves(frame),
         **(extra or {}),
     }
     if "fraud_probability" in scores.columns:

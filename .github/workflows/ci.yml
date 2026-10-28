@@ -73,7 +73,7 @@ jobs:
       - run: uv export --locked --no-emit-project --no-hashes --output-file requirements.audit.txt
       - run: uv run pip-audit --requirement requirements.audit.txt --no-deps --disable-pip
 
-  # Trivy: the built images' (the API's and the workbench's) OS packages and libraries, and the repo's Dockerfile and compose
+  # Trivy: the built images' (the API's, the workbench's and the evaluation pages') OS packages and libraries, and the repo's Dockerfile and compose
   # file for misconfigurations. High and critical findings fail the build. The image scan
   # ignores findings with no fixed version (Debian's util-linux, ncurses, systemd, acl and perl
   # CVEs are unpatched today, and nothing in the image can be rebuilt to fix them); the build
@@ -97,6 +97,14 @@ jobs:
           tags: txrisk-workbench:ci
           cache-from: type=gha,scope=workbench-image
           cache-to: type=gha,scope=workbench-image,mode=max
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: evaluation-pages/Dockerfile
+          load: true
+          tags: txrisk-evaluation-pages:ci
+          cache-from: type=gha,scope=evaluation-pages-image
+          cache-to: type=gha,scope=evaluation-pages-image,mode=max
       - uses: actions/cache@v4
         with:
           path: ~/.cache/trivy
@@ -105,7 +113,7 @@ jobs:
       - name: Scan the images
         run: |
           mkdir -p ~/.cache/trivy
-          for image in txrisk:ci txrisk-workbench:ci; do
+          for image in txrisk:ci txrisk-workbench:ci txrisk-evaluation-pages:ci; do
             docker run --rm \
               -v /var/run/docker.sock:/var/run/docker.sock \
               -v ~/.cache/trivy:/root/.cache/trivy \
@@ -185,6 +193,19 @@ jobs:
       - run: |
           issued=$(docker compose exec -T api txrisk api-key --name ci-smoke --scope models:read)
           curl --fail --silent --header "X-API-Key: $issued" http://127.0.0.1:8000/v1/models/active
+      # The evaluation pages (Streamlit) start with an API key that only has models:read, and the
+      # container reaches the API with it; they are published on this machine only.
+      - run: |
+          issued=$(docker compose exec -T api txrisk api-key --name evaluation-pages --scope models:read)
+          sed -i '/^TXRISK_EVALUATION_API_KEY=/d' .env
+          echo "TXRISK_EVALUATION_API_KEY=$issued" >> .env
+          docker compose up --build --detach --wait --no-deps evaluation-pages
+          curl --fail --silent http://127.0.0.1:8501/_stcore/health
+          docker compose exec -T evaluation-pages python -c "
+          import os, httpx
+          reply = httpx.get(os.environ['TXRISK_API_URL'] + '/v1/models', headers={'X-API-Key': os.environ['TXRISK_EVALUATION_API_KEY']})
+          reply.raise_for_status()
+          "
       # The API runs as the least-privilege txrisk_app role: the Alerts call above is on the audit
       # log, which that role can read and append to but never update, delete or truncate.
       - run: |

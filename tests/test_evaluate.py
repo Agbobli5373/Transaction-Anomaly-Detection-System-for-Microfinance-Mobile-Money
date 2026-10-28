@@ -137,6 +137,49 @@ def test_the_report_measures_what_fraud_operations_care_about(run: Path):
         assert sum(group["transactions"] for group in segment.values()) == len(evaluated)
 
 
+def test_the_report_has_the_pr_and_roc_curves_as_points_for_pages_to_draw(run: Path):
+    curves = _metrics(run)["curves"]
+
+    assert set(curves) == {"pr", "roc"}
+    for curve in curves.values():
+        assert 2 <= len(curve["x"]) == len(curve["y"]) <= 200
+    assert curves["roc"]["x"][0] == 0 and curves["roc"]["x"][-1] == 1
+
+
+def test_a_saved_bundle_is_judged_and_its_report_is_saved_in_its_own_folder(run: Path):
+    models = run / "models"
+    exit_code = main(
+        [
+            "train",
+            "--data", str(run / "data"),
+            "--config", str(run / "generator.toml"),
+            "--evaluation-config", str(run / "evaluation.toml"),
+            "--feature-config", str(REPO / "config" / "features.toml"),
+            "--rules-config", str(REPO / "config" / "rules.toml"),
+            "--out", str(models),
+            "--no-mlflow",
+        ]
+    )  # fmt: skip
+    assert exit_code == 0
+    (bundle,) = models.iterdir()
+
+    _evaluate(run, "--scorer", "bundle", "--bundle", str(bundle))
+
+    metrics = json.loads((bundle / "evaluation" / "metrics.json").read_text(encoding="utf-8"))
+    scores = pd.read_parquet(bundle / "evaluation" / "scores.parquet")
+    assert metrics["scorer"] == "bundle"
+    assert set(scores["model_version"]) == {bundle.name}
+    assert metrics["transactions"] == len(_evaluation_days(run))
+    assert {"ranking", "recall_by_scenario", "recall_against", "segments", "curves"} <= set(metrics)
+
+
+def test_judging_a_bundle_needs_the_bundle(run: Path, capsys: pytest.CaptureFixture[str]):
+    with pytest.raises(AssertionError):
+        _evaluate(run, "--scorer", "bundle")
+
+    assert "--bundle" in capsys.readouterr().err
+
+
 def test_the_supervised_risk_score_is_the_fraud_probability_banded_at_the_alert_budget(
     supervised: Path,
 ):

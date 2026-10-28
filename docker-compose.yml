@@ -14,6 +14,7 @@
 #   http://localhost:16686 (traces need TXRISK_TRACING_ENABLED=true in .env); all published on this
 #   machine only. The Pushgateway and the alert sink are on the compose network alone.
 #   Case workbench http://localhost:3000 (sign in through Keycloak; needs AUTH_SECRET in .env)
+#   Evaluation pages http://localhost:8501 (needs TXRISK_EVALUATION_API_KEY in .env; README: Evaluation pages)
 #   docker compose run --rm seed-cases    # demo Cases for the workbench (README: Workbench)
 #   docker compose run --rm backup        # one Postgres backup into the `backups` volume (docs/runbooks/restore.md)
 # Set TXRISK_MODEL_BUNDLE=/models/<version> in .env to score with a bundle from `make train`;
@@ -291,6 +292,35 @@ services:
         - node
         - -e
         - "fetch('http://127.0.0.1:3000/signed-out').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  # The evaluation pages (Streamlit) for ML engineers: model versions, their metrics and curves,
+  # and a side-by-side comparison. They read the API alone, with one API key holding the
+  # models:read scope (`docker compose exec api txrisk api-key --name evaluation-pages --scope
+  # models:read`, shown once) that goes in .env as TXRISK_EVALUATION_API_KEY, so the container
+  # gets neither the database nor the other settings. Published on this machine only.
+  evaluation-pages:
+    build:
+      context: .
+      dockerfile: evaluation-pages/Dockerfile
+    image: txrisk-evaluation-pages:dev
+    environment:
+      TXRISK_API_URL: http://api:8000
+      TXRISK_EVALUATION_API_KEY:
+    ports:
+      - "127.0.0.1:8501:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health')"
       interval: 5s
       timeout: 5s
       retries: 30
