@@ -11,6 +11,8 @@
 #   Grafana http://localhost:3001 (Operations dashboard; admin password GF_SECURITY_ADMIN_PASSWORD in
 #   .env), Prometheus http://localhost:9090, Jaeger http://localhost:16686 (traces need
 #   TXRISK_TRACING_ENABLED=true in .env); all published on this machine only.
+#   Case workbench http://localhost:3000 (sign in through Keycloak; needs AUTH_SECRET in .env)
+#   docker compose run --rm seed-cases    # demo Cases for the workbench (README: Workbench)
 #   docker compose run --rm backup        # one Postgres backup into the `backups` volume (docs/runbooks/restore.md)
 # Set TXRISK_MODEL_BUNDLE=/models/<version> in .env to score with a bundle from `make train`;
 # without it the rules alone score.
@@ -157,6 +159,16 @@ services:
       redis:
         condition: service_healthy
 
+  # One-off: `docker compose run --rm seed-cases --tag demo --count 3 [--medium 20]` makes demo
+  # Cases and Medium Transactions through the store, as the database owner, for the workbench.
+  seed-cases:
+    <<: *txrisk
+    profiles: ["demo"]
+    entrypoint: ["txrisk", "seed-cases"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   # One-off: `docker compose run --rm produce`, standing in for the ledger. Publishes the
   # Transactions and SIM swaps from the day `seed` stops at, in event-time order.
   produce:
@@ -239,6 +251,38 @@ services:
       interval: 5s
       timeout: 5s
       retries: 30
+
+  # The Case workbench (Next.js): people sign in through Keycloak and work Cases through the API.
+  # The browser reaches Keycloak as localhost:8080 and the workbench; the Next.js server reaches
+  # them as keycloak:8080 and api:8000, and keeps every token to itself. AUTH_SECRET, which
+  # encrypts the session cookie, comes from .env (the workbench refuses to start without it).
+  # Published on this machine only.
+  workbench:
+    build: ./workbench
+    image: txrisk-workbench:dev
+    environment:
+      AUTH_SECRET:
+      OIDC_ISSUER: http://localhost:8080/realms/txrisk
+      OIDC_INTERNAL_ISSUER: http://keycloak:8080/realms/txrisk
+      TXRISK_API_URL: http://api:8000
+      WORKBENCH_PUBLIC_URL: http://localhost:3000
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/signed-out').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
 
   # Scores transaction.created into score.produced. A worker that stops for any reason leaves
   # its uncommitted batch to be redelivered, so it is simply restarted.

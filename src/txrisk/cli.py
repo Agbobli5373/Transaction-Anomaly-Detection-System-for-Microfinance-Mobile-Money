@@ -371,6 +371,34 @@ def _seed(args: argparse.Namespace) -> int:
     return 0
 
 
+def _seed_cases(args: argparse.Namespace) -> int:
+    from txrisk.store.demo_cases import seed_demo_cases
+
+    url = _database_url(args)
+    if url is None:
+        return 2
+    if bool(args.assignee_id) != bool(args.assignee_name):
+        print("error: pass --assignee-id and --assignee-name together", file=sys.stderr)
+        return 2
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        pending = pending_migrations(connection)
+        if pending:
+            print(
+                f"error: run `txrisk migrate` first; pending: {', '.join(pending)}", file=sys.stderr
+            )
+            return 1
+        made = seed_demo_cases(
+            connection,
+            tag=args.tag,
+            count=args.count,
+            medium=args.medium,
+            assignee=(args.assignee_id, args.assignee_name) if args.assignee_id else None,
+        )
+    print(json.dumps({"cases": [{"case_id": c.case_id, "wallet_id": c.wallet_id} for c in made]}))
+    return 0
+
+
 def _issue_api_key(args: argparse.Namespace) -> int:
     from txrisk.api.auth import SCOPES
     from txrisk.store import api_keys, audit
@@ -838,6 +866,18 @@ def main(argv: list[str] | None = None) -> int:
         help="load SIM swaps and Transactions before this day (default: the evaluation start)",
     )
     sd.set_defaults(handler=_seed)
+
+    sc = commands.add_parser(
+        "seed-cases",
+        help="create demo Cases and Medium Transactions through the store (for the workbench)",
+    )
+    sc.add_argument("--database-url", help=f"default: ${DATABASE_URL_ENV}")
+    sc.add_argument("--tag", default="demo", help="names the Wallets and Transactions it makes")
+    sc.add_argument("--count", type=int, default=3, help="how many Cases (one per Wallet)")
+    sc.add_argument("--medium", type=int, default=0, help="how many Medium-band Transactions")
+    sc.add_argument("--assignee-id", help="assign every Case to this Analyst (a subject ID)")
+    sc.add_argument("--assignee-name", help="the assigned Analyst's name")
+    sc.set_defaults(handler=_seed_cases)
 
     key = commands.add_parser(
         "api-key", help="issue a scoped API key for a service, straight into Postgres"

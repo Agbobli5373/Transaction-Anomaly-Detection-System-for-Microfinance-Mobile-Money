@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed produce replay scheduler purge schemas backup openapi loadtest-sync loadtest-stream loadtest-check
+.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed produce replay scheduler purge schemas backup openapi workbench loadtest-sync loadtest-stream loadtest-check
 
 install:
 	uv sync
@@ -56,6 +56,10 @@ paysim:
 # start without its demo sign-ins.
 up:
 	docker compose up --build --detach --wait api worker keycloak
+
+# The Case workbench on http://localhost:3000 (needs AUTH_SECRET in .env).
+workbench:
+	docker compose up --build --detach --wait api keycloak workbench
 
 down:
 	docker compose down
