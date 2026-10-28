@@ -10,7 +10,7 @@ threshold days, which needs no labels.
 import hashlib
 import json
 import pickle
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -24,6 +24,7 @@ from txrisk.models.anomaly import AnomalyModel
 from txrisk.models.inputs import INPUT_COLUMNS, model_inputs
 from txrisk.models.stacked import Stacker, stack_components
 from txrisk.models.supervised import SupervisedModel, train_supervised
+from txrisk.monitoring.psi import Baseline, fit_baseline
 from txrisk.scoring.config import RulesConfig
 from txrisk.scoring.table import rule_scores_table
 
@@ -56,6 +57,10 @@ class ModelBundle:
     # The days each part was fitted on, and the day whose labels training used.
     fitted_on: dict[str, Any]
     metrics: dict[str, Any] = field(default_factory=dict)
+    # What monitoring compares live inputs and Risk scores with: their distribution on rows the
+    # bundle was built from, never later ones. None for a bundle trained before baselines (an old
+    # pickle has no such attribute, and reads as this default): monitoring reports 'no baseline'.
+    baseline: Baseline | None = None
 
     def components(self, inputs: pd.DataFrame, rules: pd.DataFrame) -> pd.DataFrame:
         return model_components(self.anomaly, self.supervised, inputs, rules)
@@ -92,6 +97,7 @@ class ModelBundle:
             "stacker": {"weights": self.stacker.weights, "intercept": self.stacker.intercept},
             "input_columns": self.input_columns,
             "metrics": self.metrics,
+            "baseline": None if self.baseline is None else self.baseline.to_json(),
         }
         (folder / _MANIFEST_FILE).write_text(
             json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
@@ -121,6 +127,7 @@ def train_bundle(
     config: EvaluationConfig,
     seed: int,
     rule_scores: pd.DataFrame | None = None,
+    baseline_bins: int = 10,
 ) -> ModelBundle:
     """Train every part of a bundle. `rule_scores` is `rule_scores_table` of these Transactions
     if already computed; without it it is computed here, a Python loop over every row."""
@@ -175,8 +182,8 @@ def train_bundle(
         "threshold_transactions": len(recent),
         "critical_on_threshold_days": int(critical.sum()),
     }
-    return ModelBundle(
-        version=_version(anomaly, supervised, stacker, thresholds, fitted_on),
+    bundle = ModelBundle(
+        version="",
         anomaly=anomaly,
         supervised=supervised,
         stacker=stacker,
@@ -184,4 +191,19 @@ def train_bundle(
         input_columns=list(INPUT_COLUMNS),
         fitted_on=fitted_on,
         metrics=metrics,
+    )
+    # The baseline monitoring measures drift against: the inputs and Risk scores of the threshold
+    # days, the latest days before the Champion goes live. Nothing from the evaluation days, whose
+    # drift it exists to detect, and the Risk scores are the bundle's own (Critical floor included).
+    recent_risk = bundle.risk_scores(recent, rules_scores)
+    baseline = fit_baseline(
+        recent[INPUT_COLUMNS],
+        recent_risk,
+        bins=baseline_bins,
+        alerted=(recent_risk >= thresholds.high).to_numpy(),
+    )
+    return replace(
+        bundle,
+        baseline=baseline,
+        version=_version(anomaly, supervised, stacker, thresholds, fitted_on, baseline),
     )

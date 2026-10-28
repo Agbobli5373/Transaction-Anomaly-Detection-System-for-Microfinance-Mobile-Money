@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed produce replay scheduler purge schemas backup openapi
+.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed produce replay scheduler purge schemas backup openapi monitor
 
 install:
 	uv sync
@@ -96,3 +96,9 @@ openapi:
 # Restoring one: docs/runbooks/restore.md
 backup:
 	docker compose run --rm backup
+
+# One run of the daily model monitoring job: drift against the Champion's training baseline, Alert
+# volume, Risk band mix, label-based performance, Fraud discovery sources. The scheduler fires it per
+# simulated day; this runs it for the day before the simulation clock's. See the Model health dashboard.
+monitor:
+	docker compose run --rm job txrisk monitor

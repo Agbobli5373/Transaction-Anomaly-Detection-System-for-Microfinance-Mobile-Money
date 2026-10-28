@@ -56,6 +56,9 @@ class RiskAssessment:
     # assessment is `rules-only` too: the Champion model was down, so it is on the rules scale.
     model_version: str = RULES_ONLY
     degraded: bool = False
+    # The model inputs a bundle scored with, by column (NaN where a feature is empty), kept for
+    # drift monitoring. Not part of the assessment's identity or of what the API returns.
+    model_inputs: dict[str, float] | None = field(default=None, compare=False, repr=False)
 
 
 class Clock(Protocol):
@@ -237,4 +240,5 @@ class ScoringService:
                 "supervised": float(components["fraud_probability"].iloc[0]),
             },
             model_version=bundle.version,
+            model_inputs={str(k): float(v) for k, v in inputs.iloc[0].items()},
         )

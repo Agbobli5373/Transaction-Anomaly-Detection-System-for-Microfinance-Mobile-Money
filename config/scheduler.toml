@@ -3,7 +3,7 @@
 # Each job runs `command` in a one-off container: a compose service run, or a Kubernetes Job.
 timezone = "UTC"
 
-# Weekly retraining and daily monitoring are added here by the tickets that build those commands.
+# Weekly retraining is added here by the ticket that builds that command.
 [jobs.retention-purge]
 schedule = "daily"
 command = ["txrisk", "purge"]
@@ -14,6 +14,14 @@ command = ["txrisk", "purge"]
 [jobs.rescore-degraded]
 schedule = "daily"
 command = ["txrisk", "rescore"]
+
+# The model's daily health check for the simulated day just ended (txrisk.monitoring): drift
+# against the training baseline, Alert volume, Risk band mix, label-based performance and Fraud
+# discovery sources. It stores them in Postgres and pushes them to the Pushgateway, which
+# Prometheus scrapes for the Model health dashboard and the Alertmanager rules.
+[jobs.model-monitor]
+schedule = "daily"
+command = ["txrisk", "monitor"]
 
 # `--launcher compose`: job containers are `docker compose run` of this service.
 [compose]
