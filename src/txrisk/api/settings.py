@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from txrisk.features import FeatureConfig, load_feature_config
 from txrisk.generator import load_config
-from txrisk.scoring import RulesConfig, load_rules_config
+from txrisk.scoring import Champion, Metrics, RulesConfig, load_rules_config
 from txrisk.store.redis_history import RedisHistoryCache
 
 _PREFIX = "TXRISK_"
@@ -21,7 +21,18 @@ class ApiSettings(BaseModel):
     database_url: str
     # The active model bundle's folder (`models/<version>/` from `txrisk train`); without one
     # the rules alone score.
+    # A bundle that is missing, corrupt or fails to load does not stop the service: it scores in
+    # Degraded mode (Rule hits alone) until the bundle loads, retrying every
+    # `model_retry_seconds`.
     model_bundle: Path | None = None
+    # One scoring call with the model may take this long (TXRISK_SCORING_TIMEOUT_MS); a slower
+    # one is abandoned and the Transaction is scored in Degraded mode. The first call after a
+    # load is cold (the SHAP explainers and LightGBM set up on it, a second or more on a busy
+    # machine) where a warm one takes milliseconds, so keep this well above a warm call; one
+    # that is too tight degrades the first Transaction and then pauses the model.
+    scoring_timeout_ms: int = Field(default=5000, gt=0)
+    # After the model fails, skip it this long (a circuit breaker) before trying it again.
+    model_retry_seconds: float = Field(default=30.0, ge=0)
     # The Redis holding the recent-history cache (ADR 0006), e.g. redis://redis:6379/0; without
     # one, history is read from Postgres alone. Every process that stores Transactions must use
     # the same Redis (see store/redis_history.py). No credential belongs in the URL.
@@ -90,6 +101,18 @@ class ApiSettings(BaseModel):
     def history_cache(self) -> RedisHistoryCache | None:
         """The recent-history cache, or None when no Redis is configured."""
         return None if self.redis_url is None else RedisHistoryCache.from_url(self.redis_url)
+
+    def champion(self, metrics: Metrics | None = None) -> Champion | None:
+        """The Champion model, loaded on first use; None when no bundle is configured (the rules
+        alone score, which is not Degraded mode)."""
+        if self.model_bundle is None:
+            return None
+        return Champion.from_folder(
+            self.model_bundle,
+            timeout=self.scoring_timeout_ms / 1000,
+            retry_after=self.model_retry_seconds,
+            metrics=metrics,
+        )
 
     def features(self) -> FeatureConfig:
         market = load_config(self.generator_config).market

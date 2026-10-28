@@ -276,7 +276,13 @@ def test_health_readiness_and_the_openapi_spec_are_under_v1(client: TestClient):
     spec = client.get("/v1/openapi.json")
 
     assert client.get("/v1/health").json() == {"status": "ok", "detail": None}
-    assert client.get("/v1/ready").json() == {"status": "ok", "detail": None}
+    assert client.get("/v1/ready").json() == {
+        "status": "ok",
+        "detail": None,
+        "degraded": False,
+        "reason": None,
+        "awaiting_rescore": 0,
+    }
     assert spec.status_code == 200
     assert set(spec.json()["paths"]) == {
         "/v1/score",

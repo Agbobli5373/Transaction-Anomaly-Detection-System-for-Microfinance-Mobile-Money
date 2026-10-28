@@ -83,6 +83,22 @@ risk_assessments = sa.Table(
     sa.Column("assessed_at", _TIME, nullable=False),
 )
 
+# An assessment that re-scoring replaced; the same columns, and the version that replaced it.
+risk_assessment_history = sa.Table(
+    "risk_assessment_history",
+    metadata,
+    sa.Column("history_id", sa.BigInteger, sa.Identity(always=True), primary_key=True),
+    sa.Column("transaction_id", sa.Text, nullable=False),
+    sa.Column("risk_score", sa.Double, nullable=False),
+    sa.Column("risk_band", sa.Text, nullable=False),
+    sa.Column("reasons", JSONB, nullable=False),
+    sa.Column("component_scores", JSONB, nullable=False),
+    sa.Column("model_version", sa.Text, nullable=False),
+    sa.Column("degraded", sa.Boolean, nullable=False),
+    sa.Column("assessed_at", _TIME, nullable=False),
+    sa.Column("replaced_by", sa.Text, nullable=False),
+)
+
 alerts = sa.Table(
     "alerts",
     metadata,

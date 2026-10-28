@@ -21,6 +21,11 @@ Transactions are keyed by Subject wallet, so each Subject wallet's own history i
 order. Histories across Subject wallets (Transfers into a Wallet, an Agent's Cash-outs) span
 partitions, and are as complete as the workers on the other partitions have got.
 
+When the Champion model is down or slow, Transactions are scored in Degraded mode (Rule hits
+alone, marked degraded) and published like any other. After the model recovers, the worker
+re-scores what was left degraded, between batches; the stored assessments are replaced, and the
+`score.produced` already published for them stays as it was (consumers see `degraded` on it).
+
 An event that breaks its contract, or names a party that is not registered, cannot succeed on
 any retry: it goes to its topic's dead-letter topic with the reason, and is committed past.
 Anything else that fails (the database or the broker) stops the worker without committing, and
@@ -44,7 +49,7 @@ from txrisk.events.contracts import (
 )
 from txrisk.events.stream import Publisher, Topics
 from txrisk.features import Transaction
-from txrisk.store import Scored, TransactionConflict, UnknownParty
+from txrisk.store import Rescored, Scored, TransactionConflict, UnknownParty
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +69,10 @@ class Scoring(Protocol):
 
     def record_sim_swap(self, wallet_id: str, occurred_at: datetime) -> bool: ...
 
+    def rescore_due(self) -> bool: ...
+
+    def rescore_degraded(self, limit: int | None = None) -> Rescored: ...
+
 
 class ScoringWorker:
     def __init__(
@@ -77,6 +86,7 @@ class ScoringWorker:
         batch_size: int = 500,
         poll_timeout: float = 1.0,
         catch_up_timeout: float = 60.0,
+        rescore_batch: int = 500,
     ) -> None:
         self._scoring = scoring
         self._publisher = publisher
@@ -84,6 +94,7 @@ class ScoringWorker:
         self._batch_size = batch_size
         self._poll_timeout = poll_timeout
         self._catch_up_timeout = catch_up_timeout
+        self._rescore_batch = rescore_batch
         self._transactions = Consumer(
             {
                 "bootstrap.servers": bootstrap_servers,
@@ -127,6 +138,7 @@ class ScoringWorker:
         many events it held; 0 if none arrived within the poll timeout."""
         messages = self._transactions.consume(self._batch_size, self._poll_timeout)
         if not messages:
+            self._rescore_after_recovery()
             return 0
         self.catch_up_sim_swaps()
         offsets: dict[tuple[str, int], int] = {}
@@ -137,6 +149,7 @@ class ScoringWorker:
             offsets[(_topic(message), _partition(message))] = _offset(message) + 1
         self._publisher.flush()
         self._commit(self._transactions, offsets)
+        self._rescore_after_recovery()
         return len(messages)
 
     def catch_up_sim_swaps(self) -> int:
@@ -176,6 +189,24 @@ class ScoringWorker:
     def assess(self, transaction: Transaction) -> Scored:
         """The one scoring call: everything about how a Transaction is scored sits behind it."""
         return self._scoring.assess(transaction)
+
+    def _rescore_after_recovery(self) -> None:
+        """Re-score the Transactions Degraded mode left behind, once the model has recovered.
+        A failure here is logged, not fatal: scoring must go on, and `txrisk rescore` or the
+        next recovery picks the rest up."""
+        if not self._scoring.rescore_due():
+            return
+        try:
+            result = self._scoring.rescore_degraded(limit=self._rescore_batch)
+        except Exception:
+            log.exception("re-scoring after recovery failed")
+            return
+        log.info(
+            "re-scored %d degraded Transactions (%d Alerts raised), %d remain",
+            result.rescored,
+            result.alerts_raised,
+            result.remaining,
+        )
 
     def _handle_transaction(self, message: Message) -> None:
         try:

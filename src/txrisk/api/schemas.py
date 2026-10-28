@@ -141,8 +141,24 @@ class AssessmentOut(_Body):
     reasons: list[ReasonOut]
     # rules, anomaly and supervised, each 0-1, or null without a model for it.
     component_scores: dict[str, float | None]
-    model_version: str
-    degraded: bool
+    model_version: str = Field(
+        description=(
+            "Which scale risk_score and risk_band are on. A bundle version: the stacked scale, "
+            "a probability x 100, where High starts at that bundle's threshold (see "
+            "/v1/models/active). The value `rules-only`: the rules scale, whole numbers 0-100 "
+            "where High starts at 50 (`bands` in config/rules.toml) and a Critical rule hit is "
+            "at least 90."
+        )
+    )
+    degraded: bool = Field(
+        description=(
+            "True when the Champion model was unavailable, too slow or failed, and this was "
+            "scored from Rule hits alone: model_version is then `rules-only` and the score is on "
+            "the rules scale, not comparable with stacked scores. The full model re-scores it "
+            "once healthy, replacing the stored assessment (a High keeps its Alert; a new High "
+            "raises one)."
+        )
+    )
 
     @classmethod
     def of(cls, assessment: RiskAssessment) -> "AssessmentOut":
@@ -191,6 +207,18 @@ class ActiveModel(_Body):
 class Status(_Body):
     status: Literal["ok", "unavailable"]
     detail: str | None = None
+
+
+class Readiness(Status):
+    """Ready to score. `degraded` says whether it scores with the Champion model."""
+
+    # True when the Champion model is unavailable, too slow or failing, so Transactions are
+    # scored from Rule hits alone (Degraded mode). The service still answers: the status stays
+    # `ok` and the HTTP status 200.
+    degraded: bool = False
+    reason: str | None = None
+    # Transactions whose stored assessment is degraded and waits for the full model to re-score it.
+    awaiting_rescore: int = 0
 
 
 class ApiKeyIn(_Body):

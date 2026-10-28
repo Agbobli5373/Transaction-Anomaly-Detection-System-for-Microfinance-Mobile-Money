@@ -14,7 +14,16 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException, Query, Response
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Body,
+    Depends,
+    FastAPI,
+    HTTPException,
+    Query,
+    Response,
+)
 from fastapi.responses import JSONResponse
 
 from txrisk.api.auth import (
@@ -38,6 +47,7 @@ from txrisk.api.schemas import (
     ApiKeyOut,
     AssessmentOut,
     IssuedApiKeyOut,
+    Readiness,
     RotationIn,
     Status,
     TransactionIn,
@@ -45,8 +55,7 @@ from txrisk.api.schemas import (
     TransactionView,
 )
 from txrisk.api.settings import ApiSettings
-from txrisk.models.bundle import ModelBundle
-from txrisk.scoring import RULES_ONLY
+from txrisk.scoring import RULES_ONLY, InMemoryMetrics
 from txrisk.store import (
     StoredScoring,
     TransactionConflict,
@@ -59,6 +68,10 @@ from txrisk.store import (
 
 # Set on a scoring response that returns the assessment an earlier call stored.
 REPLAYED_HEADER = "Idempotent-Replayed"
+
+# Degraded assessments re-scored per background run after recovery; a run that leaves more
+# queues another, and `txrisk rescore` takes the rest.
+RESCORE_BATCH = 500
 
 _DENIED: dict[int | str, dict[str, Any]] = {
     401: {"description": "No credential, or an invalid, expired or revoked one"},
@@ -74,33 +87,25 @@ def _utc_now() -> datetime:
 def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _utc_now) -> FastAPI:
     """The API over the database and model bundle in `settings`.
 
-    The bundle is loaded once, here; a configured bundle that cannot be loaded stops the API from
-    starting rather than letting it score with something other than what was configured.
+    The Champion model bundle is loaded here if it can be, and again whenever it is needed and
+    not loaded. One that is missing, corrupt, slow or failing does not stop the API: it scores in
+    Degraded mode (Rule hits alone, marked degraded) and reports `degraded` on `/v1/ready`, until
+    the model is healthy again, when the degraded assessments are re-scored in the background.
     `wall_clock` is real time, used only for API key expiry and rate limits; scoring runs on each
     Transaction's event time (ADR 0005).
     """
     engine = create_engine(settings.database_url)
-    bundle = None if settings.model_bundle is None else ModelBundle.load(settings.model_bundle)
     rules = settings.rules()
+    metrics = InMemoryMetrics()
     scoring = StoredScoring(
         engine,
         features=settings.features(),
         rules=rules,
-        bundle=bundle,
+        bundle=settings.champion(metrics),
         cache=settings.history_cache(),
+        metrics=metrics,
     )
-    if bundle is None:
-        active = ActiveModel(
-            model_version=RULES_ONLY,
-            thresholds={"medium": rules.bands.medium, "high": rules.bands.high},
-            fitted_on=None,
-        )
-    else:
-        active = ActiveModel(
-            model_version=bundle.version,
-            thresholds={"medium": bundle.thresholds.medium, "high": bundle.thresholds.high},
-            fitted_on=bundle.fitted_on,
-        )
+    scoring.model_health()  # load the bundle now, if it can be, so the first Transaction is fast
     jwks_url = settings.jwks_url
     verifier = (
         None
@@ -151,10 +156,16 @@ def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _u
         dependencies=[Depends(require(SCORE))],
         responses=_DENIED,
     )
-    def score(transaction: TransactionIn, response: Response) -> AssessmentOut:
+    def score(
+        transaction: TransactionIn, response: Response, background: BackgroundTasks
+    ) -> AssessmentOut:
         """Score a Transaction and store it with its Risk assessment; a High Risk band raises
         an Alert. Idempotent on `transaction_id`: a repeat returns the stored assessment, marked
         with the `Idempotent-Replayed: true` header, and raises no second Alert.
+
+        If the Champion model is unavailable or too slow, the Transaction is scored from Rule
+        hits alone: `degraded` is true, `model_version` is `rules-only` and the score and band
+        are on the rules scale (see AssessmentOut). It is re-scored once the model is healthy.
         Needs the `score:write` scope."""
         try:
             scored = scoring.assess(transaction.to_transaction())
@@ -164,6 +175,8 @@ def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _u
             raise HTTPException(409, f"a different Transaction is already stored as {e}") from e
         if scored.replayed:
             response.headers[REPLAYED_HEADER] = "true"
+        if scoring.rescore_due():
+            background.add_task(scoring.rescore_degraded, limit=RESCORE_BATCH)
         return AssessmentOut.of(scored.assessment)
 
     @v1.get(
@@ -226,8 +239,20 @@ def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _u
     )
     def get_active_model() -> ActiveModel:
         """The model version that scores, and its Risk band thresholds. For every role, or the
-        `models:read` scope."""
-        return active
+        `models:read` scope. While the Champion model is down this is `rules-only`, with the
+        rules bands."""
+        bundle = scoring.active_bundle()
+        if bundle is None:
+            return ActiveModel(
+                model_version=RULES_ONLY,
+                thresholds={"medium": rules.bands.medium, "high": rules.bands.high},
+                fitted_on=None,
+            )
+        return ActiveModel(
+            model_version=bundle.version,
+            thresholds={"medium": bundle.thresholds.medium, "high": bundle.thresholds.high},
+            fitted_on=bundle.fitted_on,
+        )
 
     _add_api_key_routes(v1, engine, settings, wall_clock)
 
@@ -238,20 +263,28 @@ def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _u
 
     @v1.get(
         "/ready",
-        response_model=Status,
+        response_model=Readiness,
         tags=["operations"],
         responses={503: {"model": Status, "description": "Not ready to score"}},
     )
-    def ready() -> Status | JSONResponse:
-        """Readiness: the database answers and every migration has been applied. Open to all."""
+    def ready() -> Readiness | JSONResponse:
+        """Readiness: the database answers and every migration has been applied. Open to all.
+
+        Degraded mode does not make the service unready, as it can still score: the answer is
+        200 with `degraded: true` and the `reason`, so a load balancer keeps sending traffic
+        while monitoring sees the Champion model is down."""
         try:
             with engine.connect() as connection:
                 pending = pending_migrations(connection)
+                waiting = 0 if pending else records.count_awaiting_rescore(connection)
         except sa.exc.SQLAlchemyError:
             return _unavailable("database unreachable")
         if pending:
             return _unavailable(f"migrations not applied: {', '.join(pending)}")
-        return Status(status="ok")
+        health = scoring.model_health()
+        return Readiness(
+            status="ok", degraded=health.degraded, reason=health.reason, awaiting_rescore=waiting
+        )
 
     app.include_router(v1)
     return app

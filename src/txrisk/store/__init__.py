@@ -15,7 +15,7 @@ from txrisk.store.database import create_engine, migrate, pending_migrations
 from txrisk.store.history import PostgresHistory
 from txrisk.store.records import TransactionConflict, UnknownParty
 from txrisk.store.redis_history import RedisHistory, RedisHistoryCache
-from txrisk.store.scoring import HistoryCache, Scored, StoredScoring
+from txrisk.store.scoring import HistoryCache, Rescored, Scored, StoredScoring
 from txrisk.store.seed import seed
 
 __all__ = [
@@ -25,6 +25,7 @@ __all__ = [
     "PostgresHistory",
     "RedisHistory",
     "RedisHistoryCache",
+    "Rescored",
     "RestoreCheck",
     "Scored",
     "StoredScoring",

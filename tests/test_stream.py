@@ -8,15 +8,20 @@ import time
 from collections import defaultdict
 from collections.abc import Iterator
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
 import redis
 import sqlalchemy as sa
-from api_helpers import settings
+from api_helpers import as_json, body, issue_key, settings, with_key
 from confluent_kafka import Consumer
+from conftest import create_database
+from degraded_helpers import Monotonic, StubBundle, populate
+from fastapi.testclient import TestClient
 from scoring_helpers import DAY, HOUR, NOW, REGISTERED, SUBJECT, routine, tx
 
+from txrisk.api import create_app
 from txrisk.events import (
     Publisher,
     ScoreProduced,
@@ -29,9 +34,11 @@ from txrisk.events import (
     ensure_topics,
 )
 from txrisk.features import Transaction
+from txrisk.scoring import Champion
 from txrisk.store import (
     PostgresHistory,
     RedisHistoryCache,
+    Rescored,
     Scored,
     StoredScoring,
     create_engine,
@@ -204,6 +211,12 @@ class CrashAfter:
     def record_sim_swap(self, wallet_id: str, occurred_at: datetime) -> bool:
         return self._scoring.record_sim_swap(wallet_id, occurred_at)
 
+    def rescore_due(self) -> bool:
+        return self._scoring.rescore_due()
+
+    def rescore_degraded(self, limit: int | None = None) -> Rescored:
+        return self._scoring.rescore_degraded(limit)
+
 
 def _day_of_transactions() -> list[Transaction]:
     """Six Transactions after the routine, one of them a drain soon after a SIM swap."""
@@ -361,3 +374,72 @@ def test_ensuring_topics_twice_keeps_what_is_there(stream: Stream):
         Topics.dead_letter(stream.topics.transactions): 1,
         Topics.dead_letter(stream.topics.sim_swaps): 1,
     }
+
+
+def _degraded_scoring(database: str) -> StoredScoring:
+    """Scoring configured with a model bundle that is not there, as the API would be."""
+    api = settings(database, Path("/nonexistent/bundle"))
+    return StoredScoring(
+        create_engine(database),
+        features=api.features(),
+        rules=api.rules(),
+        bundle=api.champion(),
+    )
+
+
+def test_the_stream_and_the_sync_api_give_identical_assessments_in_degraded_mode(
+    stream: Stream, postgres: str, migrated_template: str
+):
+    day = _day_of_transactions()
+    swap_at = NOW + 2 * HOUR
+    stream.publish(
+        SimSwapRecorded(wallet_id=SUBJECT, occurred_at=swap_at), *map(TransactionCreated.of, day)
+    )
+    worker = stream.worker(_degraded_scoring(stream.database))
+    run_until(worker, len(day))
+    worker.close()
+    streamed = {
+        i: decode(ScoreProduced, next(iter(payloads)).encode()).to_assessment()
+        for i, payloads in stream.scores(len(day)).items()
+    }
+
+    served = create_database(postgres, "degraded_parity_api", template=migrated_template)
+    populate(served)
+    with create_engine(served).begin() as connection:
+        records.add_sim_swap(connection, SUBJECT, swap_at)
+    app = create_app(settings(served, Path("/nonexistent/bundle")))
+    with TestClient(app, headers=with_key(issue_key(served))) as client:
+        answered = [client.post("/v1/score", json=body(t)).json() for t in day]
+
+    assert answered == [as_json(streamed[t.transaction_id]) for t in day]
+    assert all(a["degraded"] and a["model_version"] == "rules-only" for a in answered)
+    assert any(a["risk_band"] == "High" for a in answered)
+    assert stream.count("alerts") == sum(a["risk_band"] == "High" for a in answered)
+
+
+def test_a_worker_rescores_what_degraded_mode_left_once_the_model_recovers(stream: Stream):
+    day = _day_of_transactions()
+    stub, clock = StubBundle(fail=True), Monotonic()
+    api = settings(stream.database)
+    scoring = StoredScoring(
+        create_engine(stream.database),
+        features=api.features(),
+        rules=api.rules(),
+        bundle=Champion.of(stub, retry_after=30, monotonic=clock),
+    )
+    stream.publish(*map(TransactionCreated.of, day[:3]))
+    worker = stream.worker(scoring)
+    run_until(worker, 3)
+    assert scoring.awaiting_rescore() == 3
+
+    stub.fail = False
+    clock.advance(31)
+    stream.publish(*map(TransactionCreated.of, day[3:]))
+    run_until(worker, 3)
+    worker.close()
+
+    assert scoring.awaiting_rescore() == 0
+    with create_engine(stream.database).connect() as connection:
+        stored = [records.stored_assessment(connection, t.transaction_id) for t in day]
+    assert [a.degraded for a in stored if a] == [False] * len(day)
+    assert {a.model_version for a in stored if a} == {"stub-1"}
