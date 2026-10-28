@@ -44,6 +44,7 @@ from txrisk.api.auth import (
 )
 from txrisk.api.cases import add_case_routes
 from txrisk.api.hardening import RateLimiter, harden
+from txrisk.api.reports import add_report_routes
 from txrisk.api.schemas import (
     ActiveModel,
     AlertOut,
@@ -350,6 +351,7 @@ def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _u
 
     _add_api_key_routes(v1, engine, settings, wall_clock)
     add_case_routes(v1, engine)
+    add_report_routes(v1, engine)
 
     @v1.get("/audit", response_model=AuditPage, tags=["audit"], responses=_DENIED)
     def get_audit(

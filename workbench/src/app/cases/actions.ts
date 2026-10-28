@@ -85,3 +85,40 @@ export async function assignCase(
   refreshed(caseId);
   return { ok: true, message: "Case assigned." };
 }
+
+export async function draftReport(
+  caseId: number,
+  _: FormState,
+  form: FormData,
+): Promise<FormState> {
+  const summary = field(form, "summary");
+  if (!summary) {
+    return { ok: false, message: "Write the summary first.", text: summary };
+  }
+  const { client } = await api();
+  const result = await attempt(() =>
+    client.POST("/v1/cases/{case_id}/report", {
+      params: { path: { case_id: caseId } },
+      body: { summary },
+    }),
+  );
+  if (!result.ok) {
+    return { ok: false, message: result.message, text: summary };
+  }
+  refreshed(caseId);
+  return { ok: true, message: "Report draft saved." };
+}
+
+export async function approveReport(caseId: number): Promise<FormState> {
+  const { client } = await api();
+  const result = await attempt(() =>
+    client.POST("/v1/cases/{case_id}/report/approve", {
+      params: { path: { case_id: caseId } },
+    }),
+  );
+  if (!result.ok) {
+    return { ok: false, message: result.message };
+  }
+  refreshed(caseId);
+  return { ok: true, message: "Report approved." };
+}
