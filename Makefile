@@ -1,4 +1,4 @@
-.PHONY: retrain install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed produce replay scheduler purge schemas backup openapi workbench evaluation-pages loadtest-sync loadtest-stream loadtest-check monitor
+.PHONY: retrain install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed produce replay scheduler purge schemas backup openapi workbench evaluation-pages loadtest-sync loadtest-stream loadtest-check monitor kind-up kind-deploy kind-smoke kind-down
 
 install:
 	uv sync
@@ -140,3 +140,22 @@ loadtest-stream:
 # Judges the runs in reports/loadtest/ against config/loadtest.toml; exits 1 if a target is missed.
 loadtest-check:
 	uv run txrisk loadtest check --sync reports/loadtest/$(RUN)_stats.csv --stream reports/loadtest/stream.json
+
+# The whole stack on a local kind cluster, from the Helm chart (docs/runbooks/kubernetes.md). `kind-up`
+# builds both images and loads them into a new cluster; `kind-deploy` installs the chart with Secrets
+# generated for the cluster; `kind-smoke` scores a Transaction end to end; `kind-down` deletes the cluster.
+KIND_CLUSTER ?= txrisk
+kind-up:
+	docker build --tag txrisk:dev .
+	docker build --tag txrisk-workbench:dev workbench
+	kind create cluster --name $(KIND_CLUSTER)
+	kind load docker-image txrisk:dev txrisk-workbench:dev --name $(KIND_CLUSTER)
+
+kind-deploy:
+	deploy/kind/deploy.sh
+
+kind-smoke:
+	deploy/kind/smoke.sh
+
+kind-down:
+	kind delete cluster --name $(KIND_CLUSTER)

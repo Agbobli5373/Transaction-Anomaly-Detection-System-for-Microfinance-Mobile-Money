@@ -1,0 +1,550 @@
+# Metrics, model monitoring and traces. Prometheus scrapes each service's metrics port (found by DNS,
+# so every replica of a scaled service is a target) and evaluates the alerting rules in
+# deploy/prometheus/rules; they fire into Alertmanager, which routes them to the alert sink.
+# Grafana shows the provisioned dashboards. Nothing here is exposed outside the cluster:
+# `kubectl port-forward` reaches the UIs.
+{{- $prometheus := dict "root" . "component" "prometheus" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  labels:
+    {{- include "txrisk.labels" $prometheus | nindent 4 }}
+data:
+  prometheus.yml: |
+    {{- include "txrisk.prometheusConfig" . | nindent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules
+  labels:
+    {{- include "txrisk.labels" $prometheus | nindent 4 }}
+data:
+  {{- range $path, $_ := .Files.Glob "files/prometheus-rules/*.yml" }}
+  {{ base $path }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  labels:
+    {{- include "txrisk.labels" $prometheus | nindent 4 }}
+spec:
+  selector:
+    {{- include "txrisk.selector" $prometheus | nindent 4 }}
+  ports:
+    - name: http
+      port: 9090
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: prometheus
+  labels:
+    {{- include "txrisk.labels" $prometheus | nindent 4 }}
+spec:
+  serviceName: prometheus
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "txrisk.selector" $prometheus | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "txrisk.labels" $prometheus | nindent 8 }}
+      annotations:
+        checksum/config: {{ include "txrisk.prometheusConfig" . | sha256sum }}
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: prometheus
+          image: {{ .Values.image.prometheus }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time={{ .Values.prometheus.retention }}
+          ports:
+            - name: http
+              containerPort: 9090
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
+          securityContext:
+            {{- include "txrisk.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.prometheus.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus/prometheus.yml
+              subPath: prometheus.yml
+              readOnly: true
+            - name: rules
+              mountPath: /etc/prometheus/rules
+              readOnly: true
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: rules
+          configMap:
+            name: prometheus-rules
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with .Values.prometheus.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.prometheus.storage }}
+{{- $pushgateway := dict "root" . "component" "pushgateway" }}
+---
+# Where the monitoring job's metrics go: Prometheus scrapes the Pushgateway, which keeps the latest.
+apiVersion: v1
+kind: Service
+metadata:
+  name: pushgateway
+  labels:
+    {{- include "txrisk.labels" $pushgateway | nindent 4 }}
+spec:
+  selector:
+    {{- include "txrisk.selector" $pushgateway | nindent 4 }}
+  ports:
+    - name: http
+      port: 9091
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pushgateway
+  labels:
+    {{- include "txrisk.labels" $pushgateway | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "txrisk.selector" $pushgateway | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "txrisk.labels" $pushgateway | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: pushgateway
+          image: {{ .Values.image.pushgateway }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 9091
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
+          securityContext:
+            {{- include "txrisk.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.pushgateway.resources | nindent 12 }}
+{{- $alertmanager := dict "root" . "component" "alertmanager" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  labels:
+    {{- include "txrisk.labels" $alertmanager | nindent 4 }}
+data:
+  {{- range $path, $_ := .Files.Glob "files/alertmanager/*.yml" }}
+  {{ base $path }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  labels:
+    {{- include "txrisk.labels" $alertmanager | nindent 4 }}
+spec:
+  selector:
+    {{- include "txrisk.selector" $alertmanager | nindent 4 }}
+  ports:
+    - name: http
+      port: 9093
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  labels:
+    {{- include "txrisk.labels" $alertmanager | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "txrisk.selector" $alertmanager | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "txrisk.labels" $alertmanager | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: alertmanager
+          image: {{ .Values.image.alertmanager }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --config.file=/etc/alertmanager/alertmanager.yml
+            - --storage.path=/alertmanager
+          ports:
+            - name: http
+              containerPort: 9093
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
+          securityContext:
+            {{- include "txrisk.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.alertmanager.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager/alertmanager.yml
+              subPath: alertmanager.yml
+              readOnly: true
+            # Silences and notification state; they do not survive a restart.
+            - name: state
+              mountPath: /alertmanager
+      volumes:
+        - name: config
+          configMap:
+            name: alertmanager-config
+        - name: state
+          emptyDir: {}
+{{- $sink := dict "root" . "component" "alert-sink" }}
+---
+# The webhook Alertmanager sends to: records each alert it receives and exposes them as Prometheus
+# metrics, which the Model health dashboard shows. It stands in for a pager or chat integration.
+apiVersion: v1
+kind: Service
+metadata:
+  name: alert-sink
+  labels:
+    {{- include "txrisk.labels" $sink | nindent 4 }}
+spec:
+  selector:
+    {{- include "txrisk.selector" $sink | nindent 4 }}
+  ports:
+    - name: http
+      port: 9095
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alert-sink
+  labels:
+    {{- include "txrisk.labels" $sink | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "txrisk.selector" $sink | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "txrisk.labels" $sink | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        {{- include "txrisk.podSecurity" . | nindent 8 }}
+      containers:
+        - name: alert-sink
+          image: {{ include "txrisk.image" .Values.image.txrisk }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [txrisk, alert-sink, --port, "9095"]
+          env:
+            # The image's user has no writable home (matplotlib wants one).
+            - name: HOME
+              value: /tmp
+          ports:
+            - name: http
+              containerPort: 9095
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
+          securityContext:
+            {{- include "txrisk.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.alertSink.resources | nindent 12 }}
+{{- $grafana := dict "root" . "component" "grafana" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-start
+  labels:
+    {{- include "txrisk.labels" $grafana | nindent 4 }}
+data:
+  start.sh: |
+    {{- .Files.Get "files/grafana/start.sh" | nindent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  labels:
+    {{- include "txrisk.labels" $grafana | nindent 4 }}
+data:
+  {{- range $path, $_ := .Files.Glob "files/grafana/provisioning/datasources/*.yml" }}
+  {{ base $path }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-providers
+  labels:
+    {{- include "txrisk.labels" $grafana | nindent 4 }}
+data:
+  {{- range $path, $_ := .Files.Glob "files/grafana/provisioning/dashboards/*.yml" }}
+  {{ base $path }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  labels:
+    {{- include "txrisk.labels" $grafana | nindent 4 }}
+data:
+  {{- range $path, $_ := .Files.Glob "files/grafana/dashboards/*.json" }}
+  {{ base $path }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  labels:
+    {{- include "txrisk.labels" $grafana | nindent 4 }}
+spec:
+  selector:
+    {{- include "txrisk.selector" $grafana | nindent 4 }}
+  ports:
+    - name: http
+      port: 3000
+---
+# The admin login is in the grafana Secret, which Grafana reads natively; start.sh refuses to start
+# without one. Datasources and dashboards are provisioned and cannot be edited in the UI.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  labels:
+    {{- include "txrisk.labels" $grafana | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "txrisk.selector" $grafana | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "txrisk.labels" $grafana | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 472
+        runAsGroup: 472
+        fsGroup: 472
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: grafana
+          image: {{ .Values.image.grafana }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [sh, /opt/txrisk/start.sh]
+          env:
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+            - name: GF_ANALYTICS_REPORTING_ENABLED
+              value: "false"
+            - name: GF_ANALYTICS_CHECK_FOR_UPDATES
+              value: "false"
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "false"
+          envFrom:
+            - secretRef:
+                name: {{ .Values.settingsFrom.grafana }}
+          ports:
+            - name: http
+              containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 6
+          securityContext:
+            {{- include "txrisk.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.grafana.resources | nindent 12 }}
+          volumeMounts:
+            - name: start
+              mountPath: /opt/txrisk
+              readOnly: true
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+              readOnly: true
+            - name: dashboard-providers
+              mountPath: /etc/grafana/provisioning/dashboards
+              readOnly: true
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/grafana
+      volumes:
+        - name: start
+          configMap:
+            name: grafana-start
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboard-providers
+          configMap:
+            name: grafana-dashboard-providers
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+        - name: data
+          emptyDir: {}
+{{- $jaeger := dict "root" . "component" "jaeger" }}
+---
+# Traces: services send OTLP/HTTP to jaeger:4318 when `tracing.enabled` is set. Spans are kept in
+# memory, so they are gone when it restarts.
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger
+  labels:
+    {{- include "txrisk.labels" $jaeger | nindent 4 }}
+spec:
+  selector:
+    {{- include "txrisk.selector" $jaeger | nindent 4 }}
+  ports:
+    - name: otlp-http
+      port: 4318
+    - name: ui
+      port: 16686
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  labels:
+    {{- include "txrisk.labels" $jaeger | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "txrisk.selector" $jaeger | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "txrisk.labels" $jaeger | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: jaeger
+          image: {{ .Values.image.jaeger }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: otlp-http
+              containerPort: 4318
+            - name: ui
+              containerPort: 16686
+          readinessProbe:
+            tcpSocket:
+              port: ui
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: ui
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 6
+          securityContext:
+            {{- include "txrisk.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.jaeger.resources | nindent 12 }}

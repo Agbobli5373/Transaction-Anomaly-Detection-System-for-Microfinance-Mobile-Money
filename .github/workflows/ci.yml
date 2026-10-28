@@ -123,7 +123,7 @@ jobs:
         run: |
           docker run --rm \
             -v "$PWD:/src" -v ~/.cache/trivy:/root/.cache/trivy \
-            "$TRIVY_IMAGE" config --severity HIGH,CRITICAL --exit-code 1 /src
+            "$TRIVY_IMAGE" config --severity HIGH,CRITICAL --exit-code 1 --ignorefile /src/.trivyignore.yaml /src
 
   # A breaking change to the OpenAPI spec or to an event schema fails the build. The spec the
   # code serves is compared with the one on the commit this change builds on, so a breaking
@@ -291,6 +291,55 @@ jobs:
       - if: always()
         run: docker compose down --volumes
 
+  # The Helm chart (deploy/helm/txrisk) on a kind cluster: lint and render it, build the two images,
+  # deploy the whole stack with Secrets generated for this run (the chart has none), score a
+  # Transaction end to end and check the pieces around it (deploy/kind/smoke.sh), then tear the
+  # cluster down. Runs beside the other jobs, so it adds no time to them.
+  kubernetes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      NAMESPACE: txrisk
+      IMAGE_TAG: ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+      - run: helm lint deploy/helm/txrisk
+      - run: helm template txrisk deploy/helm/txrisk --namespace "$NAMESPACE" > /dev/null
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: txrisk:ci
+          cache-from: type=gha,scope=image
+      - uses: docker/build-push-action@v6
+        with:
+          context: workbench
+          load: true
+          tags: txrisk-workbench:ci
+          cache-from: type=gha,scope=workbench-image
+      - uses: helm/kind-action@v1
+        with:
+          version: v0.24.0
+          cluster_name: txrisk
+      - run: kind load docker-image txrisk:ci txrisk-workbench:ci --name txrisk
+      - run: deploy/kind/deploy.sh
+      - run: deploy/kind/smoke.sh
+      - if: failure()
+        run: |
+          kubectl --namespace "$NAMESPACE" get all,pvc,hpa --output wide
+          kubectl --namespace "$NAMESPACE" describe pods
+          for pod in $(kubectl --namespace "$NAMESPACE" get pods --output name); do
+            echo "::group::$pod"
+            kubectl --namespace "$NAMESPACE" logs "$pod" --all-containers --tail 80 || true
+            echo "::endgroup::"
+          done
+      - if: always()
+        run: kind delete cluster --name txrisk
+
   # The Case workbench (Next.js, in workbench/): lint, strict types, the typed API client matching
   # contracts/openapi.json, the production build, unit tests and a dependency audit; then Playwright
   # drives the real stack (API, Keycloak, Postgres, the workbench from its image) through compose.
@@ -393,7 +442,7 @@ jobs:
   # On main, once everything passes: push the image to GHCR, tagged with the commit SHA.
   publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [check, smoke, audit, trivy, contracts, compose, restore, workbench]
+    needs: [check, smoke, audit, trivy, contracts, compose, restore, workbench, kubernetes]
     runs-on: ubuntu-latest
     permissions:
       contents: read

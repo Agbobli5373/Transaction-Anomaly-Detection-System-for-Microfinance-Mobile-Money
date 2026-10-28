@@ -1,0 +1,11 @@
+# Findings the CI `trivy` job's configuration scan accepts, each with the reason.
+misconfigurations:
+  # The chart's workloads run as non-root users with every capability dropped and privilege
+  # escalation off, but their root filesystems stay writable: Keycloak, Postgres, Grafana and
+  # Redpanda write to paths the images do not declare as volumes, and the others (the txrisk image,
+  # the workbench) were not run read-only. Tightening each takes its own emptyDir mounts, and
+  # belongs with a hardening pass that runs every service that way in the kind job.
+  - id: KSV-0014
+    paths:
+      - deploy/helm/**
+    statement: workloads run non-root with capabilities dropped; read-only root filesystems are not yet verified per service

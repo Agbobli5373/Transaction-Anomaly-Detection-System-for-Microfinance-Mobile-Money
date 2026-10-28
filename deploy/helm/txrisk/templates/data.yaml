@@ -1,0 +1,255 @@
+# Postgres, Redis and Redpanda: the store, the recent-history cache (ADR 0006) and the event stream
+# (ADR 0004). Each is a single replica, as in docker-compose.yml.
+{{- $postgres := dict "root" . "component" "postgres" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    {{- include "txrisk.labels" $postgres | nindent 4 }}
+spec:
+  selector:
+    {{- include "txrisk.selector" $postgres | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  labels:
+    {{- include "txrisk.labels" $postgres | nindent 4 }}
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "txrisk.selector" $postgres | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "txrisk.labels" $postgres | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        fsGroup: 70
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: {{ .Values.image.postgres }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: POSTGRES_USER
+              value: txrisk
+            - name: POSTGRES_DB
+              value: txrisk
+            # A subdirectory, because the volume's root holds lost+found on some storage classes.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          # The owner's login is in the Secret, like everything credential-shaped.
+          envFrom:
+            - secretRef:
+                name: {{ .Values.settingsFrom.database }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, txrisk, -d, txrisk]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            exec:
+              command: [pg_isready, -U, txrisk, -d, txrisk]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+              add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+          resources:
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with .Values.postgres.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.postgres.storage }}
+{{- $redis := dict "root" . "component" "redis" }}
+---
+# The cache holds nothing Postgres does not and persists nothing: a restart means reads fall back to
+# Postgres until it refills. It is reachable inside the cluster only.
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  labels:
+    {{- include "txrisk.labels" $redis | nindent 4 }}
+spec:
+  selector:
+    {{- include "txrisk.selector" $redis | nindent 4 }}
+  ports:
+    - name: redis
+      port: 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  labels:
+    {{- include "txrisk.labels" $redis | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "txrisk.selector" $redis | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "txrisk.labels" $redis | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis
+          image: {{ .Values.image.redis }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [redis-server, --save, "", --appendonly, "no"]
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: [redis-cli, ping]
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: [redis-cli, ping]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            {{- include "txrisk.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+{{- $redpanda := dict "root" . "component" "redpanda" }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redpanda
+  labels:
+    {{- include "txrisk.labels" $redpanda | nindent 4 }}
+spec:
+  selector:
+    {{- include "txrisk.selector" $redpanda | nindent 4 }}
+  ports:
+    - name: kafka
+      port: 9092
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redpanda
+  labels:
+    {{- include "txrisk.labels" $redpanda | nindent 4 }}
+spec:
+  serviceName: redpanda
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "txrisk.selector" $redpanda | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "txrisk.labels" $redpanda | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redpanda
+          image: {{ .Values.image.redpanda }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - redpanda
+            - start
+            - --mode=dev-container
+            - --smp=1
+            - --memory=1G
+            - --kafka-addr=internal://0.0.0.0:9092
+            - --advertise-kafka-addr=internal://redpanda:9092
+          ports:
+            - name: kafka
+              containerPort: 9092
+          readinessProbe:
+            exec:
+              command: [sh, -c, "rpk cluster health | grep -E 'Healthy:.+true'"]
+            periodSeconds: 5
+            timeoutSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            tcpSocket:
+              port: kafka
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 6
+          # Redpanda's I/O engine (Seastar) wants the capabilities a container starts with.
+          securityContext:
+            allowPrivilegeEscalation: false
+          resources:
+            {{- toYaml .Values.redpanda.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/redpanda/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with .Values.redpanda.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.redpanda.storage }}
+---
+# The model bundles `txrisk retrain` saves, and the ones an operator copies in for the API and
+# workers to score with.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: models
+  labels:
+    {{- include "txrisk.labels" (dict "root" . "component" "models") | nindent 4 }}
+  annotations:
+    # A bundle is not rebuilt by the next upgrade: keep it when the release is removed.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [{{ .Values.models.accessMode }}]
+  {{- with .Values.models.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.models.size }}

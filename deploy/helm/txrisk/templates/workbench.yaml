@@ -1,0 +1,85 @@
+# The Case workbench (Next.js): people sign in through Keycloak and work Cases through the API. The
+# browser reaches Keycloak and the workbench at the addresses in values (`signIn`,
+# `workbenchPublicUrl`); the Next.js server reaches Keycloak and the API as keycloak:8080 and
+# api:8000, and keeps every token to itself. The key that encrypts the session cookie comes from the
+# workbench Secret (the workbench refuses to start without it).
+{{- $workbench := dict "root" . "component" "workbench" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: workbench
+  labels:
+    {{- include "txrisk.labels" $workbench | nindent 4 }}
+spec:
+  selector:
+    {{- include "txrisk.selector" $workbench | nindent 4 }}
+  ports:
+    - name: http
+      port: 3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workbench
+  labels:
+    {{- include "txrisk.labels" $workbench | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "txrisk.selector" $workbench | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "txrisk.labels" $workbench | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        # The image's own user, `node`.
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: workbench
+          image: {{ include "txrisk.image" .Values.image.workbench }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: OIDC_ISSUER
+              value: {{ .Values.signIn.issuer | quote }}
+            - name: OIDC_INTERNAL_ISSUER
+              value: http://keycloak:8080/realms/txrisk
+            - name: TXRISK_API_URL
+              value: http://api:8000
+            - name: WORKBENCH_PUBLIC_URL
+              value: {{ .Values.workbenchPublicUrl | quote }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.settingsFrom.workbench }}
+          ports:
+            - name: http
+              containerPort: 3000
+          startupProbe:
+            httpGet:
+              path: /signed-out
+              port: http
+            periodSeconds: 3
+            failureThreshold: 100
+          readinessProbe:
+            httpGet:
+              path: /signed-out
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /signed-out
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          securityContext:
+            {{- include "txrisk.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.workbench.resources | nindent 12 }}

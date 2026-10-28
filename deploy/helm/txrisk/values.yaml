@@ -1,0 +1,170 @@
+# The Transaction risk stack on Kubernetes (developed and tested on kind; see docs/runbooks/kubernetes.md).
+#
+# Nothing in this file is a credential. Each service reads its credentials from a Kubernetes Secret
+# that is created at deploy time from generated values (`make kind-deploy`, or the commands in the
+# runbook); `settingsFrom` names those Secrets and the chart never creates or renders them. The keys
+# each holds are the ones .env.example and keycloak.env.example list:
+#   database   the Postgres owner's login, and the login of the txrisk_app role (migrations, jobs)
+#   app        the login of the txrisk_app role alone (API, workers, outbox, scheduler)
+#   grafana    Grafana's admin login
+#   workbench  the key that encrypts the workbench's session cookie
+#   keycloak   the demo users' sign-in values (development only)
+# The chart installs one stack per namespace: Services keep fixed names (postgres, redis, api, ...).
+settingsFrom:
+  database: txrisk-database
+  app: txrisk-app
+  grafana: txrisk-grafana
+  workbench: txrisk-workbench
+  keycloak: txrisk-keycloak
+
+image:
+  pullPolicy: IfNotPresent
+  # The txrisk image (Dockerfile) runs the API, workers, outbox, migrations, scheduler, alert sink
+  # and every job; `kind load docker-image` puts it in the cluster.
+  txrisk:
+    repository: txrisk
+    tag: dev
+  workbench:
+    repository: txrisk-workbench
+    tag: dev
+  postgres: postgres:17-alpine
+  redis: redis:7-alpine
+  keycloak: keycloak/keycloak:26.4.2
+  redpanda: redpandadata/redpanda:v24.2.18
+  prometheus: prom/prometheus:v3.5.0
+  pushgateway: prom/pushgateway:v1.11.1
+  alertmanager: prom/alertmanager:v0.28.1
+  grafana: grafana/grafana:12.2.0
+  jaeger: jaegertracing/jaeger:2.11.0
+
+# Where people and services reach each other. Tokens name the realm as a browser reaches it, so these
+# defaults suit `kubectl port-forward` to localhost, like the compose stack.
+signIn:
+  issuer: http://localhost:8080/realms/txrisk
+  jwksUrl: http://keycloak:8080/realms/txrisk/protocol/openid-connect/certs
+  allowedClients: txrisk-workbench,txrisk-demo-cli
+  keycloakHostname: http://localhost:8080
+# The cluster's DNS domain, which Prometheus needs to find each replica of a service.
+clusterDomain: cluster.local
+workbenchPublicUrl: http://localhost:3000
+corsOrigins: ""
+
+tracing:
+  enabled: false
+
+# Set to a /models/<version> bundle from `make train` to score with a model; empty scores with the
+# rules alone. The bundle must already be on the models volume.
+modelBundle: ""
+
+# Bundles `txrisk retrain` saves, read-only for the API and workers, read-write for jobs. A claim
+# of ReadWriteOnce is shared by pods on one node (kind); a cluster of several nodes needs a
+# ReadWriteMany class.
+models:
+  size: 1Gi
+  accessMode: ReadWriteOnce
+  storageClass: ""
+
+# Pod-level settings every txrisk workload gets.
+podSecurity:
+  runAsUser: 10001
+  runAsGroup: 10001
+
+postgres:
+  storage: 2Gi
+  storageClass: ""
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}
+
+redis:
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+
+redpanda:
+  storage: 2Gi
+  storageClass: ""
+  resources:
+    requests: {cpu: 250m, memory: 1Gi}
+    limits: {cpu: "1", memory: 2Gi}
+
+keycloak:
+  resources:
+    requests: {cpu: 250m, memory: 768Mi}
+    limits: {cpu: "1", memory: 1536Mi}
+
+migrate:
+  resources:
+    requests: {cpu: 50m, memory: 256Mi}
+    limits: {cpu: 500m, memory: 1Gi}
+
+api:
+  replicas: 1
+  resources:
+    requests: {cpu: 100m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1536Mi}
+
+# Scoring workers share transaction.created's partitions (txrisk.events: three by default), so more
+# than three replicas would sit idle: maxReplicas follows the topic's partition count. The
+# HorizontalPodAutoscaler scales on CPU, which is what scoring load spends; it needs metrics-server.
+worker:
+  replicas: 1
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 60
+  resources:
+    requests: {cpu: 200m, memory: 512Mi}
+    limits: {cpu: "1", memory: 2Gi}
+
+outbox:
+  resources:
+    requests: {cpu: 50m, memory: 256Mi}
+    limits: {cpu: 500m, memory: 1Gi}
+
+workbench:
+  resources:
+    requests: {cpu: 100m, memory: 192Mi}
+    limits: {cpu: "1", memory: 512Mi}
+
+# Fires the scheduled jobs (config/scheduler.toml: retention, re-scoring, monitoring, retraining) as
+# Kubernetes Jobs when the simulation clock crosses their schedule.
+scheduler:
+  enabled: true
+  resources:
+    requests: {cpu: 50m, memory: 256Mi}
+    limits: {cpu: 500m, memory: 1Gi}
+
+prometheus:
+  retention: 7d
+  storage: 2Gi
+  storageClass: ""
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: 500m, memory: 1Gi}
+
+pushgateway:
+  resources:
+    requests: {cpu: 20m, memory: 32Mi}
+    limits: {cpu: 200m, memory: 128Mi}
+
+alertmanager:
+  resources:
+    requests: {cpu: 20m, memory: 48Mi}
+    limits: {cpu: 200m, memory: 192Mi}
+
+alertSink:
+  resources:
+    requests: {cpu: 20m, memory: 128Mi}
+    limits: {cpu: 200m, memory: 512Mi}
+
+grafana:
+  resources:
+    requests: {cpu: 100m, memory: 192Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+jaeger:
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}

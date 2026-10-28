@@ -46,6 +46,14 @@ class KubernetesSettings(BaseModel):
     # A Secret whose entries become the job's environment, so no credential is in the Job spec.
     env_from: str | None = None
     service_account: str | None = None
+    # Settings that hold no credential, set in the Job's environment (URLs, directories).
+    env: dict[str, str] = Field(default_factory=dict)
+    # A PersistentVolumeClaim mounted at /models, where `txrisk retrain` saves the bundles the
+    # workers and the API load.
+    models_claim: str | None = None
+    # The user every Job's pod runs as (and the group of the models volume): the image's own user
+    # is a name, which the kubelet cannot check is not root.
+    run_as_user: int | None = Field(default=None, ge=1)
     backoff_limit: int = Field(default=0, ge=0)
     ttl_seconds_after_finished: int = Field(default=3600, ge=0)
 
@@ -74,10 +82,15 @@ class SchedulerConfig(BaseModel):
         return jobs
 
 
-def load_scheduler_config(path: Path) -> SchedulerConfig:
-    """Read the config; each `[jobs.<name>]` table is a job named `<name>`."""
+def load_scheduler_config(path: Path, kubernetes: Path | None = None) -> SchedulerConfig:
+    """Read the config; each `[jobs.<name>]` table is a job named `<name>`. With `kubernetes`, the
+    `[kubernetes]` table of that file replaces the one in `path` (a deployment says where its Jobs
+    run without copying the jobs)."""
     with path.open("rb") as f:
         raw = tomllib.load(f)
+    if kubernetes is not None:
+        with kubernetes.open("rb") as f:
+            raw["kubernetes"] = tomllib.load(f)["kubernetes"]
     raw["jobs"] = [{"name": name, **job} for name, job in raw.get("jobs", {}).items()]
     return SchedulerConfig.model_validate(raw)
 

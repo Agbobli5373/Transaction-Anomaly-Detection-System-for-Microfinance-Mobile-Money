@@ -1,0 +1,6 @@
+apiVersion: v2
+name: txrisk
+description: The Transaction risk scoring stack - API, scoring workers, stream, store, sign-in, workbench and monitoring.
+type: application
+version: 0.1.0
+appVersion: "dev"
