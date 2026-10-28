@@ -51,7 +51,7 @@ GRANTS: dict[str, tuple[str, ...]] = {
     # A Case moves through its states, and is assigned, in place; nothing is ever deleted.
     "cases": ("SELECT", "INSERT", "UPDATE"),
     "case_events": ("SELECT", "INSERT"),
-    # A draft is rewritten and then approved in place; a trigger (migration 0007) freezes it once
+    # A draft is rewritten and then approved in place; a trigger (migration 0008) freezes it once
     # approved. Never deleted.
     "suspicious_transaction_reports": ("SELECT", "INSERT", "UPDATE"),
     # Events awaiting publication: inserted with the change, marked published by the publisher.
