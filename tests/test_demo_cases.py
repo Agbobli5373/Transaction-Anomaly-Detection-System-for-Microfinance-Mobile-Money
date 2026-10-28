@@ -2,12 +2,17 @@
 store the way scoring makes them. Against real Postgres."""
 
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
+import sqlalchemy as sa
 
 from txrisk.cli import main
-from txrisk.store import cases, create_engine, watchlist
+from txrisk.generator.config import load_config
+from txrisk.store import cases, create_engine, tables, watchlist
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def seed(capsys: pytest.CaptureFixture[str], database: str, *args: str) -> list[dict[str, Any]]:
@@ -55,6 +60,17 @@ def test_seed_cases_can_assign_every_case_to_an_analyst(
         case = cases.get_case(connection, made[0]["case_id"])
         assert case is not None
         assert (case.assignee_id, case.assignee_name) == ("sub-ama", "Ama")
+
+
+def test_seeded_wallets_have_kyc_tiers_the_market_defines(
+    database: str, capsys: pytest.CaptureFixture[str]
+):
+    seed(capsys, database, "--tag", "t3", "--count", "1", "--medium", "3")
+
+    known = {t.name for t in load_config(ROOT / "config" / "generator.toml").market.kyc_tiers}
+    with create_engine(database).connect() as connection:
+        tiers = set(connection.execute(sa.select(tables.wallets.c.kyc_tier)).scalars())
+    assert tiers <= known
 
 
 def test_seed_cases_again_with_the_same_tag_changes_nothing(

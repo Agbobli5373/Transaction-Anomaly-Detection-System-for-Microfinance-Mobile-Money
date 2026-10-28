@@ -112,7 +112,7 @@ def seed_demo_cases(
     friend = f"w-{tag}-friend"
     agent = f"A-{tag}"
     records.add_wallet(
-        connection, friend, kyc_tier="tier2", home_region=REGIONS[0], registered_at=REGISTERED
+        connection, friend, kyc_tier="medium", home_region=REGIONS[0], registered_at=REGISTERED
     )
     records.add_agent(connection, agent, region=REGIONS[0])
 
@@ -121,7 +121,7 @@ def seed_demo_cases(
         wallet = f"w-{tag}-{n:03d}"
         region = REGIONS[n % len(REGIONS)]
         records.add_wallet(
-            connection, wallet, kyc_tier="tier2", home_region=region, registered_at=REGISTERED
+            connection, wallet, kyc_tier="medium", home_region=region, registered_at=REGISTERED
         )
         at = BASE + timedelta(hours=n)
         for day in range(4, 0, -1):
@@ -163,7 +163,7 @@ def seed_demo_cases(
         wallet = f"w-{tag}-m{m % 3}"
         region = REGIONS[m % len(REGIONS)]
         records.add_wallet(
-            connection, wallet, kyc_tier="tier1", home_region=region, registered_at=REGISTERED
+            connection, wallet, kyc_tier="minimum", home_region=region, registered_at=REGISTERED
         )
         kind = MEDIUM_TYPES[m % len(MEDIUM_TYPES)]
         _store(
