@@ -71,6 +71,12 @@ READ_MODELS = Permission("read the active model", frozenset(Role), "models:read"
 # No scope: an API key can never issue another, so a leaked key cannot mint more.
 MANAGE_API_KEYS = Permission("issue, rotate and revoke API keys", frozenset({Role.ADMIN}), None)
 
+# Promotion and rollback change what scores every Transaction: Admins alone, signed in, so a
+# leaked key cannot swap the model. The gates are checked server-side whoever asks.
+PROMOTE_MODELS = Permission(
+    "promote and roll back models, and run their gates", frozenset({Role.ADMIN}), None
+)
+
 # People only, and Admins only: the audit log is read by whoever is accountable for access.
 READ_AUDIT = Permission("read the audit log", frozenset({Role.ADMIN}), None)
 
@@ -95,6 +101,7 @@ PERMISSIONS = (
     READ_ALERTS,
     READ_MODELS,
     MANAGE_API_KEYS,
+    PROMOTE_MODELS,
     READ_AUDIT,
     READ_CASES,
     ASSIGN_CASES,

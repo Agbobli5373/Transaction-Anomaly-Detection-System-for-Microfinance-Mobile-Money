@@ -21,6 +21,7 @@ import pandas as pd
 from txrisk.evaluation import EvaluationConfig, Split, split_of, training_labels
 from txrisk.evaluation.thresholds import BandThresholds, band, budget_thresholds
 from txrisk.models.anomaly import AnomalyModel
+from txrisk.models.card import build_card, write_card
 from txrisk.models.inputs import INPUT_COLUMNS, model_inputs
 from txrisk.models.stacked import Stacker, stack_components
 from txrisk.models.supervised import SupervisedModel, train_supervised
@@ -62,6 +63,9 @@ class ModelBundle:
     # bundle was built from, never later ones. None for a bundle trained before baselines (an old
     # pickle has no such attribute, and reads as this default): monitoring reports 'no baseline'.
     baseline: Baseline | None = None
+    # The model card (see `txrisk.models.card`), written when the bundle is trained. None for a
+    # bundle trained before cards existed, which reads as this default.
+    card: dict[str, Any] | None = None
 
     def components(self, inputs: pd.DataFrame, rules: pd.DataFrame) -> pd.DataFrame:
         return model_components(self.anomaly, self.supervised, inputs, rules)
@@ -123,6 +127,7 @@ class ModelBundle:
         (folder / _MANIFEST_FILE).write_text(
             json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
         )
+        write_card(self.card or build_card(self), folder)
 
     @classmethod
     def load(cls, folder: Path) -> "ModelBundle":
@@ -131,6 +136,16 @@ class ModelBundle:
         if not isinstance(bundle, cls):
             raise TypeError(f"{folder} does not hold a model bundle")
         return bundle
+
+
+def bundle_version(folder: Path) -> str:
+    """The version of the bundle saved in `folder`: from its manifest, which is cheap to read,
+    else by loading it."""
+    try:
+        version = json.loads((folder / _MANIFEST_FILE).read_text(encoding="utf-8"))["version"]
+    except (OSError, ValueError, KeyError):
+        return ModelBundle.load(folder).version
+    return str(version)
 
 
 def _version(*parts: object) -> str:
@@ -149,9 +164,11 @@ def train_bundle(
     seed: int,
     rule_scores: pd.DataFrame | None = None,
     baseline_bins: int = 10,
+    wallets: pd.DataFrame | None = None,
 ) -> ModelBundle:
     """Train every part of a bundle. `rule_scores` is `rule_scores_table` of these Transactions
-    if already computed; without it it is computed here, a Python loop over every row."""
+    if already computed; without it it is computed here, a Python loop over every row. `wallets`
+    adds the KYC tier and Wallet age band to the model card's segments."""
     splits = config.splits
     split = split_of(transactions["occurred_at"], period_start, config)
     inputs = model_inputs(transactions, feature_rows)
@@ -227,8 +244,74 @@ def train_bundle(
         bins=baseline_bins,
         alerted=(recent_risk >= thresholds.high).to_numpy(),
     )
-    return replace(
+    final = replace(
         bundle,
         baseline=baseline,
         version=_version(anomaly, supervised, stacker, thresholds, fitted_on, baseline),
     )
+    card = build_card(
+        final,
+        data={
+            "transactions_by_split": {
+                name.value: int((split == name).fillna(False).sum()) for name in Split
+            },
+            "fraud_labels_known": int((discoveries["discovered_at"] < cutoff).sum()),
+            "label_maturity_days": config.label_maturity_days,
+            "alert_budget_per_day": config.alert_budget_per_day,
+        },
+        metrics=_segment_metrics(
+            final, transactions, wallets, labelled, labels, rules_scores, config=config
+        ),
+    )
+    return replace(final, card=card)
+
+
+def _segment_metrics(
+    bundle: ModelBundle,
+    transactions: pd.DataFrame,
+    wallets: pd.DataFrame | None,
+    labelled: pd.DataFrame,
+    labels: pd.Series,
+    rules: pd.DataFrame,
+    *,
+    config: EvaluationConfig,
+) -> dict[str, Any] | None:
+    """The bundle's precision, recall and false positive rate at High on the calibration days,
+    against the Fraud labels known when it goes live, overall and by segment for the model card;
+    None if no calibration Transaction has a label."""
+    from txrisk.evaluation.metrics import at_threshold, ranking
+    from txrisk.evaluation.report import _segments, _wallet_age_band
+
+    if labelled.empty:
+        return None
+    frame = (
+        transactions.set_index("transaction_id")
+        .loc[labelled.index, ["occurred_at", "subject_wallet_id", "region", "channel"]]
+        .assign(fraud=labels.loc[labelled.index].astype(bool))
+    )
+    segments = ["region", "channel"]
+    if wallets is not None:
+        frame = frame.join(
+            wallets.set_index("wallet_id")[["kyc_tier", "registered_at"]], on="subject_wallet_id"
+        )
+        age = (frame["occurred_at"] - frame["registered_at"]).dt.total_seconds() / 86_400
+        frame["wallet_age_band"] = _wallet_age_band(age, config.wallet_age_band_edges)
+        segments = ["region", "kyc_tier", "channel", "wallet_age_band"]
+    scores = bundle.risk_scores(labelled, rules)
+    high = scores >= bundle.thresholds.high
+    overall = at_threshold(frame["fraud"], high)
+    rank = ranking(frame["fraud"], scores)
+    return {
+        "evaluated_on": (
+            "The calibration days, against the Fraud labels known when this version goes live, "
+            "at its High threshold. The stacker was fitted on these days, so they flatter it."
+        ),
+        "overall": {
+            "transactions": len(frame),
+            "fraud": int(frame["fraud"].sum()),
+            **asdict(overall),
+            "pr_auc": rank.pr_auc,
+            "roc_auc": rank.roc_auc,
+        },
+        "by_segment": _segments(frame, high, tuple(segments)),
+    }

@@ -8,9 +8,11 @@ risk_assessments = 365
 alerts = 365
 sim_swaps = 365
 fraud_labels = 365
-# What `txrisk monitor` reads (the inputs each day's drift is measured on, 30 days is plenty) and
-# writes (its daily metrics).
-model_inputs = 30
+# What `txrisk monitor` reads (the inputs each day's drift is measured on) and writes (its daily
+# metrics). The backtest gate scores the matured window from these inputs too: the days ending one
+# Label maturity window (30) before the clock, and as long as [backtest] window_days (14) in
+# config/promotion.toml, so they must be kept longer than the two together.
+model_inputs = 60
 monitoring_metrics = 365
 # What Challenger models scored in shadow; the shadow gate reads the most recent days.
 challenger_scores = 30

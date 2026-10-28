@@ -221,7 +221,7 @@ Where things run on this machine (all published on 127.0.0.1 only unless noted):
 - **Metrics reach Prometheus through a Pushgateway**, not an exporter: the job is a one-off container that exits in seconds, so there is nothing to scrape, and an exporter serving the stored values would be another service with database access. The Pushgateway is on the compose network only; each run replaces the whole group, so a segment that is gone leaves no stale series. The job also pushes the thresholds it judged by, so the alert rules (`deploy/prometheus/rules/monitoring.yml`) carry no limit of their own.
 - **Alerts.** Prometheus rules fire at the action thresholds (PSI of any input, of the Risk score or among the Alerts; Alert volume outside the budget band; precision or recall falling by more than `labels.max_relative_drop` against their mean over the previous days) into Alertmanager (<http://localhost:9093>), which sends them to the **alert sink** (`txrisk alert-sink`), a webhook that records what it receives and exposes it as Prometheus metrics. A warning is also sent. Replace the receiver in `deploy/alertmanager/alertmanager.yml` with a pager or chat integration to be told for real.
 - **Dashboards** (Grafana, provisioned): **Model health** (PSI per input, for the Risk score and among the Alerts, the band mix, Alert volume against the budget, label-based metrics by segment, firing alerts and the alerts the sink received) and **Fraud outcomes** (discoveries by Channel, complaint against Case share, recall against discovered labels over time). They read Prometheus only, so Grafana holds no database credential.
-- **Retention.** `model_inputs` (the inputs each Transaction was scored with, which PSI needs) is kept 30 days and `monitoring_metrics` 365, both in `config/retention.toml`.
+- **Retention.** `model_inputs` (the inputs each Transaction was scored with, which PSI needs) is kept 60 days (the backtest gate scores the matured window from them too) and `monitoring_metrics` 365, both in `config/retention.toml`.
 
 ## Retraining and the Challenger model
 
@@ -232,7 +232,26 @@ Where things run on this machine (all published on 127.0.0.1 only unless noted):
 - **Challenger.** The bundle is saved in `models/<version>/`, logged to MLflow (alias `challenger`; `TXRISK_MLFLOW_URI`, `TXRISK_MLFLOW_ARTIFACTS`) and named in `challenger_model` in the same transaction that records the run in `retraining_runs`. A run holds a Postgres advisory lock, so the two jobs never train at once.
 - **Early retraining.** A PSI at or above the action threshold (`psi` or `psi_alerted` in `monitoring_metrics`, the findings that fire the Alertmanager action alerts) on a monitored day since the last run's cutoff retrains, unless the last run was fewer than `drift.min_days_between_runs` days ago. The check reads the previous day's findings, so a drift is acted on within a simulated day of its alert.
 - **Shadow scoring.** Workers and the API poll `challenger_model` every `TXRISK_CHALLENGER_REFRESH_SECONDS` (5) and load a new bundle from `TXRISK_MODELS_DIR` (default: the Champion bundle's folder), so a new Challenger scores within seconds without a restart. Every new Transaction is also scored with it from the same features: Risk score, band and components go to `challenger_scores`, apart from `risk_assessments`, never to an Alert, a Case or a response. A Challenger that raises, or is slower than the Champion's timeout, is recorded as an error row and cannot affect the Champion's assessment. `txrisk_challenger_scores_total{outcome}` counts them, and `challenger_scores` is kept 30 days.
-- **Not here yet.** Promotion, the backtest and shadow gates and rollback are separate tickets; nothing reads `challenger_scores` yet.
+- **Next.** A Challenger scores in shadow until an Admin promotes it: see below.
+
+## Promotion, rollback and the model card
+
+A Challenger model becomes the Champion model only when an **Admin** asks for it through the API and **both gates pass, checked by the server** at that moment (ADR 0012). Promotion is never automatic. The thresholds are in `config/promotion.toml`.
+
+| Endpoint | Who | What |
+|---|---|---|
+| `GET /v1/models` | every role, or `models:read` | the Champion and Challenger, every retrained version, the latest Promotions and rollbacks |
+| `GET /v1/models/{version}/card` | every role, or `models:read` | the model card, as data and as Markdown |
+| `GET /v1/models/{version}/gates` | Admin | run both gates now, promoting nothing |
+| `POST /v1/models/{version}/promote` | Admin | check both gates; if they pass, make it the Champion; if not, `409` with the report |
+| `POST /v1/models/rollback` | Admin | put back the Champion the latest Promotion replaced, in one call |
+
+- **Backtest gate.** The Champion and the Challenger both score the latest matured window (the 14 days ending one Label maturity window before the simulated time) from the model inputs the scoring path stored, against the Fraud labels known at that time (never Ground truth). The Challenger must match or beat the Champion on PR-AUC and on precision at the Alert budget, and no segment's false positive rate at High (region, KYC tier, Channel, Wallet age band) may rise by more than 20% relative. A window with fewer than `min_positives` known Fraud labels fails rather than passing on noise.
+- **Shadow gate.** From `challenger_scores`: at least 7 simulated days between its first and latest score, its simulated Alert volume within 25% of the Alert budget, p95 latency within the sync API's 200 ms target, and zero scoring errors.
+- **Promotion** moves the `champion_model` row and appends to `model_promotions` in the same transaction as its audit entry, with the gate results. Only the current Challenger can be promoted. Workers and the API poll the row (`TXRISK_CHALLENGER_REFRESH_SECONDS`, 5) and switch without a restart; `txrisk monitor` reads the Champion's baseline from it.
+- **Rollback** is one step and has no gates. It is refused when the latest change was already a rollback, or there has been none. The rolled-back model stays the Challenger. Runbook: [docs/runbooks/model-rollback.md](docs/runbooks/model-rollback.md).
+- **Audit.** `model.promote`, `model.rollback` and `model.gates` are in the audit log with who, the versions and the gate results; refused attempts (a denial, a failed gate) are recorded too. The application's database role can append to `model_promotions` and never change or delete it.
+- **Model card.** Every bundle is saved with `model_card.json` and `model_card.md`: intended use, the data it was trained on (splits, Fraud labels known, Label maturity window, Alert budget), metrics by region, KYC tier, Channel and Wallet age band, and limitations. The segment metrics are against the labels known when the version goes live on the calibration days, which the stacker was fitted on, so they flatter the model; the backtest gate is the out-of-sample comparison. A bundle from before cards existed gets a card that says what was not recorded.
 
 ## Load tests
 

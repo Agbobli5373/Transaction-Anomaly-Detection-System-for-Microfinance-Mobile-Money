@@ -71,6 +71,10 @@ GRANTS: dict[str, tuple[str, ...]] = {
     "retraining_runs": ("SELECT",),
     "challenger_model": ("SELECT",),
     "challenger_scores": ("SELECT", "INSERT"),
+    # An Admin's Promotion or rollback moves the Champion model pointer in place and appends what
+    # was done; the history is never changed or deleted.
+    "champion_model": ("SELECT", "UPDATE"),
+    "model_promotions": ("SELECT", "INSERT"),
 }
 
 

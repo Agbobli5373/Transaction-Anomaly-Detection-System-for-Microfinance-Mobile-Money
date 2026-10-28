@@ -292,3 +292,26 @@ challenger_scores = sa.Table(
     sa.Column("latency_ms", sa.Double, nullable=False),
     sa.Column("assessed_at", _TIME, nullable=False),
 )
+
+# Every Promotion and rollback of the Champion model, append-only (migration 0011).
+model_promotions = sa.Table(
+    "model_promotions",
+    metadata,
+    sa.Column("promotion_id", sa.BigInteger, sa.Identity(always=True), primary_key=True),
+    sa.Column("action", sa.Text, nullable=False),
+    sa.Column("from_version", sa.Text, nullable=False),
+    sa.Column("to_version", sa.Text, nullable=False),
+    sa.Column("from_pointer", sa.Text),
+    sa.Column("actor_id", sa.Text, nullable=False),
+    sa.Column("actor_name", sa.Text, nullable=False),
+    sa.Column("occurred_at", _TIME, nullable=False),
+    sa.Column("gates", JSONB, nullable=False, server_default="{}"),
+)
+
+champion_model = sa.Table(
+    "champion_model",
+    metadata,
+    sa.Column("singleton", sa.Boolean, primary_key=True),
+    sa.Column("bundle_version", sa.Text),
+    sa.Column("promotion_id", sa.BigInteger, sa.ForeignKey("model_promotions.promotion_id")),
+)

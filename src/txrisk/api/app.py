@@ -44,6 +44,7 @@ from txrisk.api.auth import (
 )
 from txrisk.api.cases import add_case_routes
 from txrisk.api.hardening import RateLimiter, harden
+from txrisk.api.models import add_model_routes
 from txrisk.api.reports import add_report_routes
 from txrisk.api.schemas import (
     ActiveModel,
@@ -126,7 +127,7 @@ def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _u
         engine,
         features=settings.features(),
         rules=rules,
-        bundle=settings.champion(metrics),
+        bundle=settings.champion(metrics, engine),
         cache=settings.history_cache(),
         metrics=metrics,
         challenger=settings.challenger(engine),
@@ -337,6 +338,7 @@ def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _u
         """The model version that scores, and its Risk band thresholds. For every role, or the
         `models:read` scope. While the Champion model is down this is `rules-only`, with the
         rules bands."""
+        scoring.model_health()  # follows a Promotion or rollback before answering
         bundle = scoring.active_bundle()
         if bundle is None:
             return ActiveModel(
@@ -352,6 +354,7 @@ def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _u
 
     _add_api_key_routes(v1, engine, settings, wall_clock)
     add_case_routes(v1, engine)
+    add_model_routes(v1, engine, settings, rules, wall_clock)
     add_report_routes(v1, engine)
 
     @v1.get("/audit", response_model=AuditPage, tags=["audit"], responses=_DENIED)

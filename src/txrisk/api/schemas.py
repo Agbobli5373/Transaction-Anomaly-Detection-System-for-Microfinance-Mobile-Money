@@ -493,3 +493,105 @@ class ReportExport(_Body):
                 for e in file.notes
             ],
         )
+
+
+class ModelResultOut(_Body):
+    pr_auc: float | None
+    precision_at_budget: float | None
+
+
+class SegmentFprOut(_Body):
+    segment: str
+    member: str
+    negatives: int
+    champion_fpr: float | None
+    challenger_fpr: float | None
+    # False when the segment has too few legitimate Transactions to count.
+    judged: bool
+    passed: bool
+
+
+class BacktestOut(_Body):
+    """The backtest gate: the Champion and Challenger models on the latest matured window."""
+
+    passed: bool
+    # Why it did not pass, one sentence each.
+    failures: list[str]
+    window_start: AwareDatetime
+    window_end: AwareDatetime
+    transactions: int
+    # Transactions with a Fraud label known at the simulated time.
+    positives: int
+    champion: ModelResultOut | None
+    challenger: ModelResultOut | None
+    segments: list[SegmentFprOut]
+
+
+class ShadowOut(_Body):
+    """The shadow gate: what the Challenger model did scoring beside the Champion."""
+
+    passed: bool
+    failures: list[str]
+    scored: int
+    errors: int
+    # Simulated days between its first and its latest shadow score.
+    days: float
+    high: int
+    # Its High Risk band Transactions a simulated day, to compare with the Alert budget.
+    alerts_per_day: float | None
+    alert_budget_per_day: int
+    p95_latency_ms: float | None
+
+
+class GatesOut(_Body):
+    version: str
+    champion_version: str
+    passed: bool
+    backtest: BacktestOut
+    shadow: ShadowOut
+
+
+class GatesRefused(_Body):
+    """A Promotion refused: why, and the gates it was checked against, if they were run."""
+
+    message: str
+    gates: GatesOut | None = None
+
+
+class PromotionOut(_Body):
+    """A Promotion or a rollback of the Champion model."""
+
+    promotion_id: int
+    action: Literal["promote", "rollback"]
+    from_version: str
+    to_version: str
+    actor_name: str
+    occurred_at: AwareDatetime
+    # The gate results a Promotion passed; empty for a rollback.
+    gates: dict[str, Any]
+
+
+class ModelVersionOut(_Body):
+    version: str
+    # champion and/or challenger.
+    roles: list[Literal["champion", "challenger"]]
+    # When the training set was cut and what started the run; null for the first Champion model.
+    trained_cutoff: AwareDatetime | None
+    trigger: str | None
+
+
+class ModelList(_Body):
+    champion: str | None
+    challenger: str | None
+    models: list[ModelVersionOut]
+    # The latest Promotions and rollbacks, newest first.
+    history: list[PromotionOut]
+
+
+class ModelCardOut(_Body):
+    """The model card of one version: intended use, data, scores by segment and limitations."""
+
+    version: str
+    card: dict[str, Any]
+    # The same card as a Markdown page.
+    markdown: str

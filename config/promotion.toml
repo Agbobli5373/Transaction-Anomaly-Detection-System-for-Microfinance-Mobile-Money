@@ -1,0 +1,29 @@
+# The gates a Challenger model passes before it may be promoted to Champion (ADR 0012), checked
+# by the API when an Admin asks for Promotion. The Alert budget and the Label maturity window come
+# from config/evaluation.toml.
+
+# Backtest gate: the Challenger and the Champion both score the most recent matured Transactions
+# from the model inputs the system stored, and are judged against the Fraud labels known at the
+# simulated time (never Ground truth, ADR 0007). The Challenger must match or beat the Champion
+# on PR-AUC and on precision at the Alert budget, and no segment's false positive rate at High
+# may rise by more than `max_segment_fpr_rise`, relatively.
+[backtest]
+# The matured window judged: this many days of Transactions, ending at the maturity cutoff.
+window_days = 14
+# Fewer known Fraud labels than this in the window and the models cannot be told apart: the
+# gate fails rather than pass on noise.
+min_positives = 10
+max_segment_fpr_rise = 0.20
+# A segment with fewer legitimate Transactions than this has a false positive rate that is only
+# noise, so it is reported but does not count.
+min_segment_negatives = 200
+
+# Shadow gate: what the Challenger did while scoring every Transaction beside the Champion.
+[shadow]
+# At least this many simulated days between its first and its latest shadow score.
+min_days = 7
+# Its simulated Alert volume (Transactions it scored High, a day) within this share of the Alert
+# budget, either way.
+volume_tolerance = 0.25
+# 95th percentile of the time it took to score one Transaction: the sync API's target.
+p95_latency_ms = 200
