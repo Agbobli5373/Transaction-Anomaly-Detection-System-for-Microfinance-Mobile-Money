@@ -166,7 +166,7 @@ def test_purge_deletes_what_is_older_than_each_tables_retention(stocked: sa.Engi
             alerts=10,
             sim_swaps=7,
             fraud_labels=15,
-            audit_log=99,
+            audit_log=400,
         ),
     )
 

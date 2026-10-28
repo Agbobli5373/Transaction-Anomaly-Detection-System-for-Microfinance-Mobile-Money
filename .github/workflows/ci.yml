@@ -150,8 +150,10 @@ jobs:
       # Throwaway credentials for this run only, in the .env compose reads; none is committed.
       - run: |
           generated=$(openssl rand -hex 16)
-          grep -v -E '^(POSTGRES_|PG)PASSWORD=' .env.example > .env
+          grep -v -E '^(POSTGRES_|PG|TXRISK_APP_DB_)PASSWORD=' .env.example > .env
           for key in POSTGRES_PASSWORD PGPASSWORD; do echo "$key=$generated" >> .env; done
+          # The application role gets its own value, not the owner's.
+          for key in TXRISK_APP_DB_PASSWORD; do echo "$key=$(openssl rand -hex 16)" >> .env; done
           for key in TXRISK_DEMO_SIGNIN_ANALYST TXRISK_DEMO_SIGNIN_SUPERVISOR TXRISK_DEMO_SIGNIN_ADMIN; do
             echo "$key=$(openssl rand -hex 16)"
           done > keycloak.env
@@ -170,6 +172,27 @@ jobs:
       - run: |
           issued=$(docker compose exec -T api txrisk api-key --name ci-smoke --scope models:read)
           curl --fail --silent --header "X-API-Key: $issued" http://127.0.0.1:8000/v1/models/active
+      # The API runs as the least-privilege txrisk_app role: the Alerts call above is on the audit
+      # log, which that role can read and append to but never update, delete or truncate.
+      - run: |
+          docker compose exec -T api python - <<'EOF'
+          import os
+          import sqlalchemy as sa
+          from txrisk.store import create_app_engine
+
+          engine = create_app_engine(os.environ["TXRISK_DATABASE_URL"])
+          with engine.connect() as c:
+              assert c.execute(sa.text("select current_user")).scalar_one() == "txrisk_app"
+              listed = "select count(*) from audit_log where action = 'alert.list'"
+              assert c.execute(sa.text(listed)).scalar_one() >= 1
+          for change in ("update audit_log set action = action", "delete from audit_log", "truncate audit_log"):
+              try:
+                  with engine.begin() as c:
+                      c.execute(sa.text(change))
+              except sa.exc.ProgrammingError:
+                  continue
+              raise SystemExit("the application role changed the audit log: " + change)
+          EOF
       # The worker is consuming once its topics exist and it has joined its consumer group.
       - run: |
           for _ in $(seq 30); do

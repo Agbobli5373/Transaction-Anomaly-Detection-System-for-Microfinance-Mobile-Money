@@ -12,6 +12,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import sqlalchemy as sa
 
 from txrisk.benchmark import run_paysim
 from txrisk.benchmark.paysim import SCORERS as PAYSIM_SCORERS
@@ -62,16 +63,19 @@ from txrisk.store import (
     StoredScoring,
     backup,
     check_restore,
+    create_app_engine,
     create_engine,
     latest_backup,
     load_backup_config,
     load_retention_config,
     migrate,
     pending_migrations,
+    provision_app_role,
     purge,
     restore,
     seed,
 )
+from txrisk.store.roles import APP_ROLE, PASSWORD_ENV, app_role_password
 
 PSEUDONYM_KEY_ENV = "TXRISK_PSEUDONYM_KEY"
 DATABASE_URL_ENV = "TXRISK_DATABASE_URL"
@@ -255,8 +259,22 @@ def _migrate(args: argparse.Namespace) -> int:
     url = _database_url(args)
     if url is None:
         return 2
-    applied = migrate(create_engine(url))
+    engine = create_engine(url)
+    applied = migrate(engine)
     print(f"applied {', '.join(applied)}" if applied else "schema already up to date")
+    # The API and workers connect as a role with only the rights they need (txrisk.store.roles);
+    # its password comes from the environment, never from a file in git.
+    password = app_role_password()
+    if password is None:
+        print(
+            f"warning: {PASSWORD_ENV} is not set, so the {APP_ROLE} database role was not "
+            "provisioned; the API and workers cannot connect as it",
+            file=sys.stderr,
+        )
+    else:
+        provision_app_role(engine, password)
+        print(f"provisioned the {APP_ROLE} database role")
+    engine.dispose()
     return 0
 
 
@@ -342,7 +360,8 @@ def _seed(args: argparse.Namespace) -> int:
 
 def _issue_api_key(args: argparse.Namespace) -> int:
     from txrisk.api.auth import SCOPES
-    from txrisk.store import api_keys
+    from txrisk.store import api_keys, audit
+    from txrisk.store.audit import Actor, AuditEntry
 
     url = _database_url(args)
     if url is None:
@@ -356,7 +375,8 @@ def _issue_api_key(args: argparse.Namespace) -> int:
         return 2
     # Real time, not event time: API keys expire in the real world (ADR 0005 covers scoring).
     now = datetime.now(UTC)
-    with create_engine(url).begin() as connection:
+    # Run inside the API container, this connects as the application role.
+    with create_app_engine(url).begin() as connection:
         issued = api_keys.issue(
             connection,
             name=args.name,
@@ -364,6 +384,22 @@ def _issue_api_key(args: argparse.Namespace) -> int:
             rate_limit_per_minute=args.rate_limit,
             created_by="txrisk api-key",
             now=now,
+        )
+        # An operator with database access issues keys too, so it is on the audit log as well.
+        audit.record(
+            connection,
+            AuditEntry(
+                occurred_at=now,
+                actor=Actor(type="operator", id="txrisk api-key", name="txrisk api-key"),
+                action="api_key.issue",
+                object_type="api_key",
+                object_id=issued.record.key_id,
+                detail={
+                    "name": args.name,
+                    "scopes": sorted(args.scope),
+                    "rate_limit_per_minute": args.rate_limit,
+                },
+            ),
         )
     print(
         f"issued API key {issued.record.key_id} for {args.name}; it is shown only once:",
@@ -444,6 +480,13 @@ def _purge(args: argparse.Namespace) -> int:
     url = _database_url(args)
     if url is None:
         return 2
+    if sa.make_url(url).username == APP_ROLE:
+        print(
+            f"error: purge deletes data, which {APP_ROLE} may not; run it as the owner "
+            "(compose runs it in the job service)",
+            file=sys.stderr,
+        )
+        return 2
     engine = create_engine(url)
     purged = purge(engine, SimulationClock(engine), load_retention_config(args.config))
     if purged is None:
@@ -466,7 +509,9 @@ def _scheduler(args: argparse.Namespace) -> int:
     if url is None:
         return 2
     config = load_scheduler_config(args.config)
-    engine = create_engine(url)
+    # The scheduler only reads the clock and records what it fired, so it runs as the application
+    # role; the jobs it launches run in the `job` container, as the owner.
+    engine = create_app_engine(url)
     with engine.connect() as connection:
         pending = pending_migrations(connection)
     if pending:
@@ -496,7 +541,7 @@ def _scheduler(args: argparse.Namespace) -> int:
 def _worker(args: argparse.Namespace) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     settings = WorkerSettings.from_env()
-    engine = create_engine(settings.database_url)
+    engine = create_app_engine(settings.database_url)
     with engine.connect() as connection:
         pending = pending_migrations(connection)
     if pending:

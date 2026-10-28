@@ -139,3 +139,20 @@ api_keys = sa.Table(
     sa.Column("revoked_at", _TIME),
     sa.Column("replaces", sa.Text),
 )
+
+# Append-only: the application's role may only select from it and insert into it.
+audit_log = sa.Table(
+    "audit_log",
+    metadata,
+    sa.Column("audit_id", sa.BigInteger, primary_key=True),
+    sa.Column("occurred_at", _TIME, nullable=False),
+    sa.Column("actor_type", sa.Text, nullable=False),
+    sa.Column("actor_id", sa.Text, nullable=False),
+    sa.Column("actor_name", sa.Text, nullable=False),
+    sa.Column("actor_roles", ARRAY(sa.Text), nullable=False),
+    sa.Column("action", sa.Text, nullable=False),
+    sa.Column("object_type", sa.Text),
+    sa.Column("object_id", sa.Text),
+    sa.Column("outcome", sa.Text, nullable=False),
+    sa.Column("detail", JSONB, nullable=False),
+)

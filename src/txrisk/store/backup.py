@@ -113,7 +113,7 @@ def restore(backup_file: Path, database_url: str) -> None:
         engine.dispose()
     if tables:
         raise BackupError(f"refusing to restore into a database that already has tables: {tables}")
-    _run("pg_restore", url, "--no-owner", "--exit-on-error", str(backup_file))
+    _run("pg_restore", url, "--no-owner", "--no-acl", "--exit-on-error", str(backup_file))
 
 
 @dataclass(frozen=True)

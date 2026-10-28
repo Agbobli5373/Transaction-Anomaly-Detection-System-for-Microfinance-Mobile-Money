@@ -8,5 +8,6 @@ risk_assessments = 365
 alerts = 365
 sim_swaps = 365
 fraud_labels = 365
-# Configuration only until the audit log exists (#15); `purge` does not touch it yet.
+# Days of real time, not event time: audit entries are stamped with the wall clock. Purged only
+# through audit_log_purge (migration 0004); the database refuses anything under 365.
 audit_log = 2555

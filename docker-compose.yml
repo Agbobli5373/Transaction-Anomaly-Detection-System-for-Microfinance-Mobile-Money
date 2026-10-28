@@ -11,21 +11,35 @@
 # Set TXRISK_MODEL_BUNDLE=/models/<version> in .env to score with a bundle from `make train`;
 # without it the rules alone score.
 
+x-txrisk-environment: &txrisk-environment
+  # Tokens name the realm as browsers reach it; the API fetches its signing keys in-network.
+  TXRISK_OIDC_ISSUER: http://localhost:8080/realms/txrisk
+  TXRISK_OIDC_JWKS_URL: http://keycloak:8080/realms/txrisk/protocol/openid-connect/certs
+  # The workbench, and the dev-only command-line sign-in; production allows the workbench alone.
+  TXRISK_OIDC_ALLOWED_CLIENTS: txrisk-workbench,txrisk-demo-cli
+  TXRISK_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+  # The recent-history cache (ADR 0006). Every service that stores Transactions must use it.
+  TXRISK_REDIS_URL: redis://redis:6379/0
+
+# The migration job and the one-off jobs (seed, backup) connect as the database owner, which can
+# change anything. No credential is in a URL: libpq reads the owner's password from PGPASSWORD in
+# .env.
 x-txrisk: &txrisk
   build: .
   image: txrisk:dev
   env_file: .env
   environment:
-    # No credential in the URL: libpq reads the database password from PGPASSWORD in .env.
+    <<: *txrisk-environment
     TXRISK_DATABASE_URL: postgresql://txrisk@postgres:5432/txrisk
-    # Tokens name the realm as browsers reach it; the API fetches its signing keys in-network.
-    TXRISK_OIDC_ISSUER: http://localhost:8080/realms/txrisk
-    TXRISK_OIDC_JWKS_URL: http://keycloak:8080/realms/txrisk/protocol/openid-connect/certs
-    # The workbench, and the dev-only command-line sign-in; production allows the workbench alone.
-    TXRISK_OIDC_ALLOWED_CLIENTS: txrisk-workbench,txrisk-demo-cli
-    TXRISK_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
-    # The recent-history cache (ADR 0006). Every service that stores Transactions must use it.
-    TXRISK_REDIS_URL: redis://redis:6379/0
+
+# The API and the workers connect as txrisk_app, a role that can only select from and insert into
+# the audit log (src/txrisk/store/roles.py). `txrisk migrate` creates it, with the password in
+# .env under TXRISK_APP_DB_PASSWORD, which the application reads itself.
+x-txrisk-app: &txrisk-app
+  <<: *txrisk
+  environment:
+    <<: *txrisk-environment
+    TXRISK_DATABASE_URL: postgresql://txrisk_app@postgres:5432/txrisk
 
 services:
   postgres:
@@ -114,7 +128,8 @@ services:
       timeout: 5s
       retries: 30
 
-  # Applies the schema migrations, then exits. Nothing else changes the schema.
+  # Applies the schema migrations and provisions the txrisk_app role, then exits. Nothing else
+  # changes the schema.
   migrate:
     <<: *txrisk
     command: ["txrisk", "migrate"]
@@ -183,7 +198,7 @@ services:
         condition: service_completed_successfully
 
   api:
-    <<: *txrisk
+    <<: *txrisk-app
     command: ["txrisk", "serve", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "8000:8000"
@@ -211,7 +226,7 @@ services:
   # Scores transaction.created into score.produced. A worker that stops for any reason leaves
   # its uncommitted batch to be redelivered, so it is simply restarted.
   worker:
-    <<: *txrisk
+    <<: *txrisk-app
     command: ["txrisk", "worker"]
     restart: unless-stopped
     volumes:
