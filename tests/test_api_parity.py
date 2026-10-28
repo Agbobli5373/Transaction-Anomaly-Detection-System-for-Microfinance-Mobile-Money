@@ -8,7 +8,7 @@ from typing import Any
 
 import pandas as pd
 import pytest
-from api_helpers import ROOT, as_json, body, settings
+from api_helpers import ROOT, as_json, body, issue_key, settings, with_key
 from confluent_kafka import Consumer
 from conftest import create_database
 from fastapi.testclient import TestClient
@@ -79,7 +79,8 @@ def whole_market(data: Path, postgres: str, migrated_template: str) -> str:
 
 @pytest.fixture(scope="module")
 def client(whole_market: str, bundle_folder: Path) -> Iterator[TestClient]:
-    with TestClient(create_app(settings(whole_market, bundle_folder))) as client:
+    app = create_app(settings(whole_market, bundle_folder))
+    with TestClient(app, headers=with_key(issue_key(whole_market))) as client:
         yield client
 
 
@@ -166,7 +167,8 @@ def _scored_by_the_api(
             records.add_sim_swap(
                 connection, row.wallet_id, row.occurred_at.floor("us").to_pydatetime()
             )
-    with TestClient(create_app(settings(url, bundle_folder))) as client:
+    app = create_app(settings(url, bundle_folder))
+    with TestClient(app, headers=with_key(issue_key(url))) as client:
         return [client.post("/v1/score", json=body(t)).json() for t in _transactions(market, ids)]
 
 

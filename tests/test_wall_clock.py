@@ -3,8 +3,7 @@ simulation clock. This scans `src/txrisk` for anything that reads, or waits on, 
 fails on any use that is not in `OPERATIONAL`.
 
 `OPERATIONAL` is the documentation: each entry is a use that is about running the system, not about
-what the data means, with the reason. Adding to it is a decision a reviewer should see. When #15
-adds API key expiry, rate limiting and the audit log's timestamps, their uses belong here.
+what the data means, with the reason. Adding to it is a decision a reviewer should see. The audit log's timestamps (#15) will belong here too.
 """
 
 import ast
@@ -67,6 +66,16 @@ OPERATIONAL: dict[tuple[str, str], str] = {
         "never their event times"
     ),
     ("events/replay.py", "time.sleep"): "waits between published events to keep the replay's pace",
+    ("api/app.py", "datetime.datetime.now"): (
+        "the wall clock handed to API key expiry and per-key rate limits: keys expire and "
+        "requests are limited in real time, while scoring runs on the Transaction's event time"
+    ),
+    ("api/auth.py", "time.monotonic"): (
+        "when the Keycloak signing keys were last fetched, to decide when to refresh them"
+    ),
+    ("cli.py", "datetime.datetime.now"): (
+        "stamps a newly issued API key's creation and expiry in real time"
+    ),
     ("store/database.py", "now()"): (
         "schema_migrations.applied_at records when a migration ran; not read by any logic"
     ),

@@ -22,6 +22,7 @@ from txrisk.store import (
     restore,
     seed,
 )
+from txrisk.store.database import migrations
 
 NOON = datetime(2026, 3, 1, 12, tzinfo=UTC)
 BACKUP_CONFIG = DEFAULT_CONFIG.parent / "backup.toml"
@@ -102,7 +103,7 @@ def test_a_backup_restores_into_an_empty_database_with_the_same_contents(
     check = check_restore(create_engine(seeded), create_engine(empty_database))
     assert check.ok
     assert check.restored_counts["transactions"] > 0
-    assert check.restored_migration == "0001_initial"
+    assert check.restored_migration == list(migrations())[-1]
 
 
 def test_restoring_refuses_a_database_that_already_has_tables(
@@ -145,7 +146,7 @@ def test_the_cli_backs_up_and_restores_the_latest_backup_and_compares_it(
     )
 
     assert exit_code == 0
-    assert "latest migration: 0001_initial" in capsys.readouterr().out
+    assert f"latest migration: {list(migrations())[-1]}" in capsys.readouterr().out
 
 
 def test_the_cli_restore_fails_when_the_restore_differs_from_the_source(
