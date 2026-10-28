@@ -1031,6 +1031,27 @@
         "title": "ModelCardOut",
         "type": "object"
       },
+      "ModelEvaluationOut": {
+        "additionalProperties": false,
+        "description": "The offline evaluation report saved with one version (`txrisk evaluate --scorer bundle`):\nranking scores, the PR and ROC curves, recall by Fraud scenario and by segment, and recall\nagainst Ground truth and against discovered Fraud labels.",
+        "properties": {
+          "evaluation": {
+            "additionalProperties": true,
+            "title": "Evaluation",
+            "type": "object"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "evaluation"
+        ],
+        "title": "ModelEvaluationOut",
+        "type": "object"
+      },
       "ModelList": {
         "additionalProperties": false,
         "properties": {
@@ -3453,6 +3474,67 @@
           }
         ],
         "summary": "Get Model Card",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/v1/models/{version}/evaluation": {
+      "get": {
+        "description": "The offline evaluation of a version: ranking scores, PR and ROC curves, recall by\nFraud scenario and segment, and recall against Ground truth and discovered Fraud labels.\nIt is a report `txrisk evaluate --scorer bundle` saved in the bundle's folder: the API\nonly serves it, and never sees Ground truth itself (ADR 0007). For every role, or the\n`models:read` scope.",
+        "operationId": "get_model_evaluation_v1_models__version__evaluation_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "pattern": "^\\w[\\w.-]{0,127}$",
+              "title": "Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelEvaluationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles or scopes do not permit this"
+          },
+          "404": {
+            "description": "No such model version, or no evaluation report saved with it"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Get Model Evaluation",
         "tags": [
           "models"
         ]

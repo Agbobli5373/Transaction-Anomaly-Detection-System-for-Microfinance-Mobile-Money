@@ -10,6 +10,7 @@ A Promotion moves the `champion_model` pointer in Postgres; the workers and the 
 within `challenger_refresh_seconds`, with no restart (see `txrisk.store.champion`).
 """
 
+import json
 import logging
 from collections.abc import Callable
 from datetime import datetime
@@ -26,6 +27,7 @@ from txrisk.api.schemas import (
     GatesOut,
     GatesRefused,
     ModelCardOut,
+    ModelEvaluationOut,
     ModelList,
     ModelVersionOut,
     PromotionOut,
@@ -40,6 +42,9 @@ from txrisk.store import promotions as store
 from txrisk.store.champion import champion_pointer
 
 log = logging.getLogger(__name__)
+
+# Where `txrisk evaluate --scorer bundle` saves a version's report, inside its bundle folder.
+BUNDLE_EVALUATION_FOLDER = "evaluation"
 
 _DENIED: dict[int | str, dict[str, Any]] = {
     401: {"description": "No credential, or an invalid, expired or revoked one"},
@@ -192,6 +197,35 @@ def add_model_routes(
         except FileNotFoundError as e:
             raise HTTPException(404, "no such model version") from e
         return ModelCardOut(version=version, card=card, markdown=render_markdown(card))
+
+    @v1.get(
+        "/models/{version}/evaluation",
+        response_model=ModelEvaluationOut,
+        tags=["models"],
+        dependencies=[Depends(require(READ_MODELS))],
+        responses={
+            **_DENIED,
+            404: {"description": "No such model version, or no evaluation report saved with it"},
+        },
+    )
+    def get_model_evaluation(version: Version) -> ModelEvaluationOut:
+        """The offline evaluation of a version: ranking scores, PR and ROC curves, recall by
+        Fraud scenario and segment, and recall against Ground truth and discovered Fraud labels.
+        It is a report `txrisk evaluate --scorer bundle` saved in the bundle's folder: the API
+        only serves it, and never sees Ground truth itself (ADR 0007). For every role, or the
+        `models:read` scope."""
+        folder = folder_of(version)
+        if folder is None:
+            raise HTTPException(404, "no such model version")
+        try:
+            report = json.loads(
+                (folder / BUNDLE_EVALUATION_FOLDER / "metrics.json").read_text(encoding="utf-8")
+            )
+        except FileNotFoundError as e:
+            raise HTTPException(
+                404, "no evaluation report is saved with this version (txrisk evaluate)"
+            ) from e
+        return ModelEvaluationOut(version=version, evaluation=report)
 
     @v1.get(
         "/models/{version}/gates",

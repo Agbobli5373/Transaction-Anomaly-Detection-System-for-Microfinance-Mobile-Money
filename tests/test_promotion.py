@@ -4,6 +4,7 @@ call puts the previous Champion model back; every action is audited. Against rea
 bundles whose scores the test scripts."""
 
 import dataclasses
+import json
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -658,6 +659,34 @@ def test_every_role_and_a_service_with_the_scope_can_read_a_models_card(ops: Ope
         assert "## Limitations" in card["markdown"]
     champion = ops.client.get("/v1/models/champion-1/card", headers=ops.analyst)
     assert champion.status_code == 200
+
+
+def test_a_versions_saved_evaluation_report_is_served_to_every_role_and_a_scoped_service(
+    ops: Operations,
+):
+    ready(ops)
+    report = {"scorer": "bundle", "recall_by_scenario": {}, "curves": {"pr": {"x": [0], "y": [1]}}}
+    saved = ops.models / "challenger-1" / "evaluation"
+    saved.mkdir()
+    (saved / "metrics.json").write_text(json.dumps(report), encoding="utf-8")
+    reader = service(issue_key(ops.database, "models:read"))
+
+    for who in (ops.analyst, ops.admin, reader):
+        found = ops.client.get("/v1/models/challenger-1/evaluation", headers=who)
+        assert found.status_code == 200, found.text
+        assert found.json() == {"version": "challenger-1", "evaluation": report}
+
+
+def test_a_version_without_a_saved_evaluation_report_or_unknown_is_not_found(ops: Operations):
+    ready(ops)
+
+    unreported = ops.client.get("/v1/models/challenger-1/evaluation", headers=ops.analyst)
+    unknown = ops.client.get("/v1/models/risk-nothing/evaluation", headers=ops.analyst)
+    anonymous = ops.client.get("/v1/models/challenger-1/evaluation")
+
+    assert unreported.status_code == 404
+    assert unknown.status_code == 404
+    assert anonymous.status_code == 401
 
 
 def test_the_card_of_an_unknown_version_is_not_found_and_a_path_is_not_a_version(

@@ -10,7 +10,7 @@ from txrisk.evaluation.thresholds import band, budget_thresholds
 from txrisk.features import FeatureConfig, feature_table
 from txrisk.models import model_inputs
 from txrisk.models.anomaly import AnomalyModel
-from txrisk.models.bundle import train_bundle
+from txrisk.models.bundle import ModelBundle, train_bundle
 from txrisk.models.supervised import train_supervised
 from txrisk.scoring import RulesConfig, rule_scores_table, score_table
 
@@ -181,6 +181,28 @@ def stacked_scores(
         seed=STACKED_SEED,
         rule_scores=rule_scores,
     )
+    return bundle_scores(
+        bundle,
+        transactions,
+        feature_rows,
+        rule_scores,
+        evaluation=evaluation,
+        period_start=period_start,
+    )
+
+
+def bundle_scores(
+    bundle: ModelBundle,
+    transactions: pd.DataFrame,
+    feature_rows: pd.DataFrame,
+    rule_scores: pd.DataFrame,
+    *,
+    evaluation: EvaluationConfig,
+    period_start: date,
+) -> pd.DataFrame:
+    """The Risk scores a saved model bundle gives the evaluation days, banded at its own
+    thresholds, with each component and the stacker's probability before the Critical rule
+    floor (for the reliability check)."""
     split = split_of(transactions["occurred_at"], period_start, evaluation)
     evaluated = transactions[(split == Split.EVALUATION).fillna(False).to_numpy(dtype=bool)]
     inputs = model_inputs(evaluated, feature_rows)
