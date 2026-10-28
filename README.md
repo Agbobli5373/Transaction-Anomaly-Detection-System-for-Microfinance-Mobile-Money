@@ -31,6 +31,8 @@ curl localhost:8000/v1/ready
 
 Each Transaction is scored with the clock at its own `occurred_at` (ADR 0005), against the history stored strictly before it, so the API gives exactly the offline scores. Set `TXRISK_MODEL_BUNDLE=/models/<version>` in `.env` to score with a bundle from `make train` (`./models` is mounted at `/models`); without one the rules alone score. Schema changes are plain SQL files in `src/txrisk/store/migrations/`, applied only by `txrisk migrate`, which compose runs as its own job before the API starts. Ground truth, Fraud discoveries and Benign anomalies are never loaded into Postgres (ADR 0007).
 
+`make backup` takes a Postgres backup into the compose `backups` volume (a one-off job for a scheduler or host cron, pruned to the retention count in `config/backup.toml`); CI restores one into a fresh database and checks it against its source. Restore procedure: `docs/runbooks/restore.md`.
+
 Outside Docker, `txrisk migrate`, `txrisk seed` and `txrisk serve` read the database from `TXRISK_DATABASE_URL`.
 
 ## CI/CD
@@ -43,6 +45,7 @@ Outside Docker, `txrisk migrate`, `txrisk seed` and `txrisk serve` read the data
 - `trivy`: Trivy scans the built image, and the Dockerfile and compose file, and fails on high and critical findings.
 - `contracts`: a breaking change to the OpenAPI spec (`oasdiff breaking`) or to any `schemas/*.json` event schema, compared with the base commit, fails the build. `contracts/openapi.json` is the committed snapshot of `/v1/openapi.json`; after an API change, regenerate it with `make openapi`. A test fails while the snapshot is stale.
 - `compose`: the compose stack starts and reports ready.
+- `restore`: a backup restores into a fresh database and matches its source.
 - `publish`: on pushes to main, once the jobs above pass, pushes `ghcr.io/<owner>/<repo>:<commit sha>` using `GITHUB_TOKEN` (`packages: write`).
 
 ### Branch protection (repo owner)
@@ -50,7 +53,7 @@ Outside Docker, `txrisk migrate`, `txrisk seed` and `txrisk serve` read the data
 Branch protection cannot be set from CI or by the agents that built it. In the repository, go to Settings > Branches > Add branch ruleset (or classic rule) for `main` and turn on:
 
 - Require a pull request before merging.
-- Require status checks to pass before merging, and require branches to be up to date. Add the checks `check`, `smoke`, `audit`, `trivy`, `contracts` and `compose`.
+- Require status checks to pass before merging, and require branches to be up to date. Add the checks `check`, `smoke`, `audit`, `trivy`, `contracts`, `compose` and `restore`.
 - Block force pushes and deletion of `main`.
 
 `publish` runs only on main, so it is not a required check.

@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed openapi
+.PHONY: install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed backup openapi
 
 install:
 	uv sync
@@ -65,3 +65,8 @@ seed:
 # Regenerates the committed OpenAPI snapshot CI checks for breaking changes.
 openapi:
 	uv run python -m txrisk.contract_check openapi > contracts/openapi.json
+
+# One Postgres backup into the compose `backups` volume, pruned to config/backup.toml's count.
+# Restoring one: docs/runbooks/restore.md
+backup:
+	docker compose run --rm backup

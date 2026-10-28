@@ -16,3 +16,4 @@ reports/
 mlruns/
 mlflow.db
 .env
+.coverage

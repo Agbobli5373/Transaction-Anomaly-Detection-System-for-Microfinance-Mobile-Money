@@ -9,8 +9,8 @@
   "fraud": 974,
   "fraud_discovered": 302,
   "ranking": {
-    "roc_auc": 0.88358504904512,
-    "pr_auc": 0.4510605782166335
+    "roc_auc": 0.8844472998386663,
+    "pr_auc": 0.4748401271085196
   },
   "at_high": {
     "flagged": 308,
@@ -20,15 +20,15 @@
     "per_day": 10.266666666666667
   },
   "at_medium_or_higher": {
-    "flagged": 18789,
-    "precision": 0.035393049124487735,
+    "flagged": 17125,
+    "precision": 0.038832116788321165,
     "recall": 0.6827515400410678,
-    "false_positive_rate": 0.034026032054760055
+    "false_positive_rate": 0.030902035291400936
   },
   "at_alert_budget": {
     "budget_per_day": 100,
     "alerts": 3000,
-    "precision": 0.197
+    "precision": 0.19866666666666666
   },
   "recall_by_scenario": {
     "account_takeover_drain": {

@@ -1,8 +1,12 @@
 """Each rule fires just inside its threshold and not just outside it."""
 
-from scoring_helpers import DAY, HOUR, MINUTE, NOW, SUBJECT, Market, routine, tx
+from datetime import timedelta
 
-from txrisk.features import Transaction
+from scoring_helpers import DAY, HOUR, MINUTE, NOW, RULES_CONFIG, SUBJECT, Market, routine, tx
+
+from txrisk.features import SubjectWalletFeatures, Transaction, TransactionFeatures
+from txrisk.scoring import load_rules_config
+from txrisk.scoring.rules import rule_hits
 
 
 def fires(code: str, market: Market, transaction: Transaction) -> bool:
@@ -156,6 +160,34 @@ def test_first_time_large_transfer_needs_a_new_counterparty():
     assert not fires("FIRST_TIME_LARGE_TRANSFER", market, tx(amount=200.0))
 
 
+def _new_wallet(age: timedelta) -> Market:
+    """The usual routine, in a Wallet registered `age` before now."""
+    return Market(registered={SUBJECT: NOW - age}).record(*routine())
+
+
+def test_first_time_large_transfer_waits_until_the_wallet_is_30_days_old():
+    large = tx(amount=200.0, counterparty="w-new")
+
+    assert not fires("FIRST_TIME_LARGE_TRANSFER", _new_wallet(30 * DAY - MINUTE), large)
+    assert fires("FIRST_TIME_LARGE_TRANSFER", _new_wallet(30 * DAY), large)
+
+
+def test_the_usual_amount_rules_still_fire_when_the_wallets_age_is_unknown():
+    # A dataset without registration dates (PaySim) leaves the age empty.
+    subject = SubjectWalletFeatures(
+        history_count=6,
+        wallet_age_days=None,  # type: ignore[arg-type]
+        amount_to_median_30d=8.0,
+        new_counterparty=True,
+    )
+    features = TransactionFeatures(subject_wallet=subject)
+    rules = load_rules_config(RULES_CONFIG).rules
+
+    codes = [h.code for h in rule_hits(tx(amount=400.0, counterparty="w-new"), features, rules)]
+
+    assert {"FIRST_TIME_LARGE_TRANSFER", "AMOUNT_VS_MEDIAN"} <= set(codes)
+
+
 # AMOUNT_VS_MEDIAN: an outgoing amount of more than 5x the 30-day median outgoing amount.
 
 
@@ -175,6 +207,13 @@ def test_amount_vs_median_ignores_money_coming_in():
     market = Market().record(*routine())
 
     assert not fires("AMOUNT_VS_MEDIAN", market, tx(transaction_type="cash_in", amount=900.0))
+
+
+def test_amount_vs_median_waits_until_the_wallet_is_30_days_old():
+    large = tx(transaction_type="payment", amount=300.0)
+
+    assert not fires("AMOUNT_VS_MEDIAN", _new_wallet(30 * DAY - MINUTE), large)
+    assert fires("AMOUNT_VS_MEDIAN", _new_wallet(30 * DAY), large)
 
 
 # NEAR_KYC_LIMIT: within 5% below the KYC tier's single-transaction limit.

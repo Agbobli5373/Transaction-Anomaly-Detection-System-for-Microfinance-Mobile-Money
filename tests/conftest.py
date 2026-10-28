@@ -46,7 +46,7 @@ def postgres() -> Iterator[str]:
         if os.environ.get("CI"):
             raise
         pytest.skip("Docker is not running")
-    with PostgresContainer("postgres:16-alpine", driver="psycopg") as container:
+    with PostgresContainer("postgres:17-alpine", driver="psycopg") as container:
         yield container.get_connection_url()
 
 

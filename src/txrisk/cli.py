@@ -23,7 +23,18 @@ from txrisk.generator import generate, load_config, write_dataset
 from txrisk.models.bundle import train_bundle
 from txrisk.models.registry import MODEL_NAME, log_bundle
 from txrisk.scoring import RULES_ONLY, load_rules_config
-from txrisk.store import create_engine, migrate, pending_migrations, seed
+from txrisk.store import (
+    BackupError,
+    backup,
+    check_restore,
+    create_engine,
+    latest_backup,
+    load_backup_config,
+    migrate,
+    pending_migrations,
+    restore,
+    seed,
+)
 
 PSEUDONYM_KEY_ENV = "TXRISK_PSEUDONYM_KEY"
 DATABASE_URL_ENV = "TXRISK_DATABASE_URL"
@@ -211,6 +222,50 @@ def _migrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _backup(args: argparse.Namespace) -> int:
+    url = _database_url(args)
+    if url is None:
+        return 2
+    config = load_backup_config(args.config)
+    keep = config.keep if args.keep is None else args.keep
+    try:
+        written = backup(url, args.out or config.directory, keep=keep)
+    except (BackupError, ValueError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    print(f"wrote {written}")
+    return 0
+
+
+def _restore(args: argparse.Namespace) -> int:
+    url = _database_url(args)
+    if url is None:
+        return 2
+    source = args.backup
+    if source.is_dir():
+        found = latest_backup(source)
+        if found is None:
+            print(f"error: no backups in {source}", file=sys.stderr)
+            return 1
+        source = found
+    try:
+        restore(source, url)
+    except BackupError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    print(f"restored {source}")
+    if args.compare_with:
+        check = check_restore(create_engine(args.compare_with), create_engine(url))
+        print(f"latest migration: {check.restored_migration}; rows: {check.restored_counts}")
+        if not check.ok:
+            print(
+                f"error: the restore differs from the source: {check.source_counts}",
+                file=sys.stderr,
+            )
+            return 1
+    return 0
+
+
 def _seed(args: argparse.Namespace) -> int:
     url = _database_url(args)
     if url is None:
@@ -323,6 +378,27 @@ def main(argv: list[str] | None = None) -> int:
     mig = commands.add_parser("migrate", help="apply pending Postgres schema migrations")
     mig.add_argument("--database-url", help=f"default: ${DATABASE_URL_ENV}")
     mig.set_defaults(handler=_migrate)
+
+    bk = commands.add_parser(
+        "backup", help="dump Postgres to a timestamped file and prune old backups"
+    )
+    bk.add_argument(
+        "--database-url", help=f"default: ${DATABASE_URL_ENV}; the password: $PGPASSWORD"
+    )
+    bk.add_argument("--config", type=Path, default=Path("config/backup.toml"))
+    bk.add_argument("--out", type=Path, help="the backup folder (default: from the config)")
+    bk.add_argument("--keep", type=int, help="backups to keep (default: from the config)")
+    bk.set_defaults(handler=_backup)
+
+    rs = commands.add_parser("restore", help="load a backup into an empty Postgres database")
+    rs.add_argument("backup", type=Path, help="a backup file, or a folder to restore the latest of")
+    rs.add_argument("--database-url", help=f"the empty target; default: ${DATABASE_URL_ENV}")
+    rs.add_argument(
+        "--compare-with",
+        metavar="URL",
+        help="a database to compare the restore with: row counts per table, latest migration",
+    )
+    rs.set_defaults(handler=_restore)
 
     sd = commands.add_parser(
         "seed", help="load a dataset's parties, and its history before a day, into Postgres"
