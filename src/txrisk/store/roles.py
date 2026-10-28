@@ -22,8 +22,8 @@ APP_ROLE = "txrisk_app"
 PASSWORD_ENV = "TXRISK_APP_DB_PASSWORD"
 
 # Every table's privileges for the application role. A table missing here makes provisioning
-# fail, so a new migration cannot leave the application with rights nobody decided on. Add DELETE
-# only for a table the application must purge (the retention job will).
+# fail, so a new migration cannot leave the application with rights nobody decided on. The
+# application never deletes: the retention purge runs as the owner, as a job (see `txrisk purge`).
 GRANTS: dict[str, tuple[str, ...]] = {
     "wallets": ("SELECT", "INSERT"),
     "agents": ("SELECT", "INSERT"),
@@ -37,7 +37,15 @@ GRANTS: dict[str, tuple[str, ...]] = {
     "api_keys": ("SELECT", "INSERT", "UPDATE"),
     # The application checks that migrations are applied; only the migration job writes them.
     "schema_migrations": ("SELECT",),
-    # Append-only: no UPDATE, DELETE, TRUNCATE.
+    # Fraud labels are inserted when a discovery is consumed, and never changed (the purge deletes
+    # them as the owner).
+    "fraud_labels": ("SELECT", "INSERT"),
+    # One row that workers and the API move forward with a conditional UPDATE.
+    "simulation_clock": ("SELECT", "UPDATE"),
+    # The scheduler records what it fired: it inserts a row per job, then updates it.
+    "scheduled_jobs": ("SELECT", "INSERT", "UPDATE"),
+    # Append-only: no UPDATE, DELETE, TRUNCATE. Aged entries leave only through audit_log_purge,
+    # which the owner runs (see migration 0004).
     "audit_log": ("SELECT", "INSERT"),
 }
 

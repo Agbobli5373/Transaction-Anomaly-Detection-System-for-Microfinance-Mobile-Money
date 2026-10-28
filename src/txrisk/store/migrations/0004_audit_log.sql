@@ -1,7 +1,7 @@
 -- The audit log: who did what to which object, and how it ended. Append-only: the application's
 -- database role (txrisk_app, see txrisk.store.roles) may only SELECT and INSERT, and the triggers
--- below refuse UPDATE, DELETE and TRUNCATE for everyone, the owner included, until the owner
--- deliberately disables them. An entry never holds a secret: no token, API key or MSISDN.
+-- below refuse UPDATE, DELETE and TRUNCATE for everyone, the owner included (DELETE only through the
+-- retention purge's controlled path), until the owner deliberately disables them. An entry never holds a secret: no token, API key or MSISDN.
 
 CREATE TABLE audit_log (
     audit_id    bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -39,9 +39,21 @@ CREATE INDEX audit_log_by_action ON audit_log (action, audit_id);
 -- Nobody but the owner has any right to it; the owner grants the application SELECT and INSERT.
 REVOKE ALL ON audit_log FROM PUBLIC;
 
+-- UPDATE and TRUNCATE are refused outright. DELETE is refused too, with one controlled path: the
+-- retention purge (audit_log_purge, below), which only the owner may run. The trigger lets a DELETE
+-- through only when the purge has flagged its own transaction AND the row is older than the floor
+-- (a year), so even a forged flag cannot remove a recent entry, and no DELETE of any age is
+-- possible without the flag. The application role has no DELETE privilege at all.
 CREATE FUNCTION audit_log_refuse_change() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
+    IF TG_OP = 'DELETE'
+        AND current_setting('txrisk.audit_purge', true) = 'on'
+        -- The floor is wall-clock time, like the entries' own timestamps: operational, not business
+        -- logic (see tests/test_wall_clock.py).
+        AND OLD.occurred_at < clock_timestamp() - interval '365 days' THEN
+        RETURN OLD;
+    END IF;
     RAISE EXCEPTION 'audit_log is append-only: % refused', TG_OP
         USING ERRCODE = 'insufficient_privilege';
 END;
@@ -54,3 +66,25 @@ CREATE TRIGGER audit_log_no_row_change
 CREATE TRIGGER audit_log_no_truncate
     BEFORE TRUNCATE ON audit_log
     FOR EACH STATEMENT EXECUTE FUNCTION audit_log_refuse_change();
+
+-- The only way to delete audit entries: those older than `retention` (measured on the wall clock,
+-- the clock the entries are stamped with), and never with a retention under a year. Returns how
+-- many it deleted. Run by the owner role (the purge job); the application role cannot execute it.
+CREATE FUNCTION audit_log_purge(retention interval) RETURNS bigint
+LANGUAGE plpgsql AS $$
+DECLARE
+    removed bigint;
+BEGIN
+    IF retention < interval '365 days' THEN
+        RAISE EXCEPTION 'the audit log is kept at least 365 days, not %', retention
+            USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    PERFORM set_config('txrisk.audit_purge', 'on', true);
+    DELETE FROM audit_log WHERE occurred_at < clock_timestamp() - retention;
+    GET DIAGNOSTICS removed = ROW_COUNT;
+    PERFORM set_config('txrisk.audit_purge', 'off', true);
+    RETURN removed;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION audit_log_purge(interval) FROM PUBLIC;

@@ -363,4 +363,5 @@ def test_ensuring_topics_twice_keeps_what_is_there(stream: Stream):
         stream.topics.fraud_discoveries: 1,
         Topics.dead_letter(stream.topics.transactions): 1,
         Topics.dead_letter(stream.topics.sim_swaps): 1,
+        Topics.dead_letter(stream.topics.fraud_discoveries): 1,
     }

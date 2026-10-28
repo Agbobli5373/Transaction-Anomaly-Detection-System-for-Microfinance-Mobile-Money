@@ -17,14 +17,18 @@ from fastapi.testclient import TestClient
 from httpx import Response
 from idp_helpers import LocalIdentityProvider
 from scoring_helpers import NOW, REGISTERED, SUBJECT, tx
+from test_clock_labels_retention import retention
+from test_wall_clock import OPERATIONAL, SOURCE, clock_reads
 
 from txrisk.api import create_app
 from txrisk.cli import main
 from txrisk.store import (
     APP_ROLE,
+    SimulationClock,
     create_app_engine,
     create_engine,
     provision_app_role,
+    purge,
     records,
 )
 from txrisk.store.audit import Actor, AuditEntry, record
@@ -180,6 +184,99 @@ def test_the_operator_command_that_issues_a_key_is_audited(
     )
     assert row["detail"]["scopes"] == ["alerts:read"]
     assert key not in json.dumps(row, default=str)
+
+
+# --- retention: the one way an entry can leave -------------------------------------------------
+
+
+def aged_entries(engine: sa.Engine) -> None:
+    """Entries 1, 400 and 3000 days old, on the wall clock the log is stamped with."""
+    now = datetime.now(UTC)
+    with engine.begin() as connection:
+        for days in (1, 400, 3000):
+            record(
+                connection,
+                entry(occurred_at=now - timedelta(days=days), object_type="t", object_id=str(days)),
+            )
+
+
+def remaining(engine: sa.Engine) -> list[str]:
+    with engine.connect() as connection:
+        rows = connection.execute(sa.text("SELECT object_id FROM audit_log ORDER BY occurred_at"))
+        return [row[0] for row in rows]
+
+
+def test_old_entries_leave_only_through_the_purge_and_only_past_the_period(owner_engine):
+    aged_entries(owner_engine)
+
+    # No DELETE works on its own, whatever the age.
+    for days in (1, 400, 3000):
+        message = refused_with(owner_engine, f"DELETE FROM audit_log WHERE object_id = '{days}'")
+        assert "audit_log is append-only" in message
+    with owner_engine.begin() as connection:
+        removed = connection.execute(
+            sa.text("SELECT audit_log_purge(make_interval(days => 2555))")
+        ).scalar_one()
+
+    assert removed == 1
+    assert remaining(owner_engine) == ["400", "1"]
+
+
+def test_the_purge_refuses_a_period_under_a_year(owner_engine):
+    aged_entries(owner_engine)
+
+    message = refused_with(owner_engine, "SELECT audit_log_purge(make_interval(days => 30))")
+
+    assert "kept at least 365 days" in message
+    assert remaining(owner_engine) == ["3000", "400", "1"]
+
+
+def test_a_forged_purge_flag_still_cannot_delete_a_recent_entry(owner_engine):
+    aged_entries(owner_engine)
+    forged = "SELECT set_config('txrisk.audit_purge', 'on', true); DELETE FROM audit_log WHERE "
+
+    # Younger than the one-year floor: refused even with the flag set.
+    assert "append-only" in refused_with(owner_engine, forged + "object_id = '1'")
+    assert remaining(owner_engine) == ["3000", "400", "1"]
+
+
+def test_the_app_role_cannot_run_the_audit_purge(app_engine: sa.Engine, owner_engine: sa.Engine):
+    aged_entries(owner_engine)
+
+    message = refused_with(app_engine, "SELECT audit_log_purge(make_interval(days => 400))")
+
+    assert "permission denied" in message
+    assert remaining(owner_engine) == ["3000", "400", "1"]
+
+
+def test_txrisk_purge_deletes_aged_audit_entries_and_keeps_the_rest(owner_engine: sa.Engine):
+    aged_entries(owner_engine)
+    clock = SimulationClock(owner_engine)
+    clock.advance(NOW)
+
+    purged = purge(owner_engine, clock, retention(audit_log=500))
+
+    assert purged is not None and purged.deleted["audit_log"] == 1
+    assert remaining(owner_engine) == ["400", "1"]
+
+
+def test_txrisk_purge_refuses_to_run_as_the_app_role(database: str, capsys):
+    exit_code = main(["purge", "--database-url", as_app_role(database)])
+
+    assert exit_code == 2
+    assert "run it as the owner" in capsys.readouterr().err
+
+
+# --- the wall clock ---------------------------------------------------------------------------
+
+
+def test_the_audit_log_reads_the_wall_clock_only_where_the_allow_list_says():
+    """The audit modules take their time from the caller, so they read no clock themselves; the
+    clock the API hands them, and the database's retention floor, are in the allow-list."""
+    for module in ("store/audit.py", "api/audit.py", "store/roles.py"):
+        assert clock_reads((SOURCE / module).read_text(encoding="utf-8")) == [], module
+    reasons = {use: why for use, why in OPERATIONAL.items() if "audit" in why}
+    assert {"api/app.py", "store/migrations/0004_audit_log.sql"} <= {f for f, _ in reasons}
 
 
 # --- the endpoints --------------------------------------------------------------------------

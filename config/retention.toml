@@ -1,0 +1,13 @@
+# `txrisk purge`: how long each kind of data is kept, in days of event time before the simulation
+# clock (ADR 0005). The audit log is kept longest: it is the record of who did what, and must
+# outlive the data it describes. A Risk assessment and an Alert reference their Transaction, so
+# neither may be kept longer than it.
+[days]
+transactions = 365
+risk_assessments = 365
+alerts = 365
+sim_swaps = 365
+fraud_labels = 365
+# Days of real time, not event time: audit entries are stamped with the wall clock. Purged only
+# through audit_log_purge (migration 0004); the database refuses anything under 365.
+audit_log = 2555

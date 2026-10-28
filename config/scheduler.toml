@@ -1,0 +1,20 @@
+# `txrisk scheduler`: the jobs it fires as the simulation clock (ADR 0005) crosses their schedule,
+# once per simulated period. In a replay, "daily" is a day of event time, a few wall-clock minutes.
+# Each job runs `command` in a one-off container: a compose service run, or a Kubernetes Job.
+timezone = "UTC"
+
+# Weekly retraining and daily monitoring are added here by the tickets that build those commands.
+[jobs.retention-purge]
+schedule = "daily"
+command = ["txrisk", "purge"]
+
+# `--launcher compose`: job containers are `docker compose run` of this service.
+[compose]
+file = "docker-compose.yml"
+service = "job"
+
+# `--launcher kubernetes`: job containers are Jobs in this namespace. `env_from` names a Secret
+# holding the environment (database URL, database password), so none is written in a Job.
+[kubernetes]
+namespace = "default"
+image = "txrisk:dev"

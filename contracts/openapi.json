@@ -303,6 +303,128 @@
         "title": "AssessmentOut",
         "type": "object"
       },
+      "AuditEntryOut": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "actor_name": {
+            "title": "Actor Name",
+            "type": "string"
+          },
+          "actor_roles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Actor Roles",
+            "type": "array"
+          },
+          "actor_type": {
+            "enum": [
+              "person",
+              "service",
+              "operator"
+            ],
+            "title": "Actor Type",
+            "type": "string"
+          },
+          "audit_id": {
+            "title": "Audit Id",
+            "type": "integer"
+          },
+          "detail": {
+            "additionalProperties": true,
+            "title": "Detail",
+            "type": "object"
+          },
+          "object_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object Id"
+          },
+          "object_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object Type"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "success",
+              "denied",
+              "failed"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "audit_id",
+          "occurred_at",
+          "actor_type",
+          "actor_id",
+          "actor_name",
+          "actor_roles",
+          "action",
+          "object_type",
+          "object_id",
+          "outcome",
+          "detail"
+        ],
+        "title": "AuditEntryOut",
+        "type": "object"
+      },
+      "AuditPage": {
+        "additionalProperties": false,
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/AuditEntryOut"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "next_before": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Before"
+          }
+        },
+        "required": [
+          "entries",
+          "next_before"
+        ],
+        "title": "AuditPage",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -761,7 +883,7 @@
   "paths": {
     "/v1/alerts": {
       "get": {
-        "description": "Alerts, newest first. For Analysts and Supervisors, or the `alerts:read` scope.",
+        "description": "Alerts, newest first. For Analysts and Supervisors, or the `alerts:read` scope.\nAudited.",
         "operationId": "get_alerts_v1_alerts_get",
         "parameters": [
           {
@@ -858,7 +980,7 @@
     },
     "/v1/api-keys": {
       "get": {
-        "description": "Every key ever issued, revoked and expired ones included, oldest first. Never the\nkeys themselves.",
+        "description": "Every key ever issued, revoked and expired ones included, oldest first. Never the\nkeys themselves. Audited.",
         "operationId": "list_api_keys_v1_api_keys_get",
         "responses": {
           "200": {
@@ -899,7 +1021,7 @@
         ]
       },
       "post": {
-        "description": "Issue a key for a service. The key is in this response only: just its hash is\nstored.",
+        "description": "Issue a key for a service. The key is in this response only: just its hash is\nstored. Audited.",
         "operationId": "issue_api_key_v1_api_keys_post",
         "requestBody": {
           "content": {
@@ -958,7 +1080,7 @@
     },
     "/v1/api-keys/{key_id}": {
       "delete": {
-        "description": "Revoke a key at once, as after a leak.",
+        "description": "Revoke a key at once, as after a leak. Audited.",
         "operationId": "revoke_api_key_v1_api_keys__key_id__delete",
         "parameters": [
           {
@@ -1021,7 +1143,7 @@
     },
     "/v1/api-keys/{key_id}/rotate": {
       "post": {
-        "description": "Issue a replacement with the same name, scopes, rate limit and expiry. The old key\nkeeps working for the overlap (a day by default), so the service switches without\ndowntime. A key is rotated once; rotate its replacement next time.",
+        "description": "Issue a replacement with the same name, scopes, rate limit and expiry. The old key\nkeeps working for the overlap (a day by default), so the service switches without\ndowntime. A key is rotated once; rotate its replacement next time. Audited.",
         "operationId": "rotate_api_key_v1_api_keys__key_id__rotate_post",
         "parameters": [
           {
@@ -1099,6 +1221,235 @@
         "summary": "Rotate Api Key",
         "tags": [
           "api keys"
+        ]
+      }
+    },
+    "/v1/audit": {
+      "get": {
+        "description": "The audit log, newest first, matching every filter given. Admins only. Reading it is\nitself audited, with the filters used.",
+        "operationId": "get_audit_v1_audit_get",
+        "parameters": [
+          {
+            "description": "actor_id: a subject ID or key ID",
+            "in": "query",
+            "name": "actor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "actor_id: a subject ID or key ID",
+              "title": "Actor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "actor_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "person",
+                    "service",
+                    "operator"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actor Type"
+            }
+          },
+          {
+            "description": "e.g. transaction.view",
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "e.g. transaction.view",
+              "title": "Action"
+            }
+          },
+          {
+            "in": "query",
+            "name": "object_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Object Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "object_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Object Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "outcome",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "success",
+                    "denied",
+                    "failed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Outcome"
+            }
+          },
+          {
+            "description": "inclusive",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "inclusive",
+              "title": "Since"
+            }
+          },
+          {
+            "description": "exclusive",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "exclusive",
+              "title": "Until"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "next_before of the previous page",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "next_before of the previous page",
+              "title": "Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles or scopes do not permit this"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "description": "The API key's rate limit is exceeded; see Retry-After"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Get Audit",
+        "tags": [
+          "audit"
         ]
       }
     },
@@ -1256,7 +1607,7 @@
     },
     "/v1/transactions/{transaction_id}": {
       "get": {
-        "description": "A stored Transaction and its Risk assessment, if it was scored. For Analysts and\nSupervisors, or the `transactions:read` scope.",
+        "description": "A stored Transaction and its Risk assessment, if it was scored. For Analysts and\nSupervisors, or the `transactions:read` scope. Audited.",
         "operationId": "get_transaction_v1_transactions__transaction_id__get",
         "parameters": [
           {
