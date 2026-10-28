@@ -2,7 +2,14 @@
 
 import { useActionState } from "react";
 
-import { addNote, assignCase, moveCase, type FormState } from "@/app/cases/actions";
+import {
+  addNote,
+  approveReport,
+  assignCase,
+  draftReport,
+  moveCase,
+  type FormState,
+} from "@/app/cases/actions";
 import type { Move } from "@/lib/permissions";
 
 function Result({ state }: { state: FormState }) {
@@ -134,6 +141,63 @@ export function AssignForm({
       <div>
         <button type="submit" disabled={pending}>
           Assign
+        </button>
+      </div>
+      <Result state={state} />
+    </form>
+  );
+}
+
+/** Drafting, or rewriting the draft of, the Suspicious transaction report of a Case closed as fraud. */
+export function ReportDraftForm({ caseId, current }: { caseId: number; current: string | null }) {
+  const [state, action, pending] = useActionState(draftReport.bind(null, caseId), null);
+  return (
+    <form action={action} className="stack" aria-labelledby="draft-heading">
+      <h3 id="draft-heading">{current === null ? "Draft the report" : "Rewrite the draft"}</h3>
+      <label htmlFor="report-summary">Summary</label>
+      <textarea
+        id="report-summary"
+        name="summary"
+        rows={5}
+        maxLength={8000}
+        required
+        disabled={pending}
+        defaultValue={state && !state.ok ? state.text : (current ?? undefined)}
+      />
+      <div>
+        <button type="submit" disabled={pending}>
+          Save draft
+        </button>
+      </div>
+      <Result state={state} />
+    </form>
+  );
+}
+
+/**
+ * Approval is a Supervisor's. Anyone else sees the button disabled with the reason; the API
+ * refuses them regardless.
+ */
+export function ApproveReportForm({
+  caseId,
+  disabledReason,
+}: {
+  caseId: number;
+  disabledReason: string | null;
+}) {
+  const [state, action, pending] = useActionState(approveReport.bind(null, caseId), null);
+  const disabled = disabledReason !== null || pending;
+  return (
+    <form action={action} className="stack" aria-labelledby="approve-heading">
+      <h3 id="approve-heading">Approve the report</h3>
+      {disabledReason ? (
+        <p className="hint" data-testid="approve-blocked">
+          {disabledReason}
+        </p>
+      ) : null}
+      <div>
+        <button type="submit" disabled={disabled}>
+          Approve report
         </button>
       </div>
       <Result state={state} />

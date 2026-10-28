@@ -73,3 +73,30 @@ export function whyNotWorkable(
     ? "This Case is unassigned. A Supervisor assigns it to an Analyst before notes or moves can be recorded."
     : `This Case is assigned to ${c.assignee_name ?? "another Analyst"}. Only the assigned Analyst or a Supervisor can work it.`;
 }
+
+export type Report = components["schemas"]["ReportOut"];
+
+/** The drafter is the Analyst assigned to the Case, or a Supervisor; the Case must be closed as fraud. */
+export function canDraftReport(
+  user: User,
+  c: Pick<CaseSummary, "status" | "assignee_id">,
+  report: Pick<Report, "status"> | null,
+): boolean {
+  if (c.status !== "closed_fraud" || report?.status === "approved") {
+    return false;
+  }
+  return isSupervisor(user) || (user.roles.includes("analyst") && c.assignee_id === user.sub);
+}
+
+/** Exporting is a Supervisor's alone, and only once the report is approved. */
+export function canExportReport(user: User, report: Pick<Report, "status"> | null): boolean {
+  return isSupervisor(user) && report?.status === "approved";
+}
+
+/** Why the person can't approve, for a message beside the disabled button; null if they can. */
+export function whyNotApprovable(user: User, report: Pick<Report, "status">): string | null {
+  if (report.status === "approved") {
+    return "This report is approved and final.";
+  }
+  return isSupervisor(user) ? null : "Only a Supervisor can approve a report.";
+}

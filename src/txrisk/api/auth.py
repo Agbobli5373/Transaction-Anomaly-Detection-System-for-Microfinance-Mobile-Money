@@ -80,6 +80,14 @@ ASSIGN_CASES = Permission("assign Cases to Analysts", frozenset({Role.SUPERVISOR
 # Further limited, in the Case itself, to the assigned Analyst or a Supervisor.
 WORK_CASES = Permission("add notes to and move Cases", PEOPLE_WHO_INVESTIGATE, None)
 READ_WATCHLIST = Permission("read the Medium watch list", PEOPLE_WHO_INVESTIGATE, None)
+# A report is drafted with WORK_CASES (the assigned Analyst or a Supervisor). Approving and
+# exporting it are a Supervisor's alone: no Analyst, Admin or API key.
+APPROVE_REPORTS = Permission(
+    "approve Suspicious transaction reports", frozenset({Role.SUPERVISOR}), None
+)
+EXPORT_REPORTS = Permission(
+    "export Suspicious transaction reports", frozenset({Role.SUPERVISOR}), None
+)
 
 PERMISSIONS = (
     SCORE,
@@ -92,6 +100,8 @@ PERMISSIONS = (
     ASSIGN_CASES,
     WORK_CASES,
     READ_WATCHLIST,
+    APPROVE_REPORTS,
+    EXPORT_REPORTS,
 )
 # Every scope an API key may carry.
 SCOPES = tuple(sorted(p.scope for p in PERMISSIONS if p.scope is not None))
