@@ -1,4 +1,4 @@
-.PHONY: retrain install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed produce replay scheduler purge schemas backup openapi workbench loadtest-sync loadtest-stream loadtest-check monitor
+.PHONY: retrain install lint format typecheck test check generate features evaluate evaluate-supervised evaluate-stacked train paysim up down seed produce replay scheduler purge schemas backup openapi workbench evaluation-pages loadtest-sync loadtest-stream loadtest-check monitor
 
 install:
 	uv sync
@@ -60,6 +60,11 @@ up:
 # The Case workbench on http://localhost:3000 (needs AUTH_SECRET in .env).
 workbench:
 	docker compose up --build --detach --wait api keycloak workbench
+
+# The evaluation pages on http://localhost:8501 (needs TXRISK_EVALUATION_API_KEY in .env, README:
+# Evaluation pages).
+evaluation-pages:
+	docker compose up --build --detach --wait api evaluation-pages
 
 down:
 	docker compose down

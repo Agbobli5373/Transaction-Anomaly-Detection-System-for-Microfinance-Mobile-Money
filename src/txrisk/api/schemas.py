@@ -588,6 +588,15 @@ class ModelList(_Body):
     history: list[PromotionOut]
 
 
+class ModelEvaluationOut(_Body):
+    """The offline evaluation report saved with one version (`txrisk evaluate --scorer bundle`):
+    ranking scores, the PR and ROC curves, recall by Fraud scenario and by segment, and recall
+    against Ground truth and against discovered Fraud labels."""
+
+    version: str
+    evaluation: dict[str, Any]
+
+
 class ModelCardOut(_Body):
     """The model card of one version: intended use, data, scores by segment and limitations."""
 

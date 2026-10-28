@@ -15,13 +15,15 @@ import pandas as pd
 import sqlalchemy as sa
 
 from txrisk.api import ApiSettings
+from txrisk.api.models import BUNDLE_EVALUATION_FOLDER
 from txrisk.benchmark import run_paysim
 from txrisk.benchmark.paysim import SCORERS as PAYSIM_SCORERS
-from txrisk.evaluation import load_evaluation_config
+from txrisk.evaluation import EvaluationConfig, load_evaluation_config
 from txrisk.evaluation.report import evaluate
 from txrisk.evaluation.scorers import (
     STACKED_SEED,
     anomaly_scores,
+    bundle_scores,
     rules_only_scores,
     stacked_scores,
     supervised_scores,
@@ -52,7 +54,7 @@ from txrisk.loadtest import (
     read_stream_result,
     read_sync_result,
 )
-from txrisk.models.bundle import train_bundle
+from txrisk.models.bundle import ModelBundle, train_bundle
 from txrisk.models.registry import MODEL_NAME, log_bundle
 from txrisk.monitoring import load_monitoring_config
 from txrisk.observability.logs import configure_logging
@@ -67,7 +69,7 @@ from txrisk.scheduler import (
     SchedulerConfig,
     load_scheduler_config,
 )
-from txrisk.scoring import RULES_ONLY, load_rules_config
+from txrisk.scoring import RULES_ONLY, load_rules_config, rule_scores_table
 from txrisk.scoring import Metrics as ScoringMetrics
 from txrisk.store import (
     BackupError,
@@ -135,7 +137,7 @@ def _features(args: argparse.Namespace) -> int:
 
 
 # Scorers `txrisk evaluate` can judge. LOF is an offline comparison only; it is never served.
-SCORERS = [RULES_ONLY, "anomaly", "lof", "supervised", "stacked"]
+SCORERS = [RULES_ONLY, "anomaly", "lof", "supervised", "stacked", "bundle"]
 
 
 def _feature_config(args: argparse.Namespace) -> FeatureConfig:
@@ -155,6 +157,30 @@ def _tables(data: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     )
 
 
+def _saved_bundle_scores(
+    args: argparse.Namespace,
+    features: FeatureConfig,
+    evaluation: EvaluationConfig,
+    tables: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame],
+    period_start: date,
+) -> pd.DataFrame:
+    """The evaluation days scored by the model bundle in `args.bundle`, as it was trained."""
+    transactions, wallets, sim_swaps = tables
+    feature_rows = (
+        pd.read_parquet(args.features)
+        if args.features
+        else feature_table(transactions, wallets, sim_swaps, config=features)
+    )
+    return bundle_scores(
+        ModelBundle.load(args.bundle),
+        transactions,
+        feature_rows,
+        rule_scores_table(transactions, feature_rows, load_rules_config(args.rules_config)),
+        evaluation=evaluation,
+        period_start=period_start,
+    )
+
+
 def _evaluate(args: argparse.Namespace) -> int:
     features = _feature_config(args)
     evaluation = load_evaluation_config(args.evaluation_config)
@@ -168,6 +194,11 @@ def _evaluate(args: argparse.Namespace) -> int:
             evaluation=evaluation,
             period_start=period_start,
         )
+    elif args.scorer == "bundle":
+        if args.bundle is None:
+            print("error: --scorer bundle needs --bundle <models/version>", file=sys.stderr)
+            return 2
+        scores = _saved_bundle_scores(args, features, evaluation, tables, period_start)
     elif args.scorer == "stacked":
         scores = stacked_scores(
             *tables,
@@ -197,6 +228,8 @@ def _evaluate(args: argparse.Namespace) -> int:
             feature_rows=pd.read_parquet(args.features) if args.features else None,
         )
     out = args.out or Path("reports") / args.scorer
+    if args.scorer == "bundle":
+        out = args.out or args.bundle / BUNDLE_EVALUATION_FOLDER
     metrics = evaluate(
         scores, args.data, config=evaluation, period_start=period_start, scorer=args.scorer, out=out
     )
@@ -963,6 +996,12 @@ def main(argv: list[str] | None = None) -> int:
         "--features",
         type=Path,
         help="a feature table from `txrisk features` to reuse instead of rebuilding it",
+    )
+    ev.add_argument(
+        "--bundle",
+        type=Path,
+        help="with --scorer bundle: the saved model bundle (models/<version>) to judge; its "
+        f"report goes in <bundle>/{BUNDLE_EVALUATION_FOLDER}, which the API serves",
     )
     ev.add_argument("--out", type=Path, help="report folder (default: reports/<scorer>)")
     ev.set_defaults(handler=_evaluate)
