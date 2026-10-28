@@ -19,6 +19,7 @@ from txrisk.features import Transaction
 from txrisk.scoring import RiskAssessment
 from txrisk.store.api_keys import ApiKeyRecord
 from txrisk.store.audit import AuditRecord
+from txrisk.store.cases import CaseSummary
 from txrisk.store.tables import COUNTERPARTY_COLUMNS
 
 TransactionType = Literal["cash_in", "cash_out", "transfer", "payment", "bill_payment"]
@@ -300,3 +301,93 @@ class AuditPage(_Body):
     entries: list[AuditEntryOut]
     # Pass as `before` for the next (older) page; null on the last page.
     next_before: int | None
+
+
+CaseStatusName = Literal["open", "investigating", "closed_fraud", "closed_legitimate"]
+
+
+class CaseOut(_Body):
+    case_id: int
+    subject_wallet_id: str
+    status: CaseStatusName
+    # The event time of the Case's first Alert's Transaction.
+    opened_at: datetime
+    # The Keycloak subject ID and username of the Analyst it is assigned to.
+    assignee_id: str | None
+    assignee_name: str | None
+    # When it was closed (event time), and by whom; null while it is open or investigating.
+    closed_at: datetime | None
+    closed_by_name: str | None
+    alert_count: int
+    # The highest Risk score among its Alerts.
+    top_risk_score: float | None
+
+    @classmethod
+    def of(cls, case: CaseSummary) -> "CaseOut":
+        return cls.model_validate(case.__dict__)
+
+
+class CasePage(_Body):
+    cases: list[CaseOut]
+    # Pass as `before` for the next page; null on the last.
+    next_before: int | None
+
+
+class CaseAlertOut(_Body):
+    alert_id: int
+    transaction_id: str
+    raised_at: datetime
+    assessment: AssessmentOut
+    # Taken from how the Case closed: confirmed_fraud or dismissed; null while it is still open.
+    disposition: Literal["confirmed_fraud", "dismissed"] | None
+
+
+class CaseEventOut(_Body):
+    event_id: int
+    kind: Literal["assigned", "note", "transition"]
+    # The simulation clock when it happened.
+    occurred_at: datetime
+    actor_id: str
+    actor_name: str
+    # A note's text, or a transition's comment.
+    body: str | None
+    from_status: CaseStatusName | None
+    to_status: CaseStatusName | None
+    # For an assignment, the Analyst it assigned the Case to.
+    assignee_id: str | None
+
+
+class CaseDetail(_Body):
+    case: CaseOut
+    alerts: list[CaseAlertOut]
+    # The Subject wallet's latest Transactions as Subject wallet, newest first, scored or not.
+    recent_transactions: list[TransactionView]
+    events: list[CaseEventOut]
+
+
+class AssignIn(_Body):
+    # The Analyst's Keycloak subject ID, as it appears in their token's `sub`.
+    assignee_id: str = _ID
+    # Their username, for display.
+    assignee_name: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class NoteIn(_Body):
+    text: str = Field(min_length=1, max_length=4000)
+
+
+class TransitionIn(_Body):
+    # open -> investigating -> closed_fraud | closed_legitimate. A Case is never reopened.
+    to: Literal["investigating", "closed_fraud", "closed_legitimate"]
+    comment: str | None = Field(default=None, min_length=1, max_length=4000)
+
+
+class WatchlistItem(_Body):
+    transaction: TransactionOut
+    assessment: AssessmentOut
+
+
+class WatchlistPage(_Body):
+    items: list[WatchlistItem]
+    # Pass as `before` for the next page; null on the last.
+    next_before: str | None

@@ -29,6 +29,7 @@ from txrisk.evaluation.scorers import (
 from txrisk.events import (
     DEFAULT_SECONDS_PER_DAY,
     EVENTS,
+    OutboxPublisher,
     Pacer,
     Publisher,
     ScoringWorker,
@@ -44,6 +45,13 @@ from txrisk.events import (
 )
 from txrisk.features import FeatureConfig, feature_table, load_feature_config
 from txrisk.generator import generate, load_config, write_dataset
+from txrisk.loadtest import (
+    check_stream,
+    check_sync,
+    load_loadtest_config,
+    read_stream_result,
+    read_sync_result,
+)
 from txrisk.models.bundle import train_bundle
 from txrisk.models.registry import MODEL_NAME, log_bundle
 from txrisk.monitoring import load_monitoring_config
@@ -367,6 +375,34 @@ def _seed(args: argparse.Namespace) -> int:
     return 0
 
 
+def _seed_cases(args: argparse.Namespace) -> int:
+    from txrisk.store.demo_cases import seed_demo_cases
+
+    url = _database_url(args)
+    if url is None:
+        return 2
+    if bool(args.assignee_id) != bool(args.assignee_name):
+        print("error: pass --assignee-id and --assignee-name together", file=sys.stderr)
+        return 2
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        pending = pending_migrations(connection)
+        if pending:
+            print(
+                f"error: run `txrisk migrate` first; pending: {', '.join(pending)}", file=sys.stderr
+            )
+            return 1
+        made = seed_demo_cases(
+            connection,
+            tag=args.tag,
+            count=args.count,
+            medium=args.medium,
+            assignee=(args.assignee_id, args.assignee_name) if args.assignee_id else None,
+        )
+    print(json.dumps({"cases": [{"case_id": c.case_id, "wallet_id": c.wallet_id} for c in made]}))
+    return 0
+
+
 def _issue_api_key(args: argparse.Namespace) -> int:
     from txrisk.api.auth import SCOPES
     from txrisk.store import api_keys, audit
@@ -499,6 +535,27 @@ def _replay(args: argparse.Namespace) -> int:
         f"at {args.seconds_per_day:g} s per simulated day"
     )
     return 0
+
+
+def _loadtest_check(args: argparse.Namespace) -> int:
+    if args.sync is None and args.stream is None:
+        print("error: pass --sync and/or --stream", file=sys.stderr)
+        return 2
+    config = load_loadtest_config(args.config)
+    checks = []
+    try:
+        if args.sync is not None:
+            checks += [("sync", c) for c in check_sync(read_sync_result(args.sync), config.sync)]
+        if args.stream is not None:
+            checks += [
+                ("stream", c) for c in check_stream(read_stream_result(args.stream), config.stream)
+            ]
+    except (OSError, ValueError, TypeError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    for part, check in checks:
+        print(f"{'PASS' if check.passed else 'FAIL'}  {part} {check.name}: {check.detail}")
+    return 0 if all(c.passed for _, c in checks) else 1
 
 
 def _purge(args: argparse.Namespace) -> int:
@@ -725,6 +782,35 @@ def _rescore(args: argparse.Namespace) -> int:
     return 3 if result.stopped else 0
 
 
+def _outbox(args: argparse.Namespace) -> int:
+    settings = WorkerSettings.from_env()
+    metrics = _observe("txrisk-outbox", settings.metrics_port)
+    engine = create_app_engine(settings.database_url)
+    with engine.connect() as connection:
+        pending = pending_migrations(connection)
+    if pending:
+        print(f"error: run `txrisk migrate` first; pending: {', '.join(pending)}", file=sys.stderr)
+        return 1
+    topics = settings.topics()
+    ensure_topics(settings.kafka_bootstrap_servers, topics, partitions=settings.topic_partitions)
+    outbox = OutboxPublisher(
+        engine, Publisher(settings.kafka_bootstrap_servers, metrics=metrics), topics=topics
+    )
+    if args.once:
+        print(f"published {outbox.publish_pending()} events")
+        return 0
+    stop = threading.Event()
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signum, lambda received, _: stop.set())
+    logging.getLogger(__name__).info(
+        "publishing the outbox to %s", settings.kafka_bootstrap_servers
+    )
+    outbox.run(stop.is_set, stop.wait, poll_seconds=args.poll_seconds)
+    engine.dispose()
+    shutdown_tracing()
+    return 0
+
+
 def _schemas(args: argparse.Namespace) -> int:
     args.out.mkdir(parents=True, exist_ok=True)
     for topic in EVENTS:
@@ -872,6 +958,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     sd.set_defaults(handler=_seed)
 
+    sc = commands.add_parser(
+        "seed-cases",
+        help="create demo Cases and Medium Transactions through the store (for the workbench)",
+    )
+    sc.add_argument("--database-url", help=f"default: ${DATABASE_URL_ENV}")
+    sc.add_argument("--tag", default="demo", help="names the Wallets and Transactions it makes")
+    sc.add_argument("--count", type=int, default=3, help="how many Cases (one per Wallet)")
+    sc.add_argument("--medium", type=int, default=0, help="how many Medium-band Transactions")
+    sc.add_argument("--assignee-id", help="assign every Case to this Analyst (a subject ID)")
+    sc.add_argument("--assignee-name", help="the assigned Analyst's name")
+    sc.set_defaults(handler=_seed_cases)
+
     key = commands.add_parser(
         "api-key", help="issue a scoped API key for a service, straight into Postgres"
     )
@@ -957,6 +1055,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     rp.set_defaults(handler=_replay)
 
+    lt = commands.add_parser(
+        "loadtest", help="judge load-test results against the targets in config/loadtest.toml"
+    )
+    lt_commands = lt.add_subparsers(dest="loadtest_command", required=True)
+    lt_check = lt_commands.add_parser(
+        "check",
+        help="exit 1 unless a Locust sync run (its _stats.csv) and/or a stream run (its JSON) "
+        "meet the targets",
+    )
+    lt_check.add_argument("--sync", type=Path, help="a Locust --csv run's <prefix>_stats.csv")
+    lt_check.add_argument("--stream", type=Path, help="the JSON a stream_locustfile.py run wrote")
+    lt_check.add_argument("--config", type=Path, default=Path("config/loadtest.toml"))
+    lt_check.set_defaults(handler=_loadtest_check)
+
     pg = commands.add_parser(
         "purge", help="delete data older than its retention period, by simulation clock"
     )
@@ -1029,6 +1141,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     rsc.add_argument("--limit", type=int, help="re-score at most this many (default: all)")
     rsc.set_defaults(handler=_rescore)
+
+    ob = commands.add_parser(
+        "outbox",
+        help="publish the transactional outbox (Fraud discoveries from closed Cases) to Redpanda",
+    )
+    ob.add_argument(
+        "--poll-seconds", type=float, default=1.0, help="wall-clock seconds between empty checks"
+    )
+    ob.add_argument("--once", action="store_true", help="publish one batch and exit")
+    ob.set_defaults(handler=_outbox)
 
     sch = commands.add_parser("schemas", help="write the event topics' JSON Schemas")
     sch.add_argument("--out", type=Path, default=Path("schemas"))

@@ -92,7 +92,7 @@ def test_keys_are_stored_only_as_hashes(admin: Admin, database: str):
         row = connection.execute(sa.text("SELECT * FROM api_keys")).one()._asdict()
 
     assert row["key_digest"] == hashlib.sha256(key.encode()).digest()
-    random_part = key.rsplit("_", 1)[1]
+    random_part = key.split("_", 2)[2]
     assert not any(random_part in str(value) for value in row.values())
 
 
@@ -103,7 +103,7 @@ def test_listing_keys_never_shows_the_keys(admin: Admin):
 
     assert listed.status_code == 200
     assert [k["scopes"] for k in listed.json()] == [["alerts:read"]]
-    assert key.rsplit("_", 1)[1] not in listed.text
+    assert key.split("_", 2)[2] not in listed.text
     assert "digest" not in listed.text
 
 

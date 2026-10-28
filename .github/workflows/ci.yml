@@ -73,7 +73,7 @@ jobs:
       - run: uv export --locked --no-emit-project --no-hashes --output-file requirements.audit.txt
       - run: uv run pip-audit --requirement requirements.audit.txt --no-deps --disable-pip
 
-  # Trivy: the built image's OS packages and libraries, and the repo's Dockerfile and compose
+  # Trivy: the built images' (the API's and the workbench's) OS packages and libraries, and the repo's Dockerfile and compose
   # file for misconfigurations. High and critical findings fail the build. The image scan
   # ignores findings with no fixed version (Debian's util-linux, ncurses, systemd, acl and perl
   # CVEs are unpatched today, and nothing in the image can be rebuilt to fix them); the build
@@ -90,18 +90,27 @@ jobs:
           tags: txrisk:ci
           cache-from: type=gha,scope=image
           cache-to: type=gha,scope=image,mode=max
+      - uses: docker/build-push-action@v6
+        with:
+          context: workbench
+          load: true
+          tags: txrisk-workbench:ci
+          cache-from: type=gha,scope=workbench-image
+          cache-to: type=gha,scope=workbench-image,mode=max
       - uses: actions/cache@v4
         with:
           path: ~/.cache/trivy
           key: trivy-db-${{ github.run_id }}
           restore-keys: trivy-db-
-      - name: Scan the image
+      - name: Scan the images
         run: |
           mkdir -p ~/.cache/trivy
-          docker run --rm \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            -v ~/.cache/trivy:/root/.cache/trivy \
-            "$TRIVY_IMAGE" image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 txrisk:ci
+          for image in txrisk:ci txrisk-workbench:ci; do
+            docker run --rm \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              -v ~/.cache/trivy:/root/.cache/trivy \
+              "$TRIVY_IMAGE" image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$image"
+          done
       - name: Scan the Dockerfile and compose file
         run: |
           docker run --rm \
@@ -261,6 +270,81 @@ jobs:
       - if: always()
         run: docker compose down --volumes
 
+  # The Case workbench (Next.js, in workbench/): lint, strict types, the typed API client matching
+  # contracts/openapi.json, the production build, unit tests and a dependency audit; then Playwright
+  # drives the real stack (API, Keycloak, Postgres, the workbench from its image) through compose.
+  workbench:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workbench
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: workbench/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      # The generated API types are committed: regenerate them from the spec and compare.
+      - run: npm run api-types:check
+      # Building needs no settings; the server reads them when it starts.
+      - run: npm run build
+      - run: npm test
+      - run: npm audit --audit-level=high
+      - id: playwright
+        run: echo "version=$(npx playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        id: browsers
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+      - if: steps.browsers.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+      - if: steps.browsers.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+      # Throwaway credentials for this run only, in the .env and keycloak.env compose reads; none
+      # is committed.
+      - name: Write throwaway settings
+        working-directory: .
+        run: |
+          generated=$(openssl rand -hex 16)
+          grep -v -E '^((POSTGRES_|PG|TXRISK_APP_DB_)PASSWORD|GF_SECURITY_ADMIN_PASSWORD|AUTH_SECRET)=' .env.example > .env
+          for key in POSTGRES_PASSWORD PGPASSWORD GF_SECURITY_ADMIN_PASSWORD; do
+            echo "$key=$generated" >> .env
+          done
+          # Each of these gets its own value, and the names are read from a variable.
+          for key in TXRISK_APP_DB_PASSWORD; do echo "$key=$(openssl rand -hex 16)" >> .env; done
+          for key in AUTH_SECRET; do echo "$key=$(openssl rand -hex 32)" >> .env; done
+          for key in TXRISK_DEMO_SIGNIN_ANALYST TXRISK_DEMO_SIGNIN_SUPERVISOR TXRISK_DEMO_SIGNIN_ADMIN; do
+            echo "$key=$(openssl rand -hex 16)"
+          done > keycloak.env
+      - name: Start the stack
+        working-directory: .
+        run: docker compose up --build --detach --wait api keycloak workbench
+      - name: Playwright
+        run: |
+          set -a; . ../keycloak.env; set +a
+          npx playwright test
+      - if: failure()
+        working-directory: .
+        run: docker compose logs
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            workbench/playwright-report
+            workbench/test-results
+          retention-days: 7
+      - if: always()
+        working-directory: .
+        run: docker compose down --volumes
+
   # A backup taken from the compose Postgres restores into a fresh database, and the restore
   # matches its source: row counts per table and the latest migration (`--compare-with`).
   restore:
@@ -288,7 +372,7 @@ jobs:
   # On main, once everything passes: push the image to GHCR, tagged with the commit SHA.
   publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [check, smoke, audit, trivy, contracts, compose, restore]
+    needs: [check, smoke, audit, trivy, contracts, compose, restore, workbench]
     runs-on: ubuntu-latest
     permissions:
       contents: read

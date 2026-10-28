@@ -13,6 +13,7 @@ from txrisk.events.contracts import (
     schema_file,
 )
 from txrisk.events.ledger import Published, ledger_events, publish_ledger
+from txrisk.events.outbox import OutboxPublisher
 from txrisk.events.replay import (
     DEFAULT_SECONDS_PER_DAY,
     Pacer,
@@ -31,6 +32,7 @@ __all__ = [
     "DeliveryFailed",
     "FraudDiscovered",
     "InvalidEvent",
+    "OutboxPublisher",
     "Pacer",
     "Published",
     "Publisher",

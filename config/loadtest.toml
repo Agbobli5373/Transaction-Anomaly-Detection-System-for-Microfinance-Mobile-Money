@@ -1,0 +1,17 @@
+# The load-test targets (issue #1, story 97) that `txrisk loadtest check` holds the results to.
+# A sync run is judged at its steady state, after Locust has finished ramping up its users.
+
+[sync]
+# One API pod: the p95 of POST /v1/score at this many requests a second, with nothing failing.
+requests_per_second = 200
+p95_ms = 200
+# The offered rate must actually be reached: Locust cannot hold a rate a slow API cannot serve.
+rate_tolerance = 0.95
+
+[stream]
+# Transactions scored a second, by 3 workers (the topic's partitions), while a producer offers
+# at least this rate.
+transactions_per_second = 1000
+# After a burst ends, the consumer lag is back to this many events within this many seconds.
+lag_recovered_events = 500
+lag_recovery_seconds = 60

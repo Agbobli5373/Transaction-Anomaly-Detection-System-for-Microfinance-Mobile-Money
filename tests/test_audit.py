@@ -648,9 +648,9 @@ def test_no_secret_or_phone_number_is_ever_stored_in_an_entry(api: Api):
     assert len(audit_rows(api.database)) >= 7
     secrets_and_pii = [
         issued["key"],
-        issued["key"].rsplit("_", 1)[1],
+        issued["key"].split("_", 2)[2],
         rotated["key"],
-        rotated["key"].rsplit("_", 1)[1],
+        rotated["key"].split("_", 2)[2],
         api.analyst_token,
         api.admin_token,
         MSISDN,

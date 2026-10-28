@@ -24,6 +24,12 @@ ENDPOINTS: dict[str, tuple[str, str, dict[str, Any] | None]] = {
     "read alerts": ("GET", "/v1/alerts", None),
     "read the active model": ("GET", "/v1/models/active", None),
     "read the audit log": ("GET", "/v1/audit", None),
+    "list cases": ("GET", "/v1/cases", None),
+    "read a case": ("GET", "/v1/cases/1", None),
+    "assign a case": ("POST", "/v1/cases/1/assign", {"assignee_id": "sub-ama"}),
+    "add a case note": ("POST", "/v1/cases/1/notes", {"text": "checked"}),
+    "move a case": ("POST", "/v1/cases/1/transition", {"to": "investigating"}),
+    "read the watch list": ("GET", "/v1/watchlist", None),
     "list api keys": ("GET", "/v1/api-keys", None),
     "issue an api key": ("POST", "/v1/api-keys", {"name": "svc", "scopes": ["alerts:read"]}),
     "rotate an api key": ("POST", "/v1/api-keys/k-none/rotate", None),
@@ -34,11 +40,19 @@ COMPOSE_CLIENTS = ("txrisk-workbench", "txrisk-demo-cli")
 API_KEYS = {"list api keys", "issue an api key", "rotate an api key", "revoke an api key"}
 # What no API key scope reaches: only people, and only Admins.
 ADMIN_ONLY = {*API_KEYS, "read the audit log"}
+# Cases and the watch list are for the people who work them; no API key scope reaches them.
+CASE_WORK = {"list cases", "read a case", "add a case note", "move a case", "read the watch list"}
+PEOPLE_ONLY = {*CASE_WORK, "assign a case"}
 
 # What each role may do; nothing else.
 ROLE_ACCESS = {
-    "analyst": {"read a transaction", "read alerts", "read the active model"},
-    "supervisor": {"read a transaction", "read alerts", "read the active model"},
+    "analyst": {"read a transaction", "read alerts", "read the active model", *CASE_WORK},
+    "supervisor": {
+        "read a transaction",
+        "read alerts",
+        "read the active model",
+        *PEOPLE_ONLY,
+    },
     "admin": {"read the active model", *ADMIN_ONLY},
 }
 # What each API key scope allows; nothing else. No scope reaches the API key endpoints or the
@@ -72,9 +86,9 @@ def client(database: str, keycloak: Keycloak) -> Iterator[TestClient]:
         yield client
 
 
-def test_the_scopes_cover_every_endpoint_but_the_admin_only_ones():
+def test_the_scopes_cover_every_endpoint_but_the_admin_and_people_only_ones():
     assert set(SCOPE_ACCESS) == set(SCOPES)
-    assert set().union(*SCOPE_ACCESS.values()) == set(ENDPOINTS) - ADMIN_ONLY
+    assert set().union(*SCOPE_ACCESS.values()) == set(ENDPOINTS) - ADMIN_ONLY - PEOPLE_ONLY
 
 
 @pytest.mark.parametrize("role", sorted(ROLE_ACCESS))
