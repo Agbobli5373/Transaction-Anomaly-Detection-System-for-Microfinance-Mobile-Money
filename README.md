@@ -162,6 +162,37 @@ make purge                        # one retention purge now
 - **Traces** are off until `TXRISK_TRACING_ENABLED=true`: with it unset there is no exporter, no background thread and nothing in event headers. They go as OTLP/HTTP to `OTEL_EXPORTER_OTLP_ENDPOINT` (Jaeger, in compose). One Transaction is one trace: the API's request (or the producer's publish and the worker's consume) down through `score.transaction`, `store.lookup`, `features.compute`, `history.redis` (`cache.hit`) or `history.postgres.*`, `model.score`, `store.save` and `cache.record`. The `traceparent` event header carries the trace across Redpanda.
 - **Dashboard.** `deploy/grafana/dashboards/operations.json` is provisioned read-only with the datasources in `deploy/grafana/provisioning/`: latency percentiles, throughput, errors, consumer lag, Degraded mode rate, Alerts per day and the Risk band mix.
 
+## Load tests
+
+Locust scripts in [`loadtests/`](loadtests) exercise the sync API and the stream path, and `txrisk loadtest check` judges the results against the targets in [`config/loadtest.toml`](config/loadtest.toml): sync `/v1/score` at p95 < 200 ms at 200 requests/s on one API pod; the stream at 1,000 Transactions/s with 3 workers, lag back under 500 events within 60 s of a burst; and a Degraded mode run that keeps up at the same rate.
+
+**Reproducing.** Bring up the stack on a machine with nothing else running (the 4 CPUs of a laptop are not enough to share), `make seed`, and train a bundle (`make train`, `TXRISK_MODEL_BUNDLE` in `.env`). Every run draws its Transactions from the dataset's last 20,000, under fresh IDs, so the Wallets are the seeded ones. Run each test once to warm the model, then for the record.
+
+```bash
+# Sync: a key that may score, with a rate limit above the offered rate, in a file git ignores.
+mkdir -p reports/loadtest
+docker compose exec -T api txrisk api-key --name loadtest --scope score:write --rate-limit 1000000 > reports/loadtest/api-key
+make loadtest-sync                   # 200 requests/s for 2 minutes; fails any response that is Degraded
+# Degraded mode: the same API with TXRISK_MODEL_BUNDLE unset (or pointing nowhere), then
+LOADTEST_EXPECT_DEGRADED=1 make loadtest-sync RUN=sync-degraded   # fails any response that is not degraded
+# Stream: three workers, then a producer at 1,500/s (a burst above the target); writes reports/loadtest/stream.json
+docker compose up --detach --scale worker=3
+make loadtest-stream LOADTEST_TIME=60s
+make loadtest-check                  # PASS or FAIL for each target, exit 1 if any fails
+```
+
+A sync run is read at its steady state (`--reset-stats` drops the ramp-up). It passes only if the offered rate was reached, nothing failed, and the p95 held; a response whose `degraded` flag is not what the run expects counts as a failure, so a run against a healthy stack cannot quietly be scored by the rules alone. The stream run publishes at `LOADTEST_RATE` while a sampler reads the workers' committed offsets and the topic's end offsets each second; throughput is what the workers committed while publishing lasted, and recovery is the time after publishing stops until the lag first falls to the recovered level (waiting at most 3 minutes). Offsets are committed per batch of up to 500, so a short run reads low.
+
+**Results.** Not yet at target. The only runs made so far were on a shared 4-CPU development machine whose load average was 8 to 9 throughout (other jobs were using the cores), against the API and workers as plain processes, not containers (the image build had no network), with Postgres, Redis and Redpanda in compose. They show where the time goes, not what a dedicated machine does, and none of the three targets was met:
+
+| Run | Offered | Served | p95 | Verdict |
+|---|---|---|---|---|
+| Sync, Champion model, one API process | 200 req/s | 3.7 req/s | 17,000 ms | target missed |
+| Sync, Degraded mode (no model), one API process | 200 req/s | 29.7 req/s, no failures, every response degraded | 2,200 ms | target missed |
+| Stream, rules only, 3 workers | 1,515 Tx/s | about 29 Tx/s committed (peak lag 33,347) | | lag did not recover in 90 s; target missed |
+
+Profiling the API under load found the time in two places: the model path (building the input frame, the Isolation Forest score and the SHAP contributions, a few hundred milliseconds of CPU for each Transaction) and the number of Postgres round trips each scoring makes one after another (parties, stored assessment, history, insert, simulation clock). Neither is a tuning knob: reaching the targets needs the scoring path made cheaper (a batch path for the workers, fewer round trips, cheaper explanations) and a dedicated machine, and the tables above should be replaced by a run on one when that is done.
+
 ## CI/CD
 
 `.github/workflows/ci.yml` runs these jobs in parallel on every PR and push to main (uv's cache is on):
