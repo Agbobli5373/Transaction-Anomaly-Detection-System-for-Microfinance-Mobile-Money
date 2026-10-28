@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import sqlalchemy as sa
+from api_helpers import as_app_role
 from degraded_helpers import StubBundle, drain
 from market_helpers import CONFIG, RULES, START, Market, build_market, train
 from pydantic import ValidationError
@@ -747,11 +748,7 @@ def test_the_monitor_command_with_an_old_bundle_says_there_is_no_baseline(
 def test_the_monitor_command_refuses_the_application_role(
     database: str, capsys: pytest.CaptureFixture[str]
 ):
-    from api_helpers import APP_CREDENTIAL
-
-    url = sa.make_url(database).set(username="txrisk_app", password=APP_CREDENTIAL)
-
-    code = main(["monitor", "--database-url", url.render_as_string(hide_password=False)])
+    code = main(["monitor", "--database-url", as_app_role(database)])
 
     assert code == 2
     assert "owner" in capsys.readouterr().err
