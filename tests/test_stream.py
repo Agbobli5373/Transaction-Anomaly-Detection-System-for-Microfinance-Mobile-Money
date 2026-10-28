@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any
 
 import pytest
+import redis
 import sqlalchemy as sa
 from api_helpers import settings
 from confluent_kafka import Consumer
@@ -28,7 +29,14 @@ from txrisk.events import (
     ensure_topics,
 )
 from txrisk.features import Transaction
-from txrisk.store import Scored, StoredScoring, create_engine, records
+from txrisk.store import (
+    PostgresHistory,
+    RedisHistoryCache,
+    Scored,
+    StoredScoring,
+    create_engine,
+    records,
+)
 
 FRIEND = "w-friend"
 STRANGER = "w-stranger"
@@ -54,10 +62,10 @@ class Stream:
     topics: Topics
     database: str
 
-    def scoring(self) -> StoredScoring:
+    def scoring(self, cache: RedisHistoryCache | None = None) -> StoredScoring:
         api = settings(self.database)
         return StoredScoring(
-            create_engine(self.database), features=api.features(), rules=api.rules()
+            create_engine(self.database), features=api.features(), rules=api.rules(), cache=cache
         )
 
     def worker(self, scoring: Any = None, *, group: str = "workers") -> ScoringWorker:
@@ -253,6 +261,34 @@ def test_redelivered_events_republish_the_stored_results_without_scoring_again(s
     assert all(len(payloads) == 1 for payloads in after.values())
     assert stream.count("risk_assessments") == len(day)
     assert stream.count("alerts") == 1
+
+
+def test_a_worker_keeps_the_history_cache_in_step_with_what_it_stores(
+    stream: Stream, redis_url: str
+):
+    client = redis.Redis.from_url(redis_url)
+    client.flushall()
+    cache = RedisHistoryCache(client)
+    day = _day_of_transactions()
+    stream.publish(
+        SimSwapRecorded(wallet_id=SUBJECT, occurred_at=NOW + 2 * HOUR),
+        *map(TransactionCreated.of, day),
+    )
+    worker = stream.worker(stream.scoring(cache))
+    run_until(worker, len(day))
+    worker.close()
+
+    end = NOW + 2 * DAY
+    during_scoring = dict(cache.reads)
+    engine = create_engine(stream.database)
+    with engine.connect() as connection:
+        cached = cache.history(connection).subject_history(SUBJECT, end)
+        assert cached == PostgresHistory(connection).subject_history(SUBJECT, end)
+    assert cache.reads["hit"] == during_scoring["hit"] + 1  # served from Redis, not Postgres
+    assert cache.reads["fallback"] == during_scoring["fallback"]
+    assert len(cached.transactions) == len(routine()) + len(day)
+    engine.dispose()
+    client.close()
 
 
 def test_a_restarted_worker_resumes_after_what_it_committed(stream: Stream):
