@@ -142,7 +142,8 @@ jobs:
 
   # The compose stack starts: Postgres, Keycloak, Redpanda, the migration job, an API that
   # reports ready and accepts a demo user's token and an API key, and a scoring worker that
-  # creates the event topics.
+  # creates the event topics. Prometheus scrapes the API and the worker, Grafana loads its
+  # provisioned datasources and the Operations dashboard, and Jaeger receives the API's traces.
   compose:
     runs-on: ubuntu-latest
     steps:
@@ -150,12 +151,15 @@ jobs:
       # Throwaway credentials for this run only, in the .env compose reads; none is committed.
       - run: |
           generated=$(openssl rand -hex 16)
-          grep -v -E '^(POSTGRES_|PG)PASSWORD=' .env.example > .env
-          for key in POSTGRES_PASSWORD PGPASSWORD; do echo "$key=$generated" >> .env; done
+          grep -v -E '^((POSTGRES_|PG)PASSWORD|GF_SECURITY_ADMIN_PASSWORD|TXRISK_TRACING_ENABLED)=' .env.example > .env
+          for key in POSTGRES_PASSWORD PGPASSWORD GF_SECURITY_ADMIN_PASSWORD; do
+            echo "$key=$generated" >> .env
+          done
+          echo "TXRISK_TRACING_ENABLED=true" >> .env
           for key in TXRISK_DEMO_SIGNIN_ANALYST TXRISK_DEMO_SIGNIN_SUPERVISOR TXRISK_DEMO_SIGNIN_ADMIN; do
             echo "$key=$(openssl rand -hex 16)"
           done > keycloak.env
-      - run: docker compose up --build --detach --wait api worker keycloak
+      - run: docker compose up --build --detach --wait api worker keycloak prometheus grafana jaeger
       - run: curl --fail --silent http://127.0.0.1:8000/v1/ready
       - run: curl --fail --silent http://127.0.0.1:8000/v1/openapi.json > /dev/null
       # /v1 refuses a caller without a credential, and accepts the demo Analyst signed in through
@@ -175,6 +179,37 @@ jobs:
           for _ in $(seq 30); do
             if docker compose exec -T redpanda rpk group describe txrisk-scoring 2>/dev/null \
                 | grep -q 'transaction.created'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+      # /metrics is not part of the API: it is on a port of its own that compose does not publish.
+      - run: test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8000/metrics)" = 404
+      # Prometheus scrapes the API and the worker (both targets up).
+      - run: |
+          for _ in $(seq 30); do
+            up=$(curl --silent http://127.0.0.1:9090/api/v1/targets \
+              | python3 -c 'import json,sys; t = json.load(sys.stdin)["data"]["activeTargets"]; print(*sorted(x["labels"]["job"] for x in t if x["health"] == "up"))')
+            case " $up " in *" api "*" worker "*) exit 0 ;; esac
+            sleep 2
+          done
+          echo "targets up: $up"
+          exit 1
+      # Grafana has the provisioned datasources, healthy, and the Operations dashboard.
+      - run: |
+          # The throwaway value is the same for every password key in .env (PGPASSWORD).
+          . ./.env
+          grafana() { curl --fail --silent --user "admin:$PGPASSWORD" "http://127.0.0.1:3001/api/$1"; }
+          grafana dashboards/uid/txrisk-operations | grep -q '"title":"Operations"'
+          for uid in prometheus jaeger; do
+            grafana "datasources/uid/$uid/health" | grep -q '"status":"OK"'
+          done
+      # Tracing is on in this run: the API's requests reach Jaeger.
+      - run: |
+          for _ in $(seq 30); do
+            curl --fail --silent http://127.0.0.1:8000/v1/health > /dev/null
+            if curl --fail --silent http://127.0.0.1:16686/api/services | grep -q txrisk-api; then
               exit 0
             fi
             sleep 2

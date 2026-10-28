@@ -1,0 +1,34 @@
+# Scrapes every txrisk service's metrics port, found by DNS so that `--scale worker=3` is three
+# targets. The ports are reachable on the compose network only; nothing is published.
+#   api     :9101  (TXRISK_METRICS_PORT, apart from the API's own port: /metrics is not part of
+#                   /v1 and needs no credential)
+#   worker  :9100
+#   replay  :9102  (a one-off job: a target only while `docker compose run --use-aliases replay`
+#                   runs; `produce` publishes on the same port)
+# The scheduler runs on the host (`make scheduler`); give it `--metrics-port` and add it here.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: api
+    dns_sd_configs:
+      - names: [api]
+        type: A
+        port: 9101
+        refresh_interval: 5s
+  - job_name: worker
+    dns_sd_configs:
+      - names: [worker]
+        type: A
+        port: 9100
+        refresh_interval: 5s
+  - job_name: replay
+    dns_sd_configs:
+      - names: [replay]
+        type: A
+        port: 9102
+        refresh_interval: 5s
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]

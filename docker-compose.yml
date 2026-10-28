@@ -7,6 +7,10 @@
 #   docker compose up --scale worker=3    # more workers share transaction.created's partitions
 #   docker compose run --rm replay        # replay the live days (with Fraud discoveries) at a day a minute
 #   make scheduler                        # fire the scheduled jobs as the simulation clock advances
+#   docker compose run --rm --use-aliases replay   # as above, with its metrics scraped by Prometheus
+#   Grafana http://localhost:3001 (Operations dashboard; admin password GF_SECURITY_ADMIN_PASSWORD in
+#   .env), Prometheus http://localhost:9090, Jaeger http://localhost:16686 (traces need
+#   TXRISK_TRACING_ENABLED=true in .env); all published on this machine only.
 #   docker compose run --rm backup        # one Postgres backup into the `backups` volume (docs/runbooks/restore.md)
 # Set TXRISK_MODEL_BUNDLE=/models/<version> in .env to score with a bundle from `make train`;
 # without it the rules alone score.
@@ -15,7 +19,7 @@ x-txrisk: &txrisk
   build: .
   image: txrisk:dev
   env_file: .env
-  environment:
+  environment: &txrisk-environment
     # No credential in the URL: libpq reads the database password from PGPASSWORD in .env.
     TXRISK_DATABASE_URL: postgresql://txrisk@postgres:5432/txrisk
     # Tokens name the realm as browsers reach it; the API fetches its signing keys in-network.
@@ -26,6 +30,9 @@ x-txrisk: &txrisk
     TXRISK_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
     # The recent-history cache (ADR 0006). Every service that stores Transactions must use it.
     TXRISK_REDIS_URL: redis://redis:6379/0
+    # Tracing is off unless .env sets TXRISK_TRACING_ENABLED=true; spans then go to Jaeger.
+    TXRISK_TRACING_ENABLED: ${TXRISK_TRACING_ENABLED:-false}
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
 
 services:
   postgres:
@@ -141,6 +148,9 @@ services:
     <<: *txrisk
     profiles: ["produce"]
     command: ["txrisk", "produce", "--data", "/data/generated"]
+    environment:
+      <<: *txrisk-environment
+      TXRISK_METRICS_PORT: "9102"
     volumes:
       - ./data:/data:ro
     depends_on:
@@ -154,6 +164,9 @@ services:
     <<: *txrisk
     profiles: ["replay"]
     command: ["txrisk", "replay", "--data", "/data/generated"]
+    environment:
+      <<: *txrisk-environment
+      TXRISK_METRICS_PORT: "9102"
     volumes:
       - ./data:/data:ro
     depends_on:
@@ -185,6 +198,10 @@ services:
   api:
     <<: *txrisk
     command: ["txrisk", "serve", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: *txrisk-environment
+      # Prometheus metrics, on a port of their own that is not published (see deploy/prometheus).
+      TXRISK_METRICS_PORT: "9101"
     ports:
       - "8000:8000"
     volumes:
@@ -214,6 +231,9 @@ services:
     <<: *txrisk
     command: ["txrisk", "worker"]
     restart: unless-stopped
+    environment:
+      <<: *txrisk-environment
+      TXRISK_METRICS_PORT: "9100"
     volumes:
       - ./models:/models:ro
     depends_on:
@@ -224,7 +244,60 @@ services:
       redis:
         condition: service_healthy
 
+  # Metrics: Prometheus scrapes every service's metrics
+  # port over the compose network, and Grafana shows the provisioned Operations dashboard.
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:9090/-/ready"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # The admin password is GF_SECURITY_ADMIN_PASSWORD in .env, which Grafana reads natively;
+  # deploy/grafana/start.sh refuses to start without it. Datasources and the dashboard are
+  # provisioned from deploy/grafana and cannot be edited in the UI. Port 3001: 3000 is the workbench.
+  grafana:
+    image: grafana/grafana:12.2.0
+    entrypoint: ["sh", "/opt/txrisk/start.sh"]
+    env_file: .env
+    environment:
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - ./deploy/grafana/start.sh:/opt/txrisk/start.sh:ro
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      - prometheus
+      - jaeger
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:3000/api/health"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  # Traces: services send OTLP/HTTP to jaeger:4318 when TXRISK_TRACING_ENABLED=true. Spans are
+  # kept in memory, so they are gone when it restarts.
+  jaeger:
+    image: jaegertracing/jaeger:2.11.0
+    ports:
+      - "127.0.0.1:16686:16686"
+
 volumes:
   pgdata:
   redpanda:
   backups:
+  prometheus:
