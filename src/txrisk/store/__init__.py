@@ -13,6 +13,7 @@ from txrisk.store.backup import (
     prune,
     restore,
 )
+from txrisk.store.challenger import ChallengerModel, challenger_version
 from txrisk.store.clock import ClockNotStarted, SimulationClock
 from txrisk.store.database import (
     create_app_engine,
@@ -33,6 +34,7 @@ __all__ = [
     "APP_ROLE",
     "BackupConfig",
     "BackupError",
+    "ChallengerModel",
     "ClockNotStarted",
     "FraudLabel",
     "FraudLabels",
@@ -51,6 +53,7 @@ __all__ = [
     "UnknownParty",
     "backup",
     "cases",
+    "challenger_version",
     "check_restore",
     "create_app_engine",
     "create_engine",

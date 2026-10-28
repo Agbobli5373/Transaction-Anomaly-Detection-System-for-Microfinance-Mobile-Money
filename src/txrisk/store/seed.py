@@ -1,7 +1,13 @@
 """Seeding Postgres from a generated dataset: the parties, and the history before a cutoff.
 
-Only the tables the running system may see are read. Ground truth, Fraud discoveries and Benign
-anomalies are never opened (ADR 0007), so the seeded history carries no labels at all.
+Only what the running system may see is read: the parties, SIM swaps, Transactions and Fraud
+discoveries. Ground truth and Benign anomalies are never opened (ADR 0007).
+
+A Fraud discovery is seeded as a Fraud label, dated by its own event time, only if it happened
+before the cutoff. That is what a running system would hold at the cutoff had it been receiving
+`fraud.discovered` events all along, and it is what retraining learns from once the live period
+starts: without these labels the first retrain would see no Fraud at all. A discovery after the
+cutoff is not seeded; the replay publishes it at its event time, as it would arrive.
 """
 
 import io
@@ -13,12 +19,28 @@ import pandas as pd
 import psycopg
 import sqlalchemy as sa
 
-from txrisk.store.tables import agents, billers, merchants, sim_swaps, transactions, wallets
+from txrisk.store.tables import (
+    agents,
+    billers,
+    fraud_labels,
+    merchants,
+    sim_swaps,
+    transactions,
+    wallets,
+)
 
 # Each table loaded, in an order that satisfies the foreign keys.
-SEEDED_TABLES = (wallets, agents, merchants, billers, sim_swaps, transactions)
-# Tables held to the cutoff; the parties are registered whenever they first appear.
-_HISTORY = {"sim_swaps", "transactions"}
+SEEDED_TABLES = (wallets, agents, merchants, billers, sim_swaps, transactions, fraud_labels)
+# Tables held to the cutoff, by the event-time column that decides it; the parties are
+# registered whenever they first appear.
+_HISTORY = {
+    "sim_swaps": "occurred_at",
+    "transactions": "occurred_at",
+    "fraud_labels": "discovered_at",
+}
+# The dataset file a table is loaded from, where it is not named for the table: a Fraud label is
+# what a Fraud discovery becomes.
+_SOURCE_FILE = {"fraud_labels": "fraud_discoveries"}
 _CHUNK_ROWS = 200_000
 
 
@@ -59,13 +81,14 @@ def _load(connection: sa.Connection, table: sa.Table, frame: pd.DataFrame) -> in
 
 def seed(engine: sa.Engine, data: Path, *, until: datetime) -> dict[str, int]:
     """Load the dataset in `data` as history: every party, and the SIM swaps and Transactions
-    that occurred before `until`. Returns the rows newly stored per table; seeding again adds
-    only what is missing."""
+    that occurred, and the Fraud discoveries that were made, before `until`. Returns the rows
+    newly stored per table; seeding again adds only what is missing."""
     counts = {}
     with engine.begin() as connection:
         for table in SEEDED_TABLES:
-            frame = _prepared(pd.read_parquet(data / f"{table.name}.parquet"), table)
+            source = _SOURCE_FILE.get(table.name, table.name)
+            frame = _prepared(pd.read_parquet(data / f"{source}.parquet"), table)
             if table.name in _HISTORY:
-                frame = frame[frame["occurred_at"] < until]
+                frame = frame[frame[_HISTORY[table.name]] < until]
             counts[table.name] = _load(connection, table, frame)
     return counts

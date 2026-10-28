@@ -33,6 +33,7 @@ from prometheus_client import start_http_server as _start_http_server
 
 from txrisk.scoring.metrics import (
     ALERTS_RESCORED,
+    CHALLENGER_SCORES,
     DEGRADED_ASSESSMENTS,
     MODEL_LOAD_FAILURES,
     RESCORED,
@@ -140,6 +141,12 @@ class Metrics:
                 ALERTS_RESCORED.removesuffix("_total"),
                 "Alerts raised by re-scoring, by the simulated day of the Transaction.",
                 ["day"],
+                registry=self.registry,
+            ),
+            CHALLENGER_SCORES: Counter(
+                CHALLENGER_SCORES.removesuffix("_total"),
+                "Transactions a Challenger model scored in shadow, by outcome.",
+                ["outcome"],
                 registry=self.registry,
             ),
             MODEL_LOAD_FAILURES: Counter(

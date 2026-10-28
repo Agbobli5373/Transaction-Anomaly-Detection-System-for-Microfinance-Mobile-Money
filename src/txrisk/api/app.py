@@ -128,6 +128,7 @@ def create_app(settings: ApiSettings, *, wall_clock: Callable[[], datetime] = _u
         bundle=settings.champion(metrics),
         cache=settings.history_cache(),
         metrics=metrics,
+        challenger=settings.challenger(engine),
     )
     scoring.model_health()  # load the bundle now, if it can be, so the first Transaction is fast
     clock = SimulationClock(engine)

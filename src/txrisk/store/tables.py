@@ -234,3 +234,37 @@ monitoring_metrics = sa.Table(
     sa.Column("member", sa.Text, primary_key=True, server_default=""),
     sa.Column("value", sa.Double, nullable=False),
 )
+
+retraining_runs = sa.Table(
+    "retraining_runs",
+    metadata,
+    sa.Column("run_id", sa.BigInteger, sa.Identity(always=True), primary_key=True),
+    sa.Column("trigger", sa.Text, nullable=False),
+    sa.Column("cutoff", _TIME, nullable=False),
+    sa.Column("bundle_version", sa.Text, nullable=False),
+    sa.Column("registry_version", sa.Text),
+    sa.Column("transactions", sa.BigInteger, nullable=False),
+    sa.Column("fraud_labels", sa.BigInteger, nullable=False),
+    sa.Column("reason", sa.Text, nullable=False),
+)
+
+challenger_model = sa.Table(
+    "challenger_model",
+    metadata,
+    sa.Column("singleton", sa.Boolean, primary_key=True),
+    sa.Column("bundle_version", sa.Text),
+    sa.Column("run_id", sa.BigInteger, sa.ForeignKey("retraining_runs.run_id")),
+)
+
+challenger_scores = sa.Table(
+    "challenger_scores",
+    metadata,
+    sa.Column("transaction_id", sa.Text, primary_key=True),
+    sa.Column("model_version", sa.Text, primary_key=True),
+    sa.Column("risk_score", sa.Double),
+    sa.Column("risk_band", sa.Text),
+    sa.Column("component_scores", JSONB),
+    sa.Column("error", sa.Text),
+    sa.Column("latency_ms", sa.Double, nullable=False),
+    sa.Column("assessed_at", _TIME, nullable=False),
+)

@@ -61,6 +61,11 @@ GRANTS: dict[str, tuple[str, ...]] = {
     "model_inputs": ("SELECT", "INSERT", "UPDATE"),
     # Written and read by the monitoring job, which runs as the owner; the application only reads.
     "monitoring_metrics": ("SELECT",),
+    # Retraining (`txrisk retrain`, the owner) writes the runs and moves the Challenger model; the
+    # application only reads which one it is. It stores what a Challenger scored, append-only.
+    "retraining_runs": ("SELECT",),
+    "challenger_model": ("SELECT",),
+    "challenger_scores": ("SELECT", "INSERT"),
 }
 
 

@@ -96,6 +96,9 @@ DATABASE_URL_ENV = "TXRISK_DATABASE_URL"
 KAFKA_ENV = "TXRISK_KAFKA_BOOTSTRAP_SERVERS"
 MODEL_BUNDLE_ENV = "TXRISK_MODEL_BUNDLE"
 PUSHGATEWAY_ENV = "TXRISK_PUSHGATEWAY_URL"
+MODELS_DIR_ENV = "TXRISK_MODELS_DIR"
+MLFLOW_URI_ENV = "TXRISK_MLFLOW_URI"
+MLFLOW_ARTIFACTS_ENV = "TXRISK_MLFLOW_ARTIFACTS"
 
 
 def _generate(args: argparse.Namespace) -> int:
@@ -691,6 +694,82 @@ def _monitor(args: argparse.Namespace) -> int:
     return 0
 
 
+def _retrain(args: argparse.Namespace) -> int:
+    from txrisk.retraining import (
+        AlreadyRunning,
+        NotEnoughHistory,
+        drift_finding,
+        load_retraining_config,
+        retrain,
+    )
+    from txrisk.retraining.job import DRIFT, WEEKLY
+
+    configure_logging()
+    url = _database_url(args)
+    if url is None:
+        return 2
+    if sa.make_url(url).username == APP_ROLE:
+        print(
+            f"error: retraining registers a model, which {APP_ROLE} may not; run it as the owner "
+            "(compose runs it in the job service)",
+            file=sys.stderr,
+        )
+        return 2
+    engine = create_engine(url)
+    with engine.connect() as connection:
+        pending = pending_migrations(connection)
+    if pending:
+        print(f"error: run `txrisk migrate` first; pending: {', '.join(pending)}", file=sys.stderr)
+        return 1
+    clock = SimulationClock(engine).peek()
+    if clock is None:
+        print("nothing retrained: the simulation clock has not started")
+        return 0
+    trigger, reason = WEEKLY, "weekly schedule"
+    if args.if_drift:
+        found = drift_finding(
+            engine,
+            clock=clock,
+            monitoring=load_monitoring_config(args.monitoring_config),
+            config=load_retraining_config(args.retraining_config),
+        )
+        if found is None:
+            print("nothing retrained: no drift action alert since the last retraining run")
+            return 0
+        trigger, reason = DRIFT, found
+    mlflow_uri = None if args.no_mlflow else args.mlflow_uri
+    try:
+        done = retrain(
+            engine,
+            trigger=trigger,
+            reason=reason,
+            clock=clock,
+            models=args.models,
+            rules=load_rules_config(args.rules_config),
+            features=_feature_config(args),
+            evaluation=load_evaluation_config(args.evaluation_config),
+            period_start=load_config(args.config).period.start,
+            seed=args.seed,
+            baseline_bins=load_monitoring_config(args.monitoring_config).baseline.bins,
+            mlflow_uri=mlflow_uri,
+            mlflow_artifacts=args.mlflow_artifacts,
+        )
+    except NotEnoughHistory as error:
+        print(f"nothing retrained: {error}")
+        return 0
+    except AlreadyRunning as error:
+        print(f"nothing retrained: {error}")
+        return 0
+    engine.dispose()
+    print(
+        f"retrained at {done.cutoff:%Y-%m-%d} ({done.reason}) on {done.transactions:,} "
+        f"Transactions and {done.fraud_labels:,} Fraud labels: Challenger model "
+        f"{done.bundle_version} in {done.folder}"
+        + (f", registered as {MODEL_NAME} version {done.registry_version}" if mlflow_uri else "")
+    )
+    return 0
+
+
 def _alert_sink(args: argparse.Namespace) -> int:
     from txrisk.monitoring import sink
 
@@ -756,6 +835,7 @@ def _stored_scoring(
         bundle=settings.champion(metrics),
         cache=settings.history_cache(),
         metrics=metrics,
+        challenger=settings.challenger(engine),
     )
     health = scoring.model_health()  # loads the bundle now, so a bad one is logged at startup
     if health.degraded:
@@ -1120,6 +1200,45 @@ def main(argv: list[str] | None = None) -> int:
         help=f"push the metrics to this Pushgateway for Prometheus (default: ${PUSHGATEWAY_ENV})",
     )
     mo.set_defaults(handler=_monitor)
+
+    rt = commands.add_parser(
+        "retrain",
+        help="train a new bundle from Postgres as of the simulation clock and register it as "
+        "the Challenger model, which workers then score in shadow",
+    )
+    rt.add_argument("--database-url", help=f"default: ${DATABASE_URL_ENV}")
+    rt.add_argument(
+        "--if-drift",
+        action="store_true",
+        help="retrain only if monitoring found a drift action alert since the last run "
+        "(otherwise it always retrains: the weekly job)",
+    )
+    rt.add_argument("--config", type=Path, default=Path("config/generator.toml"))
+    rt.add_argument("--feature-config", type=Path, default=Path("config/features.toml"))
+    rt.add_argument("--rules-config", type=Path, default=Path("config/rules.toml"))
+    rt.add_argument("--evaluation-config", type=Path, default=Path("config/evaluation.toml"))
+    rt.add_argument("--monitoring-config", type=Path, default=Path("config/monitoring.toml"))
+    rt.add_argument("--retraining-config", type=Path, default=Path("config/retraining.toml"))
+    rt.add_argument("--seed", type=int, default=STACKED_SEED)
+    rt.add_argument(
+        "--models",
+        type=Path,
+        default=Path(os.environ.get(MODELS_DIR_ENV) or "models"),
+        help=f"where bundles live, as <models>/<version>/ (default: ${MODELS_DIR_ENV} or models)",
+    )
+    rt.add_argument(
+        "--mlflow-uri",
+        default=os.environ.get(MLFLOW_URI_ENV) or "sqlite:///mlflow.db",
+        help=f"MLflow tracking URI (default: ${MLFLOW_URI_ENV} or a local file)",
+    )
+    rt.add_argument(
+        "--mlflow-artifacts",
+        type=Path,
+        default=Path(os.environ.get(MLFLOW_ARTIFACTS_ENV) or "mlruns"),
+        help=f"where a new MLflow experiment keeps artifacts (default: ${MLFLOW_ARTIFACTS_ENV})",
+    )
+    rt.add_argument("--no-mlflow", action="store_true", help="save the bundle only")
+    rt.set_defaults(handler=_retrain)
 
     snk = commands.add_parser(
         "alert-sink", help="run the webhook that records the alerts Alertmanager sends"

@@ -17,6 +17,8 @@ DEGRADED_ASSESSMENTS = "txrisk_degraded_assessments_total"
 ALERTS_RESCORED = "txrisk_alerts_rescored_total"
 # A Degraded Transaction was re-scored by the full model.
 RESCORED = "txrisk_rescored_total"
+# A Challenger model scored a Transaction in shadow, labelled `outcome`: scored or error.
+CHALLENGER_SCORES = "txrisk_challenger_scores_total"
 # Loading the Champion model bundle failed.
 MODEL_LOAD_FAILURES = "txrisk_model_load_failures_total"
 

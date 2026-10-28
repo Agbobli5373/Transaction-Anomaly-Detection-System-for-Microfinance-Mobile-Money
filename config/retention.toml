@@ -12,6 +12,8 @@ fraud_labels = 365
 # writes (its daily metrics).
 model_inputs = 30
 monitoring_metrics = 365
+# What Challenger models scored in shadow; the shadow gate reads the most recent days.
+challenger_scores = 30
 # Days of real time, not event time: audit entries are stamped with the wall clock. Purged only
 # through audit_log_purge (migration 0004); the database refuses anything under 365.
 audit_log = 2555

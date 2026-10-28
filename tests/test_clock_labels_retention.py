@@ -181,6 +181,26 @@ def test_purge_deletes_what_is_older_than_each_tables_retention(stocked: sa.Engi
     assert [label.transaction_id for label in labels.known_at(NOW)] == ["T-new"]
 
 
+def test_purge_deletes_old_challenger_scores_by_event_time(stocked: sa.Engine):
+    with stocked.begin() as connection:
+        for name, age in (("T-old", 20), ("T-new", 3)):
+            connection.execute(
+                sa.text(
+                    "INSERT INTO challenger_scores (transaction_id, model_version, risk_score, "
+                    "risk_band, component_scores, latency_ms, assessed_at) "
+                    "VALUES (:id, 'risk-x', 1.0, 'Low', '{}', 2.0, :at)"
+                ),
+                {"id": name, "at": NOW - age * DAY},
+            )
+
+    purged = purge(stocked, SimulationClock(stocked), retention(challenger_scores=10))
+
+    assert purged is not None and purged.deleted["challenger_scores"] == 1
+    with stocked.connect() as connection:
+        left = connection.execute(sa.text("SELECT transaction_id FROM challenger_scores")).all()
+    assert [row.transaction_id for row in left] == ["T-new"]
+
+
 def test_purge_keeps_a_row_exactly_one_retention_period_old(stocked: sa.Engine):
     purge(
         stocked,
