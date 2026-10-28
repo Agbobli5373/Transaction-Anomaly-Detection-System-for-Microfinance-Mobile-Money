@@ -140,8 +140,9 @@ jobs:
           # Event schemas are every schemas/*.json; there is nothing to compare until they exist.
           uv run python -m txrisk.contract_check schemas ../base/schemas schemas
 
-  # The compose stack starts: Postgres, Redpanda, the migration job, an API that reports ready,
-  # and a scoring worker that creates the event topics.
+  # The compose stack starts: Postgres, Keycloak, Redpanda, the migration job, an API that
+  # reports ready and accepts a demo user's token and an API key, and a scoring worker that
+  # creates the event topics.
   compose:
     runs-on: ubuntu-latest
     steps:
@@ -151,9 +152,24 @@ jobs:
           generated=$(openssl rand -hex 16)
           grep -v -E '^(POSTGRES_|PG)PASSWORD=' .env.example > .env
           for key in POSTGRES_PASSWORD PGPASSWORD; do echo "$key=$generated" >> .env; done
-      - run: docker compose up --build --detach --wait api worker
+          for key in TXRISK_DEMO_SIGNIN_ANALYST TXRISK_DEMO_SIGNIN_SUPERVISOR TXRISK_DEMO_SIGNIN_ADMIN; do
+            echo "$key=$(openssl rand -hex 16)"
+          done > keycloak.env
+      - run: docker compose up --build --detach --wait api worker keycloak
       - run: curl --fail --silent http://127.0.0.1:8000/v1/ready
       - run: curl --fail --silent http://127.0.0.1:8000/v1/openapi.json > /dev/null
+      # /v1 refuses a caller without a credential, and accepts the demo Analyst signed in through
+      # Keycloak and a service with an API key issued by the operator command.
+      - run: test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8000/v1/alerts)" = 401
+      # The API container never sees the demo sign-in values, so this one-off container gets
+      # the Analyst's from the runner's shell.
+      - run: |
+          set -a; . ./keycloak.env; set +a
+          bearer=$(docker compose run --rm --no-deps -e TXRISK_DEMO_SIGNIN_ANALYST api txrisk demo-sign-in analyst --realm-url http://keycloak:8080/realms/txrisk)
+          curl --fail --silent --header "Authorization: Bearer $bearer" http://127.0.0.1:8000/v1/alerts
+      - run: |
+          issued=$(docker compose exec -T api txrisk api-key --name ci-smoke --scope models:read)
+          curl --fail --silent --header "X-API-Key: $issued" http://127.0.0.1:8000/v1/models/active
       # The worker is consuming once its topics exist and it has joined its consumer group.
       - run: |
           for _ in $(seq 30); do

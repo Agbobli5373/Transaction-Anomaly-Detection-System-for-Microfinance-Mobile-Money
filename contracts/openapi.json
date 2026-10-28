@@ -99,6 +99,148 @@
         "title": "AlertPage",
         "type": "object"
       },
+      "ApiKeyIn": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "rate_limit_per_minute": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 100000.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate Limit Per Minute"
+          },
+          "scopes": {
+            "items": {
+              "enum": [
+                "alerts:read",
+                "models:read",
+                "score:write",
+                "transactions:read"
+              ],
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Scopes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "scopes"
+        ],
+        "title": "ApiKeyIn",
+        "type": "object"
+      },
+      "ApiKeyOut": {
+        "additionalProperties": false,
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "key_id": {
+            "title": "Key Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "rate_limit_per_minute": {
+            "title": "Rate Limit Per Minute",
+            "type": "integer"
+          },
+          "replaces": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replaces"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scopes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "key_id",
+          "name",
+          "scopes",
+          "rate_limit_per_minute",
+          "created_at",
+          "created_by",
+          "expires_at",
+          "revoked_at",
+          "replaces",
+          "active"
+        ],
+        "title": "ApiKeyOut",
+        "type": "object"
+      },
       "AssessmentOut": {
         "additionalProperties": false,
         "properties": {
@@ -174,6 +316,24 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "IssuedApiKeyOut": {
+        "additionalProperties": false,
+        "properties": {
+          "api_key": {
+            "$ref": "#/components/schemas/ApiKeyOut"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "api_key"
+        ],
+        "title": "IssuedApiKeyOut",
+        "type": "object"
+      },
       "ReasonOut": {
         "additionalProperties": false,
         "properties": {
@@ -206,6 +366,26 @@
           "value"
         ],
         "title": "ReasonOut",
+        "type": "object"
+      },
+      "RotationIn": {
+        "additionalProperties": false,
+        "properties": {
+          "overlap_minutes": {
+            "anyOf": [
+              {
+                "maximum": 43200.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overlap Minutes"
+          }
+        },
+        "title": "RotationIn",
         "type": "object"
       },
       "Status": {
@@ -557,10 +737,23 @@
         "title": "ValidationError",
         "type": "object"
       }
+    },
+    "securitySchemes": {
+      "APIKeyHeader": {
+        "description": "A scoped API key, for services.",
+        "in": "header",
+        "name": "X-API-Key",
+        "type": "apiKey"
+      },
+      "HTTPBearer": {
+        "description": "A Keycloak access token for a person signed in to the realm.",
+        "scheme": "bearer",
+        "type": "http"
+      }
     }
   },
   "info": {
-    "description": "Scores mobile money Transactions for risk and explains why. Advisory only: it raises Alerts for people to review and never blocks a Transaction.",
+    "description": "Scores mobile money Transactions for risk and explains why. Advisory only: it raises Alerts for people to review and never blocks a Transaction.\n\nPeople call with a Keycloak access token (`Authorization: Bearer ...`); services with a scoped API key (`X-API-Key: ...`). Health and readiness are open.",
     "title": "Transaction risk scoring",
     "version": "1"
   },
@@ -568,7 +761,7 @@
   "paths": {
     "/v1/alerts": {
       "get": {
-        "description": "Alerts, newest first.",
+        "description": "Alerts, newest first. For Analysts and Supervisors, or the `alerts:read` scope.",
         "operationId": "get_alerts_v1_alerts_get",
         "parameters": [
           {
@@ -629,6 +822,12 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles or scopes do not permit this"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -638,17 +837,274 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "description": "The API key's rate limit is exceeded; see Retry-After"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
         "summary": "Get Alerts",
         "tags": [
           "alerts"
         ]
       }
     },
+    "/v1/api-keys": {
+      "get": {
+        "description": "Every key ever issued, revoked and expired ones included, oldest first. Never the\nkeys themselves.",
+        "operationId": "list_api_keys_v1_api_keys_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ApiKeyOut"
+                  },
+                  "title": "Response List Api Keys V1 Api Keys Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles or scopes do not permit this"
+          },
+          "429": {
+            "description": "The API key's rate limit is exceeded; see Retry-After"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "List Api Keys",
+        "tags": [
+          "api keys"
+        ]
+      },
+      "post": {
+        "description": "Issue a key for a service. The key is in this response only: just its hash is\nstored.",
+        "operationId": "issue_api_key_v1_api_keys_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApiKeyIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedApiKeyOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles or scopes do not permit this"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "description": "The API key's rate limit is exceeded; see Retry-After"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Issue Api Key",
+        "tags": [
+          "api keys"
+        ]
+      }
+    },
+    "/v1/api-keys/{key_id}": {
+      "delete": {
+        "description": "Revoke a key at once, as after a leak.",
+        "operationId": "revoke_api_key_v1_api_keys__key_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles or scopes do not permit this"
+          },
+          "404": {
+            "description": "No such API key"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "description": "The API key's rate limit is exceeded; see Retry-After"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Revoke Api Key",
+        "tags": [
+          "api keys"
+        ]
+      }
+    },
+    "/v1/api-keys/{key_id}/rotate": {
+      "post": {
+        "description": "Issue a replacement with the same name, scopes, rate limit and expiry. The old key\nkeeps working for the overlap (a day by default), so the service switches without\ndowntime. A key is rotated once; rotate its replacement next time.",
+        "operationId": "rotate_api_key_v1_api_keys__key_id__rotate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RotationIn"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Rotation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedApiKeyOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles or scopes do not permit this"
+          },
+          "404": {
+            "description": "No such API key"
+          },
+          "409": {
+            "description": "The key is revoked, expired or already rotated"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "description": "The API key's rate limit is exceeded; see Retry-After"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Rotate Api Key",
+        "tags": [
+          "api keys"
+        ]
+      }
+    },
     "/v1/health": {
       "get": {
-        "description": "Liveness: the process is up. It does not touch the database.",
+        "description": "Liveness: the process is up. It does not touch the database. Open to all.",
         "operationId": "health_v1_health_get",
         "responses": {
           "200": {
@@ -670,7 +1126,7 @@
     },
     "/v1/models/active": {
       "get": {
-        "description": "The model version that scores, and its Risk band thresholds.",
+        "description": "The model version that scores, and its Risk band thresholds. For every role, or the\n`models:read` scope.",
         "operationId": "get_active_model_v1_models_active_get",
         "responses": {
           "200": {
@@ -682,8 +1138,25 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles or scopes do not permit this"
+          },
+          "429": {
+            "description": "The API key's rate limit is exceeded; see Retry-After"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
         "summary": "Get Active Model",
         "tags": [
           "models"
@@ -692,7 +1165,7 @@
     },
     "/v1/ready": {
       "get": {
-        "description": "Readiness: the database answers and every migration has been applied.",
+        "description": "Readiness: the database answers and every migration has been applied. Open to all.",
         "operationId": "ready_v1_ready_get",
         "responses": {
           "200": {
@@ -724,7 +1197,7 @@
     },
     "/v1/score": {
       "post": {
-        "description": "Score a Transaction and store it with its Risk assessment; a High Risk band raises\nan Alert. Idempotent on `transaction_id`: a repeat returns the stored assessment, marked\nwith the `Idempotent-Replayed: true` header, and raises no second Alert.",
+        "description": "Score a Transaction and store it with its Risk assessment; a High Risk band raises\nan Alert. Idempotent on `transaction_id`: a repeat returns the stored assessment, marked\nwith the `Idempotent-Replayed: true` header, and raises no second Alert.\nNeeds the `score:write` scope.",
         "operationId": "score_v1_score_post",
         "requestBody": {
           "content": {
@@ -747,6 +1220,12 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles or scopes do not permit this"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -756,8 +1235,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "description": "The API key's rate limit is exceeded; see Retry-After"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
         "summary": "Score",
         "tags": [
           "scoring"
@@ -766,7 +1256,7 @@
     },
     "/v1/transactions/{transaction_id}": {
       "get": {
-        "description": "A stored Transaction and its Risk assessment, if it was scored.",
+        "description": "A stored Transaction and its Risk assessment, if it was scored. For Analysts and\nSupervisors, or the `transactions:read` scope.",
         "operationId": "get_transaction_v1_transactions__transaction_id__get",
         "parameters": [
           {
@@ -790,6 +1280,12 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "description": "No credential, or an invalid, expired or revoked one"
+          },
+          "403": {
+            "description": "The caller's roles or scopes do not permit this"
+          },
           "404": {
             "description": "No such Transaction"
           },
@@ -802,8 +1298,19 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "description": "The API key's rate limit is exceeded; see Retry-After"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
         "summary": "Get Transaction",
         "tags": [
           "transactions"

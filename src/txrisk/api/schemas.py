@@ -2,16 +2,38 @@
 
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    WithJsonSchema,
+    model_validator,
+)
 
+from txrisk.api.auth import SCOPES
 from txrisk.features import Transaction
 from txrisk.scoring import RiskAssessment
+from txrisk.store.api_keys import ApiKeyRecord
 from txrisk.store.tables import COUNTERPARTY_COLUMNS
 
 TransactionType = Literal["cash_in", "cash_out", "transfer", "payment", "bill_payment"]
 _ID = Field(min_length=1, max_length=128)
+
+
+def _known_scope(scope: str) -> str:
+    if scope not in SCOPES:
+        raise ValueError(f"unknown scope {scope!r}; one of {', '.join(SCOPES)}")
+    return scope
+
+
+# A scope an API key may carry.
+Scope = Annotated[
+    str, AfterValidator(_known_scope), WithJsonSchema({"type": "string", "enum": list(SCOPES)})
+]
 
 
 class _Body(BaseModel):
@@ -169,3 +191,55 @@ class ActiveModel(_Body):
 class Status(_Body):
     status: Literal["ok", "unavailable"]
     detail: str | None = None
+
+
+class ApiKeyIn(_Body):
+    # Which service will hold the key.
+    name: str = Field(min_length=1, max_length=64)
+    scopes: list[Scope] = Field(min_length=1)
+    # Requests a minute; the API's default when null.
+    rate_limit_per_minute: int | None = Field(default=None, gt=0, le=100_000)
+    # When it stops working; null for never (rotate or revoke it instead).
+    expires_at: AwareDatetime | None = None
+
+
+class RotationIn(_Body):
+    # How long the old key keeps working alongside the new one; the API's default when null.
+    # Zero ends it at once.
+    overlap_minutes: int | None = Field(default=None, ge=0, le=30 * 24 * 60)
+
+
+class ApiKeyOut(_Body):
+    key_id: str
+    name: str
+    scopes: list[str]
+    rate_limit_per_minute: int
+    created_at: datetime
+    created_by: str
+    expires_at: datetime | None
+    revoked_at: datetime | None
+    # The key this one was rotated from.
+    replaces: str | None
+    # Whether the key is accepted now.
+    active: bool
+
+    @classmethod
+    def of(cls, record: ApiKeyRecord, now: datetime) -> "ApiKeyOut":
+        return cls(
+            key_id=record.key_id,
+            name=record.name,
+            scopes=sorted(record.scopes),
+            rate_limit_per_minute=record.rate_limit_per_minute,
+            created_at=record.created_at,
+            created_by=record.created_by,
+            expires_at=record.expires_at,
+            revoked_at=record.revoked_at,
+            replaces=record.replaces,
+            active=record.active(now),
+        )
+
+
+class IssuedApiKeyOut(_Body):
+    # The whole key, to send in the X-API-Key header. Shown this once: only its hash is stored.
+    key: str
+    api_key: ApiKeyOut
