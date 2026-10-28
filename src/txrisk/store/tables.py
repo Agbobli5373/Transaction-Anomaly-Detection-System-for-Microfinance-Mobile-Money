@@ -106,6 +106,47 @@ alerts = sa.Table(
     sa.Column("transaction_id", sa.Text, nullable=False, unique=True),
     sa.Column("subject_wallet_id", sa.Text, nullable=False),
     sa.Column("raised_at", _TIME, nullable=False),
+    sa.Column("case_id", sa.BigInteger, sa.ForeignKey("cases.case_id"), nullable=False),
+)
+
+cases = sa.Table(
+    "cases",
+    metadata,
+    sa.Column("case_id", sa.BigInteger, sa.Identity(always=True), primary_key=True),
+    sa.Column("subject_wallet_id", sa.Text, sa.ForeignKey("wallets.wallet_id"), nullable=False),
+    sa.Column("status", sa.Text, nullable=False),
+    sa.Column("opened_at", _TIME, nullable=False),
+    sa.Column("assignee_id", sa.Text),
+    sa.Column("assignee_name", sa.Text),
+    sa.Column("assigned_by", sa.Text),
+    sa.Column("closed_at", _TIME),
+    sa.Column("closed_by_id", sa.Text),
+    sa.Column("closed_by_name", sa.Text),
+)
+
+case_events = sa.Table(
+    "case_events",
+    metadata,
+    sa.Column("event_id", sa.BigInteger, sa.Identity(always=True), primary_key=True),
+    sa.Column("case_id", sa.BigInteger, sa.ForeignKey("cases.case_id"), nullable=False),
+    sa.Column("kind", sa.Text, nullable=False),
+    sa.Column("occurred_at", _TIME, nullable=False),
+    sa.Column("actor_id", sa.Text, nullable=False),
+    sa.Column("actor_name", sa.Text, nullable=False),
+    sa.Column("body", sa.Text),
+    sa.Column("from_status", sa.Text),
+    sa.Column("to_status", sa.Text),
+    sa.Column("assignee_id", sa.Text),
+)
+
+outbox = sa.Table(
+    "outbox",
+    metadata,
+    sa.Column("outbox_id", sa.BigInteger, sa.Identity(always=True), primary_key=True),
+    sa.Column("topic", sa.Text, nullable=False),
+    sa.Column("key", sa.Text, nullable=False),
+    sa.Column("payload", sa.Text, nullable=False),
+    sa.Column("published", sa.Boolean, nullable=False),
 )
 
 # The column holding each Transaction type's Counterparty.

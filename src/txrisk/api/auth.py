@@ -74,7 +74,25 @@ MANAGE_API_KEYS = Permission("issue, rotate and revoke API keys", frozenset({Rol
 # People only, and Admins only: the audit log is read by whoever is accountable for access.
 READ_AUDIT = Permission("read the audit log", frozenset({Role.ADMIN}), None)
 
-PERMISSIONS = (SCORE, READ_TRANSACTIONS, READ_ALERTS, READ_MODELS, MANAGE_API_KEYS, READ_AUDIT)
+# Cases and the watch list are for the people who work them: no API key scope reaches them.
+READ_CASES = Permission("read Cases", PEOPLE_WHO_INVESTIGATE, None)
+ASSIGN_CASES = Permission("assign Cases to Analysts", frozenset({Role.SUPERVISOR}), None)
+# Further limited, in the Case itself, to the assigned Analyst or a Supervisor.
+WORK_CASES = Permission("add notes to and move Cases", PEOPLE_WHO_INVESTIGATE, None)
+READ_WATCHLIST = Permission("read the Medium watch list", PEOPLE_WHO_INVESTIGATE, None)
+
+PERMISSIONS = (
+    SCORE,
+    READ_TRANSACTIONS,
+    READ_ALERTS,
+    READ_MODELS,
+    MANAGE_API_KEYS,
+    READ_AUDIT,
+    READ_CASES,
+    ASSIGN_CASES,
+    WORK_CASES,
+    READ_WATCHLIST,
+)
 # Every scope an API key may carry.
 SCOPES = tuple(sorted(p.scope for p in PERMISSIONS if p.scope is not None))
 

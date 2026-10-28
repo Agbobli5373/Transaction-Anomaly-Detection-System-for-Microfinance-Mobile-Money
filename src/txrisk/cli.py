@@ -29,6 +29,7 @@ from txrisk.evaluation.scorers import (
 from txrisk.events import (
     DEFAULT_SECONDS_PER_DAY,
     EVENTS,
+    OutboxPublisher,
     Pacer,
     Publisher,
     ScoringWorker,
@@ -635,6 +636,35 @@ def _rescore(args: argparse.Namespace) -> int:
     return 3 if result.stopped else 0
 
 
+def _outbox(args: argparse.Namespace) -> int:
+    settings = WorkerSettings.from_env()
+    metrics = _observe("txrisk-outbox", settings.metrics_port)
+    engine = create_app_engine(settings.database_url)
+    with engine.connect() as connection:
+        pending = pending_migrations(connection)
+    if pending:
+        print(f"error: run `txrisk migrate` first; pending: {', '.join(pending)}", file=sys.stderr)
+        return 1
+    topics = settings.topics()
+    ensure_topics(settings.kafka_bootstrap_servers, topics, partitions=settings.topic_partitions)
+    outbox = OutboxPublisher(
+        engine, Publisher(settings.kafka_bootstrap_servers, metrics=metrics), topics=topics
+    )
+    if args.once:
+        print(f"published {outbox.publish_pending()} events")
+        return 0
+    stop = threading.Event()
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signum, lambda received, _: stop.set())
+    logging.getLogger(__name__).info(
+        "publishing the outbox to %s", settings.kafka_bootstrap_servers
+    )
+    outbox.run(stop.is_set, stop.wait, poll_seconds=args.poll_seconds)
+    engine.dispose()
+    shutdown_tracing()
+    return 0
+
+
 def _schemas(args: argparse.Namespace) -> int:
     args.out.mkdir(parents=True, exist_ok=True)
     for topic in EVENTS:
@@ -909,6 +939,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     rsc.add_argument("--limit", type=int, help="re-score at most this many (default: all)")
     rsc.set_defaults(handler=_rescore)
+
+    ob = commands.add_parser(
+        "outbox",
+        help="publish the transactional outbox (Fraud discoveries from closed Cases) to Redpanda",
+    )
+    ob.add_argument(
+        "--poll-seconds", type=float, default=1.0, help="wall-clock seconds between empty checks"
+    )
+    ob.add_argument("--once", action="store_true", help="publish one batch and exit")
+    ob.set_defaults(handler=_outbox)
 
     sch = commands.add_parser("schemas", help="write the event topics' JSON Schemas")
     sch.add_argument("--out", type=Path, default=Path("schemas"))

@@ -21,6 +21,19 @@ class FraudLabel:
     source: str
 
 
+def insert_label(
+    connection: sa.Connection, transaction_id: str, discovered_at: datetime, source: str
+) -> bool:
+    """Store the label in `connection`'s transaction; False if the Transaction already has one."""
+    inserted = connection.execute(
+        insert(fraud_labels)
+        .values(transaction_id=transaction_id, discovered_at=discovered_at, source=source)
+        .on_conflict_do_nothing()
+        .returning(fraud_labels.c.transaction_id)
+    ).first()
+    return inserted is not None
+
+
 class FraudLabels:
     def __init__(self, engine: sa.Engine) -> None:
         self._engine = engine
@@ -29,13 +42,7 @@ class FraudLabels:
         """Store the label; False if the Transaction already has one. The first discovery stands:
         a repeated event, or a later discovery of the same Transaction, changes nothing."""
         with self._engine.begin() as connection:
-            inserted = connection.execute(
-                insert(fraud_labels)
-                .values(transaction_id=transaction_id, discovered_at=discovered_at, source=source)
-                .on_conflict_do_nothing()
-                .returning(fraud_labels.c.transaction_id)
-            ).first()
-        return inserted is not None
+            return insert_label(connection, transaction_id, discovered_at, source)
 
     def known_at(self, moment: datetime) -> list[FraudLabel]:
         """The labels discovered at or before `moment`, oldest discovery first."""
