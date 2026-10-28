@@ -79,13 +79,23 @@ def _agent_structuring(
     return f"{count} Cash-outs just under the limit at this Agent in 24 hours", count
 
 
+def _younger_than(f: TransactionFeatures, days: float) -> bool:
+    """Whether the Subject wallet is known to be younger than `days`. An unknown age (a dataset
+    without registration dates) never switches a rule off."""
+    age: float | None = f.subject_wallet.wallet_age_days
+    return age is not None and age < days
+
+
 def _first_time_large_transfer(
     t: Transaction, f: TransactionFeatures, rules: Rules
 ) -> tuple[str, float | str] | None:
+    params = rules.FIRST_TIME_LARGE_TRANSFER
     ratio = f.subject_wallet.amount_to_median_30d
     if t.transaction_type != "transfer" or not f.subject_wallet.new_counterparty or ratio is None:
         return None
-    if ratio <= rules.FIRST_TIME_LARGE_TRANSFER.above_median_multiple:
+    if ratio <= params.above_median_multiple:
+        return None
+    if _younger_than(f, params.min_wallet_age_days):
         return None
     return f"Transfer of {ratio:.1f}x the usual amount to a first-time recipient", ratio
 
@@ -93,10 +103,13 @@ def _first_time_large_transfer(
 def _amount_vs_median(
     t: Transaction, f: TransactionFeatures, rules: Rules
 ) -> tuple[str, float | str] | None:
+    params = rules.AMOUNT_VS_MEDIAN
     ratio = f.subject_wallet.amount_to_median_30d
     if t.direction != "out" or ratio is None:
         return None
-    if ratio <= rules.AMOUNT_VS_MEDIAN.above_median_multiple:
+    if ratio <= params.above_median_multiple:
+        return None
+    if _younger_than(f, params.min_wallet_age_days):
         return None
     return f"Amount is {ratio:.1f}x this Wallet's 30-day median", ratio
 
