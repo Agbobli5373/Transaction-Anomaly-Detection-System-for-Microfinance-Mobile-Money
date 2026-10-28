@@ -1,4 +1,4 @@
-# The gates a Challenger model passes before it may be promoted to Champion (ADR 0011), checked
+# The gates a Challenger model passes before it may be promoted to Champion (ADR 0012), checked
 # by the API when an Admin asks for Promotion. The Alert budget and the Label maturity window come
 # from config/evaluation.toml.
 

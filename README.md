@@ -236,7 +236,7 @@ Where things run on this machine (all published on 127.0.0.1 only unless noted):
 
 ## Promotion, rollback and the model card
 
-A Challenger model becomes the Champion model only when an **Admin** asks for it through the API and **both gates pass, checked by the server** at that moment (ADR 0011). Promotion is never automatic. The thresholds are in `config/promotion.toml`.
+A Challenger model becomes the Champion model only when an **Admin** asks for it through the API and **both gates pass, checked by the server** at that moment (ADR 0012). Promotion is never automatic. The thresholds are in `config/promotion.toml`.
 
 | Endpoint | Who | What |
 |---|---|---|

@@ -293,7 +293,7 @@ challenger_scores = sa.Table(
     sa.Column("assessed_at", _TIME, nullable=False),
 )
 
-# Every Promotion and rollback of the Champion model, append-only (migration 0010).
+# Every Promotion and rollback of the Champion model, append-only (migration 0011).
 model_promotions = sa.Table(
     "model_promotions",
     metadata,
