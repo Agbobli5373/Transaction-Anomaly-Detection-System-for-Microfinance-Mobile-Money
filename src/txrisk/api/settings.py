@@ -54,6 +54,10 @@ class ApiSettings(BaseModel):
     # How long a rotated API key stays valid alongside its replacement, unless the rotation says.
     api_key_rotation_overlap_minutes: int = Field(default=24 * 60, ge=0)
 
+    # Serve Prometheus metrics on this port, apart from the API's own: unauthenticated, so it must
+    # not be published beyond the network Prometheus scrapes from. Unset, no metrics are served.
+    metrics_port: int | None = Field(default=None, ge=1, le=65535)
+
     @field_validator("cors_origins", "oidc_allowed_clients", mode="before")
     @classmethod
     def _comma_separated(cls, value: object) -> object:
