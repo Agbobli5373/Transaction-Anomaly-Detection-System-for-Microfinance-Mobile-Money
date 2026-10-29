@@ -221,6 +221,32 @@ class CrashAfter:
         return self._scoring.rescore_degraded(limit)
 
 
+class DiesInBatch:
+    """Fails as if the worker died while it had a batch: after storing all of it when `stored`,
+    else before storing any."""
+
+    def __init__(self, scoring: StoredScoring, *, stored: bool) -> None:
+        self._scoring = scoring
+        self._stored = stored
+
+    def assess(self, transaction: Transaction) -> Scored:
+        return self._scoring.assess(transaction)
+
+    def assess_many(self, batch: list[Transaction]) -> list[Scored | Exception]:
+        if self._stored:
+            self._scoring.assess_many(batch)
+        raise RuntimeError("worker died")
+
+    def record_sim_swap(self, wallet_id: str, occurred_at: datetime) -> bool:
+        return self._scoring.record_sim_swap(wallet_id, occurred_at)
+
+    def rescore_due(self) -> bool:
+        return self._scoring.rescore_due()
+
+    def rescore_degraded(self, limit: int | None = None) -> Rescored:
+        return self._scoring.rescore_degraded(limit)
+
+
 def _day_of_transactions() -> list[Transaction]:
     """Six Transactions after the routine, one of them a drain soon after a SIM swap."""
     return [
@@ -250,6 +276,33 @@ def test_a_worker_that_dies_mid_batch_leaves_it_to_be_finished_exactly_once(stre
     assert stream.count("risk_assessments") == len(day)
     assert stream.count("alerts") == 1
     # Whatever the dead worker had already sent, each Transaction has one result.
+    scores = stream.scores(len(day))
+    assert set(scores) == {t.transaction_id for t in day}
+    assert all(len(payloads) == 1 for payloads in scores.values())
+
+
+@pytest.mark.parametrize("stored", [False, True], ids=["before_storing", "after_storing"])
+def test_a_worker_that_dies_with_a_batch_has_it_finished_exactly_once(stream: Stream, stored: bool):
+    day = _day_of_transactions()
+    stream.publish(
+        SimSwapRecorded(wallet_id=SUBJECT, occurred_at=NOW + 2 * HOUR),
+        *map(TransactionCreated.of, day),
+    )
+
+    dying = stream.worker(DiesInBatch(stream.scoring(), stored=stored))
+    with pytest.raises(RuntimeError, match="worker died"):
+        run_until(dying, len(day))
+    dying.close()
+    # Whatever it stored, nothing was committed or published: the batch is delivered again.
+    assert stream.count("risk_assessments") == (len(day) if stored else 0)
+
+    resumed = stream.worker()
+    run_until(resumed, len(day))
+    assert idle(resumed)
+    resumed.close()
+
+    assert stream.count("risk_assessments") == len(day)
+    assert stream.count("alerts") == 1
     scores = stream.scores(len(day))
     assert set(scores) == {t.transaction_id for t in day}
     assert all(len(payloads) == 1 for payloads in scores.values())
