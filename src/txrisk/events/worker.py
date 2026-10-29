@@ -47,6 +47,7 @@ Anything else that fails (the database or the broker) stops the worker without c
 its batch is redelivered when it, or another worker, resumes.
 """
 
+import contextlib
 import logging
 import time
 from collections.abc import Callable
@@ -77,6 +78,10 @@ log = logging.getLogger(__name__)
 # How often the consumer lag is read from the broker, in seconds: each read asks the broker.
 _LAG_INTERVAL = 5.0
 
+# Fewer events than this are scored one at a time: a batch of one gains nothing from scoring
+# together, and keeps the per-event trace (the history reads it makes, spans and all).
+_MIN_BATCH = 2
+
 _REBALANCED = {
     KafkaError.REBALANCE_IN_PROGRESS,
     KafkaError.ILLEGAL_GENERATION,
@@ -85,7 +90,11 @@ _REBALANCED = {
 
 
 class Scoring(Protocol):
-    """What the worker scores with and writes history to: `store.StoredScoring`."""
+    """What the worker scores with and writes history to: `store.StoredScoring`.
+
+    A scoring that also has `assess_many` (`StoredScoring` does) is handed each batch to score
+    together; one that has only `assess` is handed the Transactions one at a time.
+    """
 
     def assess(self, transaction: Transaction) -> Scored: ...
 
@@ -126,6 +135,9 @@ class ScoringWorker:
         metrics: Metrics | None = None,
     ) -> None:
         self._scoring = scoring
+        self._assess_many: Callable[[list[Transaction]], list[Scored | Exception]] | None = getattr(
+            scoring, "assess_many", None
+        )
         self._metrics = metrics
         self._lag_read_at: float | None = None
         self._clock = clock
@@ -199,12 +211,15 @@ class ScoringWorker:
         self.catch_up_sim_swaps()
         offsets: dict[tuple[str, int], int] = {}
         latest: datetime | None = None
-        for message in messages:
-            if _failed(message):
-                continue
-            occurred_at = self._handle_transaction(message)
-            if occurred_at is not None and (latest is None or occurred_at > latest):
-                latest = occurred_at
+        live = [message for message in messages if not _failed(message)]
+        if len(live) >= _MIN_BATCH and self._assess_many is not None:
+            latest = self._handle_transactions(live)
+        else:
+            for message in live:
+                occurred_at = self._handle_transaction(message)
+                if occurred_at is not None and (latest is None or occurred_at > latest):
+                    latest = occurred_at
+        for message in live:
             offsets[(_topic(message), _partition(message))] = _offset(message) + 1
         if latest is not None and self._clock is not None:
             self._clock.advance(latest)
@@ -297,20 +312,67 @@ class ScoringWorker:
             result.remaining,
         )
 
-    def _handle_transaction(self, message: Message) -> datetime | None:
-        """Score the Transaction and publish its result; returns its event time, or None if it
-        was rejected."""
+    def _context(self, message: Message) -> contextlib.AbstractContextManager[object]:
+        """The correlation id and the trace an event is handled under: its own, from its
+        headers."""
         headers = _headers(message)
-        with (
-            logs.scope(header_value(headers, CORRELATION_HEADER)),
+        stack = contextlib.ExitStack()
+        stack.enter_context(logs.scope(header_value(headers, CORRELATION_HEADER)))
+        stack.enter_context(
             tracing.span(
                 f"consume {_topic(message)}",
                 kind=trace.SpanKind.CONSUMER,
                 context=tracing.extract(headers),
                 **{"messaging.kafka.partition": _partition(message)},
-            ),
-        ):
+            )
+        )
+        return stack
+
+    def _handle_transaction(self, message: Message) -> datetime | None:
+        """Score the Transaction and publish its result; returns its event time, or None if it
+        was rejected."""
+        with self._context(message):
             return self._score_event(message)
+
+    def _handle_transactions(self, messages: list[Message]) -> datetime | None:
+        """Score the Transactions of a batch of events together and publish each result, in the
+        events' order; returns the latest event time among those scored. As `_handle_transaction`
+        for each: an event that breaks its contract, or names an unregistered party, or conflicts
+        with what is stored, is dead-lettered and the rest are scored."""
+        elapsed = stopwatch()
+        decoded: list[tuple[Message, Transaction]] = []
+        for message in messages:
+            with self._context(message):
+                try:
+                    transaction = decode(
+                        TransactionCreated, message.value() or b""
+                    ).to_transaction()
+                except InvalidEvent as e:
+                    self._reject(message, e)
+                else:
+                    decoded.append((message, transaction))
+        if not decoded:
+            return None
+        assert self._assess_many is not None
+        try:
+            outcomes = self._assess_many([t for _, t in decoded])
+        except Exception:
+            if self._metrics is not None:
+                self._metrics.scoring_errors.labels("worker", "failure").inc()
+            log.exception("scoring a batch failed; it will be redelivered")
+            raise
+        seconds = elapsed()  # every event of the batch waited for all of it
+        latest: datetime | None = None
+        for (message, transaction), outcome in zip(decoded, outcomes, strict=True):
+            with self._context(message):
+                logs.bind_transaction(transaction.transaction_id)
+                if isinstance(outcome, Exception):
+                    self._reject(message, outcome)
+                    continue
+                self._published(message, transaction, outcome, seconds)
+                if latest is None or transaction.occurred_at > latest:
+                    latest = transaction.occurred_at
+        return latest
 
     def _score_event(self, message: Message) -> datetime | None:
         elapsed = stopwatch()
@@ -326,6 +388,13 @@ class ScoringWorker:
                 self._metrics.scoring_errors.labels("worker", "failure").inc()
             log.exception("scoring failed; the batch will be redelivered")
             raise
+        self._published(message, transaction, scored, elapsed())
+        return transaction.occurred_at
+
+    def _published(
+        self, message: Message, transaction: Transaction, scored: Scored, seconds: float
+    ) -> None:
+        """Publish the stored assessment as `score.produced`, and report it."""
         self._publisher.publish(
             self._topics.scores,
             transaction.transaction_id,
@@ -336,7 +405,7 @@ class ScoringWorker:
                 "worker",
                 scored.assessment,
                 replayed=scored.replayed,
-                seconds=elapsed(),
+                seconds=seconds,
                 occurred_at=transaction.occurred_at,
             )
             self._metrics.events_consumed.labels(
@@ -351,7 +420,6 @@ class ScoringWorker:
                 "replayed": scored.replayed,
             },
         )
-        return transaction.occurred_at
 
     def _handle_sim_swap(self, message: Message) -> None:
         try:

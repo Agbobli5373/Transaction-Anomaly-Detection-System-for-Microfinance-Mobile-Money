@@ -67,6 +67,7 @@ import sqlalchemy as sa
 from txrisk.features import SubjectHistory, Transaction, Wallet
 from txrisk.observability.tracing import span
 from txrisk.store.history import PostgresHistory, select_transactions, transaction_from_row
+from txrisk.store.records import any_of
 from txrisk.store.tables import transactions
 
 log = logging.getLogger(__name__)
@@ -156,6 +157,17 @@ def _belongs(kind: Kind, party: str) -> sa.ColumnElement[bool]:
             return _t.agent_id == party
 
 
+def _party_column(kind: Kind) -> tuple[sa.Column[Any], list[sa.ColumnElement[bool]]]:
+    """The column a set of this kind is by, and what else its rows must satisfy."""
+    match kind:
+        case "subject":
+            return _t.subject_wallet_id, []
+        case "receiver":
+            return _t.counterparty_wallet_id, [_t.transaction_type == "transfer"]
+        case "agent":
+            return _t.agent_id, []
+
+
 class RedisHistoryCache:
     """The Redis sets, the writer that keeps them and the history that reads them."""
 
@@ -181,6 +193,40 @@ class RedisHistoryCache:
         """A history over this cache, falling back to Postgres over `connection`."""
         return RedisHistory(self, PostgresHistory(connection))
 
+    def read_many(
+        self, requests: Sequence[tuple[Kind, str, datetime | None, datetime]]
+    ) -> list[list[Transaction] | None]:
+        """`read` for each (kind, party, since, before) request, in one round trip to Redis; an
+        answer is None where `read`'s is, and for every request if Redis fails."""
+        if not requests:
+            return []
+        found: list[list[Transaction] | None] = [None] * len(requests)
+        try:
+            pipe = self._redis.pipeline(transaction=False)
+            for kind, party, since, before in requests:
+                key, watermark_key = self._names(kind, party)
+                pipe.get(watermark_key)
+                pipe.zrangebyscore(
+                    key, "-inf" if since is None else str(_micros(since)), f"({_micros(before)}"
+                )
+            raw = pipe.execute()
+        except redis.RedisError:
+            log.warning("cache read failed; reading Postgres", exc_info=True)
+        else:
+            for i, (_, _, since, _) in enumerate(requests):
+                watermark, members = raw[2 * i], raw[2 * i + 1]
+                if watermark is None:
+                    continue
+                covered_from = int(watermark)
+                if covered_from == BEGINNING or (
+                    since is not None and covered_from <= _micros(since)
+                ):
+                    found[i] = _in_order(members)
+        hits = sum(answer is not None for answer in found)
+        self.reads["hit"] += hits
+        self.reads["fallback"] += len(found) - hits
+        return found
+
     def record(self, connection: sa.Connection, transaction: Transaction) -> None:
         """Add a Transaction that is durably stored to its sets. Idempotent."""
         member = _encode(transaction)
@@ -191,6 +237,43 @@ class RedisHistoryCache:
             except redis.RedisError:
                 log.warning("cache write failed; invalidating %s %s", kind, party, exc_info=True)
                 self._redis.delete(*self._names(kind, party))
+
+    def record_many(self, connection: sa.Connection, batch: Sequence[Transaction]) -> None:
+        """`record` for each Transaction of a batch, with one script call for each set they touch
+        and one round trip to Redis for all of them. Idempotent.
+
+        The sets that have not been loaded from Postgres yet are loaded together, in a few
+        queries for all the Wallets and Agents rather than a few for each, as `record` loads
+        one. Failures are handled as in `record`, for the sets the whole batch touches.
+        """
+        added: dict[tuple[Kind, str], list[str | bytes]] = {}
+        for transaction in batch:
+            member, score = _encode(transaction), str(_micros(transaction.occurred_at))
+            for key in _keys_of(transaction):
+                added.setdefault(key, []).extend([score, member])
+        if not added:
+            return
+        window = str(self._window // _MICROSECOND)
+        try:
+            pipe = self._redis.pipeline(transaction=False)
+            for (kind, party), pairs in added.items():
+                self._store(keys=self._names(kind, party), args=[window, "", *pairs], client=pipe)
+            stored = pipe.execute()
+        except redis.RedisError:
+            log.warning("cache write failed; invalidating %d sets", len(added), exc_info=True)
+            for kind, party in added:
+                self._redis.delete(*self._names(kind, party))
+            return
+        unloaded: dict[Kind, list[str]] = {}
+        for (kind, party), done in zip(added, stored, strict=True):
+            if not done:
+                unloaded.setdefault(kind, []).append(party)
+        for kind, parties in unloaded.items():
+            try:
+                self._fill_many(connection, kind, parties, window)
+            except redis.RedisError:
+                log.warning("cache write failed; invalidating %d sets", len(parties), exc_info=True)
+                self._redis.delete(*(n for party in parties for n in self._names(kind, party)))
 
     def flush(self) -> None:
         """Forget every set. Always safe: every read then falls back to Postgres."""
@@ -245,6 +328,43 @@ class RedisHistoryCache:
             t = transaction_from_row(row)
             args += [str(_micros(t.occurred_at)), _encode(t)]
         self._store(keys=self._names(kind, party), args=args)
+
+    def _fill_many(
+        self, connection: sa.Connection, kind: Kind, parties: list[str], window: str
+    ) -> None:
+        """`_fill` for several parties of one kind, in two queries: each set is the party's last
+        window up to its newest Transaction, with the watermark `_fill` gives it."""
+        column, extra = _party_column(kind)
+        wanted = any_of(column, parties)
+        span_of = {
+            party: (oldest, newest)
+            for party, oldest, newest in connection.execute(
+                sa.select(column, sa.func.min(_t.occurred_at), sa.func.max(_t.occurred_at))
+                .where(wanted, *extra)
+                .group_by(column)
+            )
+        }
+        if not span_of:
+            return
+        cutoffs = {party: newest - self._window for party, (_, newest) in span_of.items()}
+        members: dict[str, list[str | bytes]] = {party: [] for party in span_of}
+        for row in connection.execute(
+            select_transactions().where(wanted, *extra, _t.occurred_at >= min(cutoffs.values()))
+        ):
+            t = transaction_from_row(row)
+            party = t.counterparty_id if kind != "subject" else t.subject_wallet_id
+            if party in cutoffs and t.occurred_at >= cutoffs[party]:
+                members[party] += [str(_micros(t.occurred_at)), _encode(t)]
+        pipe = self._redis.pipeline(transaction=False)
+        for party, (oldest, _) in span_of.items():
+            older = oldest < cutoffs[party]
+            watermark = str(_micros(cutoffs[party]) if older else BEGINNING)
+            self._store(
+                keys=self._names(kind, party),
+                args=[window, watermark, *members[party]],
+                client=pipe,
+            )
+        pipe.execute()
 
 
 class RedisHistory:

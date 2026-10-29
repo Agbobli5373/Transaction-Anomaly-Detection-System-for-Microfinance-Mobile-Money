@@ -11,6 +11,10 @@ from txrisk.features.subject_wallet import SubjectWalletFeatures, subject_wallet
 
 _DAY = timedelta(days=1)
 _HOUR = timedelta(hours=1)
+# How far back the features look at the Transactions of a receiving Wallet or an Agent (the
+# fan-in, what a Counterparty sent back, the Agent's Cash-outs). A history that loads those
+# ahead of time needs to know.
+RECENT_WINDOW = _DAY
 
 
 @dataclass(frozen=True)
@@ -44,14 +48,14 @@ class TransactionFeatures:
 
 
 def _fan_in(wallet_id: str, history: HistoryProvider, now: datetime) -> int:
-    transfers = history.incoming_transfers(wallet_id, since=now - _DAY, before=now)
+    transfers = history.incoming_transfers(wallet_id, since=now - RECENT_WINDOW, before=now)
     return len({t.subject_wallet_id for t in transfers})
 
 
 def _received_from(
     wallet_id: str, sender_id: str, history: HistoryProvider, now: datetime
 ) -> float:
-    transfers = history.incoming_transfers(wallet_id, since=now - _DAY, before=now)
+    transfers = history.incoming_transfers(wallet_id, since=now - RECENT_WINDOW, before=now)
     return sum((t.amount for t in transfers if t.subject_wallet_id == sender_id), 0.0)
 
 
@@ -97,7 +101,7 @@ def transaction_features(
             receiver_fan_in = _fan_in(transaction.subject_wallet_id, history, now)
     if transaction.transaction_type in ("cash_in", "cash_out"):
         at_agent = history.agent_transactions(
-            transaction.counterparty_id, since=now - _DAY, before=now
+            transaction.counterparty_id, since=now - RECENT_WINDOW, before=now
         )
         cash_outs = [t for t in at_agent if t.transaction_type == "cash_out"]
         agent_count = len(cash_outs)
