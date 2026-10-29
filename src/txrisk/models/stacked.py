@@ -47,6 +47,20 @@ class Stacker:
         weights = dict(zip(STACK_COLUMNS, map(float, regression.coef_[0]), strict=True))
         return cls(weights=weights, intercept=float(regression.intercept_[0]))
 
+    def score_arrays(
+        self, rules: np.ndarray, anomaly: np.ndarray, raw_probability: np.ndarray
+    ) -> np.ndarray:
+        """`score` of components given as arrays, one value per row: the Risk score, 0-100,
+        before any Critical rule floor."""
+        clipped = np.clip(raw_probability, _EDGE, 1 - _EDGE)
+        parts = {
+            "rules": rules,
+            "anomaly": anomaly,
+            "supervised_log_odds": np.log(clipped / (1 - clipped)),
+        }
+        log_odds = self.intercept + sum(self.weights[c] * parts[c] for c in STACK_COLUMNS)
+        return np.asarray(100 / (1 + np.exp(-log_odds)), dtype=np.float64)
+
     def score(self, components: pd.DataFrame) -> pd.Series:
         """The Risk score, 0-100, before any Critical rule floor."""
         log_odds = self.intercept + sum(

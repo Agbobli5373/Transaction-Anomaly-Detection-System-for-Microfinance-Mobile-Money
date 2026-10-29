@@ -244,15 +244,107 @@ def _assessment_values(assessment: RiskAssessment) -> dict[str, Any]:
 
 
 def assessment_from_row(row: sa.Row[Any]) -> RiskAssessment:
-    return RiskAssessment(
-        transaction_id=row.transaction_id,
-        risk_score=row.risk_score,
-        risk_band=RiskBand(row.risk_band),
-        reasons=tuple(Reason(r["code"], r["message"], r["value"]) for r in row.reasons),
-        component_scores=dict(row.component_scores),
-        model_version=row.model_version,
-        degraded=row.degraded,
+    return _assessment(
+        row.transaction_id,
+        row.risk_score,
+        row.risk_band,
+        row.reasons,
+        row.component_scores,
+        row.model_version,
+        row.degraded,
     )
+
+
+def _assessment(
+    transaction_id: str,
+    risk_score: float,
+    risk_band: str,
+    reasons: list[dict[str, Any]],
+    component_scores: dict[str, float | None],
+    model_version: str,
+    degraded: bool,
+) -> RiskAssessment:
+    return RiskAssessment(
+        transaction_id=transaction_id,
+        risk_score=risk_score,
+        risk_band=RiskBand(risk_band),
+        reasons=tuple(Reason(r["code"], r["message"], r["value"]) for r in reasons),
+        component_scores=dict(component_scores),
+        model_version=model_version,
+        degraded=degraded,
+    )
+
+
+@dataclass(frozen=True)
+class Lookup:
+    """What storage already knows about a Transaction about to be scored."""
+
+    # The stored assessment, if the Transaction was scored.
+    assessment: RiskAssessment | None
+    # The stored Transaction under its ID, if there is one (an assessment implies it).
+    transaction: Transaction | None
+    # The parties it names that are not registered, as `column=value`.
+    missing_parties: list[str]
+
+
+def lookup(connection: sa.Connection, transaction: Transaction) -> Lookup:
+    """The stored assessment and Transaction under this Transaction's ID, and which of its
+    parties are unregistered, in one round trip."""
+    column = COUNTERPARTY_COLUMNS[transaction.transaction_type]
+    a = risk_assessments.c
+    asked = sa.select(sa.literal(transaction.transaction_id, sa.Text).label("id")).subquery("asked")
+    row = connection.execute(
+        sa.select(
+            a.risk_score,
+            a.risk_band,
+            a.reasons,
+            a.component_scores,
+            a.model_version,
+            a.degraded,
+            *select_transactions().selected_columns,
+            sa.exists().where(wallets.c.wallet_id == transaction.subject_wallet_id),
+            sa.exists().where(_PARTY_KEYS[column] == transaction.counterparty_id),
+        ).select_from(
+            asked.outerjoin(transactions, transactions.c.transaction_id == asked.c.id).outerjoin(
+                risk_assessments, risk_assessments.c.transaction_id == asked.c.id
+            )
+        )
+    ).one()
+    known = row[-2:]
+    missing = [
+        f"{name}={value}"
+        for name, value, found in (
+            ("subject_wallet_id", transaction.subject_wallet_id, known[0]),
+            (column, transaction.counterparty_id, known[1]),
+        )
+        if not found
+    ]
+    stored = row[6] is not None
+    return Lookup(
+        assessment=None
+        if row.risk_band is None
+        else _assessment(transaction.transaction_id, *row[:6]),
+        transaction=transaction_from_row(row[6:-2]) if stored else None,
+        missing_parties=missing,
+    )
+
+
+def save_assessment_returning(
+    connection: sa.Connection, assessment: RiskAssessment, *, assessed_at: datetime
+) -> RiskAssessment | None:
+    """Store the assessment and return it as stored (what a replay will read back); None,
+    storing nothing, if one is already stored for it."""
+    row = connection.execute(
+        insert(risk_assessments)
+        .values(
+            transaction_id=assessment.transaction_id,
+            **_assessment_values(assessment),
+            assessed_at=assessed_at,
+        )
+        .on_conflict_do_nothing()
+        .returning(*risk_assessments.c)
+    ).first()
+    return None if row is None else assessment_from_row(row)
 
 
 def stored_assessment(connection: sa.Connection, transaction_id: str) -> RiskAssessment | None:

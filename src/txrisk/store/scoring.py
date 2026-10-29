@@ -124,15 +124,20 @@ class StoredScoring:
             return self._assess(transaction)
 
     def _assess(self, transaction: Transaction) -> Scored:
+        # One connection for the whole call: the pool checks one out (and tests it) once. Reads
+        # run in autocommit, so each is its own statement with no transaction to begin and end;
+        # only the writes, which must stand or fall together, are one transaction.
         with self._engine.connect() as connection:
+            connection.execution_options(isolation_level="AUTOCOMMIT")
             with span("store.lookup"):
-                stored = self._stored(connection, transaction)
-            if stored is not None:
+                known = records.lookup(connection, transaction)
+            if known.assessment is not None:
+                if known.transaction != transaction:
+                    raise records.TransactionConflict(transaction.transaction_id)
                 self._cached(connection, transaction)
-                return Scored(stored, replayed=True)
-            missing = records.unknown_parties(connection, transaction)
-            if missing:
-                raise records.UnknownParty(", ".join(missing))
+                return Scored(known.assessment, replayed=True)
+            if known.missing_parties:
+                raise records.UnknownParty(", ".join(known.missing_parties))
             service = ScoringService(
                 self._history(connection),
                 FixedClock(transaction.occurred_at),
@@ -143,31 +148,45 @@ class StoredScoring:
             )
             assessment, shadow = service.assess_with_shadow(transaction, self._challenger_bundle())
 
-        with span("store.save"), self._engine.begin() as connection:
-            # A concurrent call may have stored a Transaction under this ID since the check
-            # above: the insert waits for it to commit, and raises `TransactionConflict` if it
-            # differs from this one, so a different payload is never answered as a replay.
-            records.record_transaction(connection, transaction)
-            # A concurrent call for the same Transaction may have stored its assessment first;
-            # the insert then waits for it to commit, stores nothing, and its result stands.
-            first = records.save_assessment(
-                connection, assessment, assessed_at=transaction.occurred_at
-            )
-            if first:
-                records.save_model_inputs(
-                    connection, assessment, assessed_at=transaction.occurred_at
-                )
-            if first and assessment.risk_band is RiskBand.HIGH:
-                records.raise_alert(connection, transaction)
-            if first and shadow is not None:
-                self._save_shadow(connection, transaction, shadow)
-            # Read back, so this answer and every replay of it are the same stored assessment.
+            connection.commit()  # SQLAlchemy only changes the isolation level between transactions
+            connection.execution_options(isolation_level="READ COMMITTED")
+            with span("store.save"), connection.begin():
+                stored = self._save(connection, transaction, assessment, shadow)
+            # Only now is the Transaction durably stored, which is what the cache may hold.
+            with span("cache.record"):
+                self._cached(connection, transaction)
+        first, assessment = stored
+        return Scored(assessment, replayed=not first)
+
+    def _save(
+        self,
+        connection: sa.Connection,
+        transaction: Transaction,
+        assessment: RiskAssessment,
+        shadow: ShadowScore | None,
+    ) -> tuple[bool, RiskAssessment]:
+        """Store what was scored, in the transaction `connection` has begun: whether this call
+        stored the assessment first, and the assessment as stored."""
+        # A concurrent call may have stored a Transaction under this ID since the check
+        # above: the insert waits for it to commit, and raises `TransactionConflict` if it
+        # differs from this one, so a different payload is never answered as a replay.
+        records.record_transaction(connection, transaction)
+        # A concurrent call for the same Transaction may have stored its assessment first;
+        # the insert then waits for it to commit, stores nothing, and its result stands.
+        # The answer is the stored assessment, so this answer and every replay of it are the same.
+        saved = records.save_assessment_returning(
+            connection, assessment, assessed_at=transaction.occurred_at
+        )
+        if saved is None:
             stored = records.stored_assessment(connection, transaction.transaction_id)
-        assert stored is not None
-        # Only now is the Transaction durably stored, which is what the cache may hold.
-        with span("cache.record"), self._engine.connect() as connection:
-            self._cached(connection, transaction)
-        return Scored(stored, replayed=not first)
+            assert stored is not None
+            return False, stored
+        records.save_model_inputs(connection, assessment, assessed_at=transaction.occurred_at)
+        if assessment.risk_band is RiskBand.HIGH:
+            records.raise_alert(connection, transaction)
+        if shadow is not None:
+            self._save_shadow(connection, transaction, shadow)
+        return True, saved
 
     def _challenger_bundle(self) -> ModelBundle | None:
         if self._challenger is None:
@@ -300,12 +319,3 @@ class StoredScoring:
             if not records.wallet_exists(connection, wallet_id):
                 raise records.UnknownParty(f"wallet_id={wallet_id}")
             return records.add_sim_swap(connection, wallet_id, occurred_at)
-
-    @staticmethod
-    def _stored(connection: sa.Connection, transaction: Transaction) -> RiskAssessment | None:
-        stored = records.stored_assessment(connection, transaction.transaction_id)
-        if stored is not None:
-            recorded = records.stored_transaction(connection, transaction.transaction_id)
-            if recorded != transaction:
-                raise records.TransactionConflict(transaction.transaction_id)
-        return stored

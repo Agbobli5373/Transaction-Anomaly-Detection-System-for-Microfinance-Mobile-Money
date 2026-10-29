@@ -106,8 +106,10 @@ def transaction_features(
     share_of_balance_moved = None
     if transaction.direction == "out" and transaction.subject_balance_before > 0:
         share_of_balance_moved = transaction.amount / transaction.subject_balance_before
-    sim_swap = history.last_sim_swap(transaction.subject_wallet_id, before=now)
+    # The Subject wallet's history first: a history that reads it from storage brings the
+    # Wallet's registration and latest SIM swap with it, saving a round trip for each.
     past = history.subject_history(transaction.subject_wallet_id, before=now).transactions
+    sim_swap = history.last_sim_swap(transaction.subject_wallet_id, before=now)
     limit = config.kyc_limits[history.wallet(transaction.subject_wallet_id).kyc_tier]
     return TransactionFeatures(
         subject_wallet=subject_wallet_features(

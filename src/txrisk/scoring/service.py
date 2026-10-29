@@ -2,6 +2,7 @@
 
 import logging
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
@@ -17,7 +18,7 @@ from txrisk.features import (
     TransactionFeatures,
     transaction_features,
 )
-from txrisk.models import inputs_for
+from txrisk.models import INPUT_COLUMNS, input_matrix, inputs_for
 from txrisk.models.anomaly import AnomalyModel
 from txrisk.models.supervised import SupervisedModel
 from txrisk.observability.tracing import span
@@ -116,6 +117,12 @@ def _stacked_band(
     return _band(score, medium=thresholds.medium, high=high)
 
 
+def _scores_rows(bundle: "ModelBundle") -> bool:
+    """Whether to score through the bundle's row API: any bundle that takes the serving inputs
+    does; one that offers only the data frame API (a stand-in, in a test) scores through that."""
+    return bool(getattr(bundle, "scores_rows", False))
+
+
 def combine_hits(hits: list[RuleHit], config: RulesConfig) -> tuple[float, bool]:
     """The rules score (0-1) of these Rule hits, and whether any is a Critical rule."""
     weights = config.severity_weights
@@ -200,6 +207,17 @@ class ScoringService:
         elapsed = stopwatch()
 
         def score() -> tuple[float, dict[str, float | None]]:
+            if _scores_rows(bundle):
+                scored = bundle.score_rows(
+                    input_matrix([transaction], [features]),
+                    np.array([rules_score]),
+                    np.array([critical]),
+                )
+                return float(scored.risk_scores[0]), {
+                    "rules": rules_score,
+                    "anomaly": float(scored.anomaly[0]),
+                    "supervised": float(scored.fraud_probability[0]),
+                }
             inputs = inputs_for(transaction, features)
             rules = pd.DataFrame(
                 {"rules_score": [rules_score], "critical": [critical]}, inputs.index
@@ -310,6 +328,10 @@ class ScoringService:
         rules_score: float,
         critical: bool,
     ) -> RiskAssessment:
+        if _scores_rows(bundle):
+            return self.stacked_assessments(
+                bundle, [transaction], [features], [hits], [rules_score], [critical]
+            )[0]
         inputs = inputs_for(transaction, features)
         rules = pd.DataFrame({"rules_score": [rules_score], "critical": [critical]}, inputs.index)
         components = bundle.components(inputs, rules)
@@ -334,3 +356,46 @@ class ScoringService:
             model_version=bundle.version,
             model_inputs={str(k): float(v) for k, v in inputs.iloc[0].items()},
         )
+
+    def stacked_assessments(
+        self,
+        bundle: "ModelBundle",
+        transactions: Sequence[Transaction],
+        features: Sequence[TransactionFeatures],
+        hits: Sequence[list[RuleHit]],
+        rules_scores: Sequence[float],
+        critical: Sequence[bool],
+    ) -> list[RiskAssessment]:
+        """The stacked assessment of each Transaction, scored together as one matrix of model
+        inputs: what `_stacked` makes of each alone, to the last bit but for the order of a
+        few float sums. Needs a bundle that `scores_rows`."""
+        matrix = input_matrix(transactions, features)
+        scored = bundle.score_rows(matrix, np.asarray(rules_scores), np.asarray(critical, bool))
+        pushes = bundle.contribution_rows(matrix)
+        rules_weight = bundle.stacker.weights["rules"]
+        assessments = []
+        for i, transaction in enumerate(transactions):
+            inputs = dict(zip(INPUT_COLUMNS, matrix[i].tolist(), strict=True))
+            score = float(scored.risk_scores[i])
+            assessments.append(
+                RiskAssessment(
+                    transaction_id=transaction.transaction_id,
+                    risk_score=round(score, RISK_SCORE_DECIMALS),
+                    risk_band=_stacked_band(bundle, score, features[i], critical[i]),
+                    reasons=stacked_reasons(
+                        hits[i],
+                        rules_contribution=rules_weight * rules_scores[i],
+                        inputs=inputs,
+                        contributions=dict(zip(INPUT_COLUMNS, pushes[i].tolist(), strict=True)),
+                        config=self._rules,
+                    ),
+                    component_scores={
+                        "rules": rules_scores[i],
+                        "anomaly": float(scored.anomaly[i]),
+                        "supervised": float(scored.fraud_probability[i]),
+                    },
+                    model_version=bundle.version,
+                    model_inputs=inputs,
+                )
+            )
+        return assessments

@@ -34,6 +34,7 @@ from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBea
 from txrisk.api.audit import AuditedRoute, Auditor
 from txrisk.api.hardening import RateLimiter, retry_after
 from txrisk.store import api_keys
+from txrisk.store.database import autocommit
 
 API_KEY_HEADER = "X-API-Key"
 
@@ -296,7 +297,7 @@ class Authenticator:
         raise _Unauthenticated(f"send a bearer token or an {API_KEY_HEADER} header")
 
     def _service(self, presented: str) -> Principal:
-        with self.engine.connect() as connection:
+        with autocommit(self.engine) as connection:
             record = api_keys.authenticate(connection, presented, self.wall_clock())
         if record is None:
             raise _Unauthenticated("invalid, expired or revoked API key", challenge=None)

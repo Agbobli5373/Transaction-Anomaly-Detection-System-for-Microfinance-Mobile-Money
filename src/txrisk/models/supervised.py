@@ -8,6 +8,8 @@ calibrated on the calibration split, both fully labelled by then (ADR 0008).
 
 from dataclasses import dataclass
 from datetime import date
+from functools import cached_property
+from typing import Any
 
 import lightgbm as lgb
 import numpy as np
@@ -15,7 +17,7 @@ import pandas as pd
 from sklearn.isotonic import IsotonicRegression
 
 from txrisk.evaluation import EvaluationConfig, Split, split_of, training_labels
-from txrisk.models.inputs import model_inputs
+from txrisk.models.inputs import INPUT_COLUMNS, model_inputs
 
 
 def _raw_probability(classifier: lgb.LGBMClassifier, inputs: pd.DataFrame) -> np.ndarray:
@@ -61,6 +63,39 @@ class CentredIsotonic:
 class SupervisedModel:
     classifier: lgb.LGBMClassifier
     calibrator: CentredIsotonic
+
+    @cached_property
+    def _columns(self) -> list[int] | None:
+        """Where the classifier's columns sit in a matrix in `INPUT_COLUMNS` order; None when
+        they are the same, in the same order."""
+        names = list(self.classifier.feature_name_)
+        if names == INPUT_COLUMNS:
+            return None
+        return [INPUT_COLUMNS.index(name) for name in names]
+
+    def __getstate__(self) -> dict[str, Any]:
+        # What `_columns` caches is derived from the classifier: a bundle's identity is not.
+        return {k: v for k, v in self.__dict__.items() if k != "_columns"}
+
+    def _rows(self, matrix: np.ndarray) -> np.ndarray:
+        return matrix if self._columns is None else matrix[:, self._columns]
+
+    def raw_probability_matrix(self, matrix: np.ndarray) -> np.ndarray:
+        """`raw_probability` of each row of a matrix of model inputs in `INPUT_COLUMNS` order.
+        One thread: a row or a few hundred are too little work to share out."""
+        return np.asarray(self.classifier.booster_.predict(self._rows(matrix), num_threads=1))
+
+    def contribution_matrix(self, matrix: np.ndarray) -> np.ndarray:
+        """`contributions` of each row of a matrix in `INPUT_COLUMNS` order, as a matrix in the
+        same order."""
+        shares = np.asarray(
+            self.classifier.booster_.predict(self._rows(matrix), pred_contrib=True, num_threads=1)
+        )[:, :-1]
+        if self._columns is None:
+            return shares
+        ordered = np.zeros((len(matrix), len(INPUT_COLUMNS)))
+        ordered[:, self._columns] = shares
+        return ordered
 
     def raw_probability(self, inputs: pd.DataFrame) -> pd.Series:
         """The classifier's own probability, before calibration, indexed like `inputs`.
