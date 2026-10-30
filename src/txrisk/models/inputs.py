@@ -5,7 +5,6 @@ Transaction goes through the same conversion on one-row tables, so training and 
 disagree about a model's inputs.
 """
 
-import math
 from collections.abc import Callable, Sequence
 from dataclasses import fields
 from datetime import UTC
@@ -96,7 +95,7 @@ def input_row(transaction: Transaction, features: TransactionFeatures) -> np.nda
         if value is not None:
             row[i] = value
     at = transaction.occurred_at
-    row[n] = math.log1p(transaction.amount)
+    row[n] = np.log1p(transaction.amount)  # numpy's, as the frame path's, not libm's
     # A time without a zone is read as UTC, as `pd.to_datetime(..., utc=True)` does.
     row[n + 1] = float((at if at.tzinfo is None else at.astimezone(UTC)).hour)
     row[n + 2] = float(transaction.channel == "app")
