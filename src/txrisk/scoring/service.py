@@ -2,6 +2,7 @@
 
 import logging
 import math
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
@@ -17,7 +18,7 @@ from txrisk.features import (
     TransactionFeatures,
     transaction_features,
 )
-from txrisk.models import inputs_for
+from txrisk.models import INPUT_COLUMNS, input_matrix, inputs_for
 from txrisk.models.anomaly import AnomalyModel
 from txrisk.models.supervised import SupervisedModel
 from txrisk.observability.tracing import span
@@ -33,6 +34,9 @@ if TYPE_CHECKING:  # the bundle module itself scores rules, so importing it here
 log = logging.getLogger(__name__)
 
 RULES_ONLY = "rules-only"
+# How many Transactions the Champion model scores in one call when a batch is scored together: a
+# call is held to the model's timeout, so this is what one timeout covers.
+MODEL_CHUNK = 64
 # A stacked Risk score is stored, and returned, to this many decimals.
 RISK_SCORE_DECIMALS = 2
 
@@ -116,6 +120,12 @@ def _stacked_band(
     return _band(score, medium=thresholds.medium, high=high)
 
 
+def _scores_rows(bundle: "ModelBundle") -> bool:
+    """Whether to score through the bundle's row API: any bundle that takes the serving inputs
+    does; one that offers only the data frame API (a stand-in, in a test) scores through that."""
+    return bool(getattr(bundle, "scores_rows", False))
+
+
 def combine_hits(hits: list[RuleHit], config: RulesConfig) -> tuple[float, bool]:
     """The rules score (0-1) of these Rule hits, and whether any is a Critical rule."""
     weights = config.severity_weights
@@ -184,6 +194,129 @@ class ScoringService:
             shadow = self._shadow(challenger, transaction, features, rules_score, critical)
         return assessment, shadow
 
+    def assess_batch(
+        self,
+        transactions: Sequence[Transaction],
+        challenger: "ModelBundle | None",
+        *,
+        record: Callable[[Transaction], None],
+    ) -> list[tuple[RiskAssessment, ShadowScore | None]]:
+        """What `assess_with_shadow` returns for each Transaction, scored together: in order,
+        each at its own event time, from the history before it.
+
+        `record` is called with each Transaction once its features are computed, and before the
+        next ones', so that the history they read holds the earlier Transactions of the batch but
+        never the Transaction itself or the later ones. The stacked models score the whole batch
+        as matrices, which costs a fraction of scoring the same rows one by one; the assessments
+        are the same, up to the order of a few float sums.
+        """
+        features = []
+        with span("features.compute", batch=len(transactions)):
+            for transaction in transactions:
+                features.append(
+                    transaction_features(
+                        transaction,
+                        self._history,
+                        now=transaction.occurred_at,
+                        config=self._features,
+                    )
+                )
+                record(transaction)
+        hits = [
+            rule_hits(t, f, self._rules.rules) for t, f in zip(transactions, features, strict=True)
+        ]
+        combined = [combine_hits(h, self._rules) for h in hits]
+        rules_scores = [score for score, _ in combined]
+        critical = [is_critical for _, is_critical in combined]
+        if self._champion is None:
+            assessments = [
+                self._rules_only(t, f, h, r, c)
+                for t, f, h, r, c in zip(
+                    transactions, features, hits, rules_scores, critical, strict=True
+                )
+            ]
+        else:
+            assessments = self._with_champion_batch(
+                self._champion, transactions, features, hits, rules_scores, critical
+            )
+        results = []
+        for i, assessment in enumerate(assessments):
+            shadow = None
+            if challenger is not None and challenger.version != assessment.model_version:
+                shadow = self._shadow(
+                    challenger, transactions[i], features[i], rules_scores[i], critical[i]
+                )
+            results.append((assessment, shadow))
+        return results
+
+    def _with_champion_batch(
+        self,
+        champion: Champion,
+        transactions: Sequence[Transaction],
+        features: Sequence[TransactionFeatures],
+        hits: Sequence[list[RuleHit]],
+        rules_scores: Sequence[float],
+        critical: Sequence[bool],
+    ) -> list[RiskAssessment]:
+        """`_with_champion` for each Transaction, the model scoring them in chunks.
+
+        A chunk that fails or times out is degraded, and puts the model on pause, so every chunk
+        after it is degraded without being tried: as one Transaction after another would be.
+        """
+        bundle, reason = champion.acquire()
+        if bundle is None or not _scores_rows(bundle):
+            # Unavailable, or a bundle without the row API: one Transaction at a time.
+            return [
+                self._with_champion(champion, t, f, h, r, c)
+                for t, f, h, r, c in zip(
+                    transactions, features, hits, rules_scores, critical, strict=True
+                )
+            ]
+        assessments: list[RiskAssessment] = []
+        kind = "unavailable"
+        for start in range(0, len(transactions), MODEL_CHUNK):
+            chunk = range(start, min(start + MODEL_CHUNK, len(transactions)))
+            if reason is None:
+
+                def score_chunk(chunk: range = chunk) -> list[RiskAssessment]:
+                    rows = slice(chunk.start, chunk.stop)
+                    return self.stacked_assessments(
+                        bundle,
+                        transactions[rows],
+                        features[rows],
+                        hits[rows],
+                        rules_scores[rows],
+                        critical[rows],
+                    )
+
+                try:
+                    with span("model.score", model_version=bundle.version, batch=len(chunk)):
+                        scored = champion.call(score_chunk)
+                except ModelTimeout as e:
+                    champion.failed(str(e))
+                    reason, kind = str(e), "timeout"
+                except Exception as e:  # any failure of the model must not stop scoring
+                    log.warning("scoring a batch with the model failed", exc_info=True)
+                    reason = f"{type(e).__name__}: {e}"
+                    champion.failed(reason)
+                    kind = "error"
+                else:
+                    champion.succeeded()
+                    assessments.extend(scored)
+                    continue
+            # The first Transaction of the failed chunk is the one that failed; the model is
+            # unavailable for the rest.
+            for i in chunk:
+                if self._metrics is not None:
+                    self._metrics.increment(DEGRADED_ASSESSMENTS, reason=kind)
+                log.warning("degraded mode (%s): %s", kind, reason)
+                kind = "unavailable"
+                rules_only = self._rules_only(
+                    transactions[i], features[i], hits[i], rules_scores[i], critical[i]
+                )
+                assessments.append(replace(rules_only, degraded=True))
+        return assessments
+
     def _shadow(
         self,
         bundle: "ModelBundle",
@@ -200,6 +333,17 @@ class ScoringService:
         elapsed = stopwatch()
 
         def score() -> tuple[float, dict[str, float | None]]:
+            if _scores_rows(bundle):
+                scored = bundle.score_rows(
+                    input_matrix([transaction], [features]),
+                    np.array([rules_score]),
+                    np.array([critical]),
+                )
+                return float(scored.risk_scores[0]), {
+                    "rules": rules_score,
+                    "anomaly": float(scored.anomaly[0]),
+                    "supervised": float(scored.fraud_probability[0]),
+                }
             inputs = inputs_for(transaction, features)
             rules = pd.DataFrame(
                 {"rules_score": [rules_score], "critical": [critical]}, inputs.index
@@ -310,6 +454,10 @@ class ScoringService:
         rules_score: float,
         critical: bool,
     ) -> RiskAssessment:
+        if _scores_rows(bundle):
+            return self.stacked_assessments(
+                bundle, [transaction], [features], [hits], [rules_score], [critical]
+            )[0]
         inputs = inputs_for(transaction, features)
         rules = pd.DataFrame({"rules_score": [rules_score], "critical": [critical]}, inputs.index)
         components = bundle.components(inputs, rules)
@@ -334,3 +482,46 @@ class ScoringService:
             model_version=bundle.version,
             model_inputs={str(k): float(v) for k, v in inputs.iloc[0].items()},
         )
+
+    def stacked_assessments(
+        self,
+        bundle: "ModelBundle",
+        transactions: Sequence[Transaction],
+        features: Sequence[TransactionFeatures],
+        hits: Sequence[list[RuleHit]],
+        rules_scores: Sequence[float],
+        critical: Sequence[bool],
+    ) -> list[RiskAssessment]:
+        """The stacked assessment of each Transaction, scored together as one matrix of model
+        inputs: what `_stacked` makes of each alone, to the last bit but for the order of a
+        few float sums. Needs a bundle that `scores_rows`."""
+        matrix = input_matrix(transactions, features)
+        scored = bundle.score_rows(matrix, np.asarray(rules_scores), np.asarray(critical, bool))
+        pushes = bundle.contribution_rows(matrix)
+        rules_weight = bundle.stacker.weights["rules"]
+        assessments = []
+        for i, transaction in enumerate(transactions):
+            inputs = dict(zip(INPUT_COLUMNS, matrix[i].tolist(), strict=True))
+            score = float(scored.risk_scores[i])
+            assessments.append(
+                RiskAssessment(
+                    transaction_id=transaction.transaction_id,
+                    risk_score=round(score, RISK_SCORE_DECIMALS),
+                    risk_band=_stacked_band(bundle, score, features[i], critical[i]),
+                    reasons=stacked_reasons(
+                        hits[i],
+                        rules_contribution=rules_weight * rules_scores[i],
+                        inputs=inputs,
+                        contributions=dict(zip(INPUT_COLUMNS, pushes[i].tolist(), strict=True)),
+                        config=self._rules,
+                    ),
+                    component_scores={
+                        "rules": rules_scores[i],
+                        "anomaly": float(scored.anomaly[i]),
+                        "supervised": float(scored.fraud_probability[i]),
+                    },
+                    model_version=bundle.version,
+                    model_inputs=inputs,
+                )
+            )
+        return assessments

@@ -5,7 +5,8 @@ API and workers only check that the schema is current, and never change it.
 """
 
 import os
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from importlib import resources
 
 import sqlalchemy as sa
@@ -14,18 +15,36 @@ from txrisk.store.roles import APP_ROLE, app_role_password
 
 # Serialises concurrent migration jobs; any constant unique to this application will do.
 _MIGRATION_LOCK = 7_281_245_001
+POOL_SIZE_ENV = "TXRISK_DB_POOL_SIZE"
+MAX_OVERFLOW_ENV = "TXRISK_DB_MAX_OVERFLOW"
 _VERSIONS = sa.table("schema_migrations", sa.column("version", sa.Text))
 
 
-def create_engine(url: str | sa.URL) -> sa.Engine:
+def create_engine(url: str | sa.URL, *, pool_size: int = 5, max_overflow: int = 10) -> sa.Engine:
     """An engine for a `postgresql://` URL, on psycopg, with every session in UTC.
 
-    The features read the hour of day from timestamps, so they must come back in UTC.
+    The features read the hour of day from timestamps, so they must come back in UTC. The pool
+    keeps `pool_size` connections and opens up to `max_overflow` more under load.
     """
     parsed = sa.make_url(url)
     if parsed.drivername in ("postgresql", "postgres"):
         parsed = parsed.set(drivername="postgresql+psycopg")
-    return sa.create_engine(parsed, connect_args={"options": "-c timezone=UTC"}, pool_pre_ping=True)
+    return sa.create_engine(
+        parsed,
+        connect_args={"options": "-c timezone=UTC"},
+        pool_pre_ping=True,
+        pool_size=pool_size,
+        max_overflow=max_overflow,
+    )
+
+
+@contextmanager
+def autocommit(engine: sa.Engine) -> Iterator[sa.Connection]:
+    """A connection whose every statement commits as it runs: for a read, or a single statement,
+    which needs no transaction begun and ended around it (two round trips saved)."""
+    with engine.connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        yield connection
 
 
 def create_app_engine(url: str, environ: Mapping[str, str] = os.environ) -> sa.Engine:
@@ -37,7 +56,13 @@ def create_app_engine(url: str, environ: Mapping[str, str] = os.environ) -> sa.E
     supplied = app_role_password(environ)
     if parsed.username == APP_ROLE and parsed.password is None and supplied is not None:
         parsed = parsed.set(password=supplied)
-    return create_engine(parsed)
+    # The API serves each request on its own thread (40 by default), so a pool of the default
+    # size makes them queue for a connection; both limits can be set per process.
+    return create_engine(
+        parsed,
+        pool_size=int(environ.get(POOL_SIZE_ENV) or 20),
+        max_overflow=int(environ.get(MAX_OVERFLOW_ENV) or 20),
+    )
 
 
 def migrations() -> dict[str, str]:

@@ -49,6 +49,16 @@ def model_components(
 
 
 @dataclass(frozen=True)
+class RowScores:
+    """What `ModelBundle.score_rows` returns: one value per row of each."""
+
+    anomaly: np.ndarray
+    fraud_probability: np.ndarray
+    # The Risk score, 0-100, with a Critical rule hit floored at the High threshold.
+    risk_scores: np.ndarray
+
+
+@dataclass(frozen=True)
 class ModelBundle:
     version: str
     anomaly: AnomalyModel
@@ -81,6 +91,36 @@ class ModelBundle:
         supervised = self.supervised.contributions(inputs)[self.input_columns]
         anomaly = self.anomaly.contributions(inputs)[self.input_columns]
         return weights["supervised_log_odds"] * supervised + weights["anomaly"] * anomaly
+
+    def score_rows(
+        self, matrix: np.ndarray, rules_scores: np.ndarray, critical: np.ndarray
+    ) -> "RowScores":
+        """Every component and the Risk score of each row of a matrix of model inputs in
+        `INPUT_COLUMNS` order (empty ones NaN), given each row's rules score and whether a
+        Critical rule hit. The same numbers `components` and `risk_scores` give for those rows,
+        without a data frame: serving scores a Transaction, or a batch of them, this way."""
+        anomaly = self.anomaly.score_matrix(matrix)
+        raw = self.supervised.raw_probability_matrix(matrix)
+        scores = self.stacker.score_arrays(rules_scores, anomaly, raw)
+        return RowScores(
+            anomaly=anomaly,
+            fraud_probability=self.supervised.calibrator.predict(raw),
+            risk_scores=np.where(critical, np.maximum(scores, self.thresholds.high), scores),
+        )
+
+    def contribution_rows(self, matrix: np.ndarray) -> np.ndarray:
+        """`contributions` of each row of a matrix of model inputs in `INPUT_COLUMNS` order, as a
+        matrix in the same order. Needs a bundle whose inputs are `INPUT_COLUMNS`."""
+        weights = self.stacker.weights
+        return weights["supervised_log_odds"] * self.supervised.contribution_matrix(
+            matrix
+        ) + weights["anomaly"] * self.anomaly.contribution_matrix(matrix)
+
+    @property
+    def scores_rows(self) -> bool:
+        """Whether `score_rows` and `contribution_rows` apply: the bundle takes the inputs in
+        the order the serving path builds them."""
+        return self.input_columns == INPUT_COLUMNS
 
     def risk_scores(
         self, inputs: pd.DataFrame, rules: pd.DataFrame, components: pd.DataFrame | None = None

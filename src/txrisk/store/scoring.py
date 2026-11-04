@@ -5,6 +5,7 @@ stores the assessment, and every later call, from either path, gets that stored 
 """
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
@@ -28,7 +29,9 @@ from txrisk.scoring import (
 )
 from txrisk.scoring.metrics import ALERTS_RESCORED, CHALLENGER_SCORES, RESCORED
 from txrisk.store import records
+from txrisk.store.batch_history import batch_history
 from txrisk.store.history import PostgresHistory
+from txrisk.store.redis_history import Kind
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +53,17 @@ class HistoryCache(Protocol):
 
     def record(self, connection: sa.Connection, transaction: Transaction) -> None:
         """Add a Transaction that is durably stored; idempotent."""
+        ...
+
+    def record_many(self, connection: sa.Connection, batch: Sequence[Transaction]) -> None:
+        """`record` for each of a batch, in fewer round trips."""
+        ...
+
+    def read_many(
+        self, requests: Sequence[tuple[Kind, str, datetime | None, datetime]]
+    ) -> list[list[Transaction] | None]:
+        """What the cache's sets hold for each (kind, party, since, before) request, None where
+        a set cannot answer it."""
         ...
 
 
@@ -124,15 +138,20 @@ class StoredScoring:
             return self._assess(transaction)
 
     def _assess(self, transaction: Transaction) -> Scored:
+        # One connection for the whole call: the pool checks one out (and tests it) once. Reads
+        # run in autocommit, so each is its own statement with no transaction to begin and end;
+        # only the writes, which must stand or fall together, are one transaction.
         with self._engine.connect() as connection:
+            connection.execution_options(isolation_level="AUTOCOMMIT")
             with span("store.lookup"):
-                stored = self._stored(connection, transaction)
-            if stored is not None:
+                known = records.lookup(connection, transaction)
+            if known.assessment is not None:
+                if known.transaction != transaction:
+                    raise records.TransactionConflict(transaction.transaction_id)
                 self._cached(connection, transaction)
-                return Scored(stored, replayed=True)
-            missing = records.unknown_parties(connection, transaction)
-            if missing:
-                raise records.UnknownParty(", ".join(missing))
+                return Scored(known.assessment, replayed=True)
+            if known.missing_parties:
+                raise records.UnknownParty(", ".join(known.missing_parties))
             service = ScoringService(
                 self._history(connection),
                 FixedClock(transaction.occurred_at),
@@ -143,31 +162,194 @@ class StoredScoring:
             )
             assessment, shadow = service.assess_with_shadow(transaction, self._challenger_bundle())
 
-        with span("store.save"), self._engine.begin() as connection:
-            # A concurrent call may have stored a Transaction under this ID since the check
-            # above: the insert waits for it to commit, and raises `TransactionConflict` if it
-            # differs from this one, so a different payload is never answered as a replay.
-            records.record_transaction(connection, transaction)
-            # A concurrent call for the same Transaction may have stored its assessment first;
-            # the insert then waits for it to commit, stores nothing, and its result stands.
-            first = records.save_assessment(
-                connection, assessment, assessed_at=transaction.occurred_at
-            )
-            if first:
-                records.save_model_inputs(
-                    connection, assessment, assessed_at=transaction.occurred_at
-                )
-            if first and assessment.risk_band is RiskBand.HIGH:
-                records.raise_alert(connection, transaction)
-            if first and shadow is not None:
-                self._save_shadow(connection, transaction, shadow)
-            # Read back, so this answer and every replay of it are the same stored assessment.
+            connection.commit()  # SQLAlchemy only changes the isolation level between transactions
+            connection.execution_options(isolation_level="READ COMMITTED")
+            with span("store.save"), connection.begin():
+                stored = self._save(connection, transaction, assessment, shadow)
+            # Only now is the Transaction durably stored, which is what the cache may hold.
+            with span("cache.record"):
+                self._cached(connection, transaction)
+        first, assessment = stored
+        return Scored(assessment, replayed=not first)
+
+    def _save(
+        self,
+        connection: sa.Connection,
+        transaction: Transaction,
+        assessment: RiskAssessment,
+        shadow: ShadowScore | None,
+    ) -> tuple[bool, RiskAssessment]:
+        """Store what was scored, in the transaction `connection` has begun: whether this call
+        stored the assessment first, and the assessment as stored."""
+        # A concurrent call may have stored a Transaction under this ID since the check
+        # above: the insert waits for it to commit, and raises `TransactionConflict` if it
+        # differs from this one, so a different payload is never answered as a replay.
+        records.record_transaction(connection, transaction)
+        # A concurrent call for the same Transaction may have stored its assessment first;
+        # the insert then waits for it to commit, stores nothing, and its result stands.
+        # The answer is the stored assessment, so this answer and every replay of it are the same.
+        saved = records.save_assessment_returning(
+            connection, assessment, assessed_at=transaction.occurred_at
+        )
+        if saved is None:
             stored = records.stored_assessment(connection, transaction.transaction_id)
-        assert stored is not None
-        # Only now is the Transaction durably stored, which is what the cache may hold.
-        with span("cache.record"), self._engine.connect() as connection:
-            self._cached(connection, transaction)
-        return Scored(stored, replayed=not first)
+            assert stored is not None
+            return False, stored
+        records.save_model_inputs(connection, assessment, assessed_at=transaction.occurred_at)
+        if assessment.risk_band is RiskBand.HIGH:
+            records.raise_alert(connection, transaction)
+        if shadow is not None:
+            self._save_shadow(connection, transaction, shadow)
+        return True, saved
+
+    def assess_many(self, batch: Sequence[Transaction]) -> list[Scored | Exception]:
+        """`assess` for each Transaction of the batch, scored and stored together: the same
+        assessments, Alerts, Challenger scores and idempotency, in a few statements instead of
+        a few for each Transaction. Returns, in the batch's order, each Transaction's `Scored`,
+        or the `UnknownParty` or `TransactionConflict` that `assess` raises for it; any other
+        failure (the database being down) raises, and nothing of the batch is stored.
+
+        Each Transaction is scored as `assess` would score it if the batch's Transactions were
+        assessed one after another in order: at its own event time, from the history before it,
+        which holds the batch's earlier Transactions but never itself or the later ones. A
+        Transaction ID that appears twice is scored for its first appearance, and the repeat
+        answered from storage.
+        """
+        with span("score.batch", batch=len(batch)):
+            return self._assess_many(list(batch))
+
+    def _assess_many(self, batch: list[Transaction]) -> list[Scored | Exception]:
+        positions: dict[str, int] = {}
+        distinct: list[int] = []
+        repeats: list[int] = []
+        for i, transaction in enumerate(batch):
+            (repeats if transaction.transaction_id in positions else distinct).append(i)
+            positions.setdefault(transaction.transaction_id, i)
+        outcomes: list[Scored | Exception | None] = [None] * len(batch)
+        for i, outcome in zip(
+            distinct, self._assess_distinct([batch[i] for i in distinct]), strict=True
+        ):
+            outcomes[i] = outcome
+        if repeats:  # now stored, so each is a replay, or conflicts with what was stored
+            for i, outcome in zip(
+                repeats, self._assess_many([batch[i] for i in repeats]), strict=True
+            ):
+                outcomes[i] = outcome
+        return [outcome for outcome in outcomes if outcome is not None]
+
+    def _assess_distinct(self, batch: list[Transaction]) -> list[Scored | Exception]:
+        """`assess_many` for Transactions with no ID twice."""
+        if not batch:
+            return []
+        outcomes: list[Scored | Exception | None] = [None] * len(batch)
+        with self._engine.connect() as connection:
+            connection.execution_options(isolation_level="AUTOCOMMIT")
+            with span("store.lookup"):
+                stored = records.stored_many(connection, [t.transaction_id for t in batch])
+                fresh = []
+                for i, transaction in enumerate(batch):
+                    found = stored.get(transaction.transaction_id)
+                    if found is None or found[1] is None:
+                        fresh.append(i)
+                    elif found[0] != transaction:
+                        outcomes[i] = records.TransactionConflict(transaction.transaction_id)
+                    else:
+                        outcomes[i] = Scored(found[1], replayed=True)
+                missing = records.unregistered(connection, [batch[i] for i in fresh])
+            scorable = []
+            for i in fresh:
+                absent = missing.get(batch[i].transaction_id)
+                if absent:
+                    outcomes[i] = records.UnknownParty(", ".join(absent))
+                else:
+                    scorable.append(i)
+            if scorable:
+                new = [batch[i] for i in scorable]
+                history = batch_history(connection, new, config=self._features, cache=self._cache)
+                service = ScoringService(
+                    history,
+                    FixedClock(new[0].occurred_at),
+                    features=self._features,
+                    rules=self._rules,
+                    bundle=self._champion,
+                    metrics=self.metrics,
+                )
+                scored = service.assess_batch(new, self._challenger_bundle(), record=history.record)
+                connection.commit()  # the isolation level only changes between transactions
+                connection.execution_options(isolation_level="READ COMMITTED")
+                with span("store.save"), connection.begin():
+                    saved = self._save_many(connection, new, scored)
+                for i, outcome in zip(scorable, saved, strict=True):
+                    outcomes[i] = outcome
+            # Only now is what was stored durably stored, which is what the cache may hold; a
+            # replay is added again, which repairs an add that failed earlier.
+            with span("cache.record"):
+                self._cached_many(
+                    connection,
+                    [
+                        t
+                        for t, outcome in zip(batch, outcomes, strict=True)
+                        if isinstance(outcome, Scored)
+                    ],
+                )
+        return [outcome for outcome in outcomes if outcome is not None]
+
+    def _save_many(
+        self,
+        connection: sa.Connection,
+        batch: list[Transaction],
+        scored: list[tuple[RiskAssessment, ShadowScore | None]],
+    ) -> list[Scored | Exception]:
+        """`_save` of each Transaction of the batch, in the transaction `connection` has begun,
+        with one statement for each kind of row."""
+        inserted = records.record_transactions(connection, batch)
+        # A Transaction stored under its ID since the check: the same one is no matter, a
+        # different one is a conflict, as it is when stored one by one.
+        taken = [t for t in batch if t.transaction_id not in inserted]
+        current = records.stored_many(connection, [t.transaction_id for t in taken])
+        conflicts = {
+            t.transaction_id
+            for t in taken
+            if t.transaction_id not in current or current[t.transaction_id][0] != t
+        }
+        kept = [
+            (t, assessment, shadow)
+            for t, (assessment, shadow) in zip(batch, scored, strict=True)
+            if t.transaction_id not in conflicts
+        ]
+        # A concurrent call may have stored an assessment first: it stands, and this stores
+        # nothing for the Transaction. What is returned is the assessment as stored.
+        first = records.save_assessments_returning(
+            connection, [(a, t.occurred_at) for t, a, _ in kept]
+        )
+        records.save_model_inputs_many(
+            connection, [(a, t.occurred_at) for t, a, _ in kept if t.transaction_id in first]
+        )
+        for t, assessment, shadow in kept:
+            if t.transaction_id not in first:
+                continue
+            if assessment.risk_band is RiskBand.HIGH:
+                records.raise_alert(connection, t)
+            if shadow is not None:
+                self._save_shadow(connection, t, shadow)
+        earlier = records.stored_many(
+            connection, [t.transaction_id for t, _, _ in kept if t.transaction_id not in first]
+        )
+        outcomes: list[Scored | Exception] = []
+        for t in batch:
+            if t.transaction_id in conflicts:
+                outcomes.append(records.TransactionConflict(t.transaction_id))
+            elif t.transaction_id in first:
+                outcomes.append(Scored(first[t.transaction_id], replayed=False))
+            else:
+                stored = earlier[t.transaction_id][1]
+                assert stored is not None
+                outcomes.append(Scored(stored, replayed=True))
+        return outcomes
+
+    def _cached_many(self, connection: sa.Connection, batch: list[Transaction]) -> None:
+        if self._cache is not None and batch:
+            self._cache.record_many(connection, batch)
 
     def _challenger_bundle(self) -> ModelBundle | None:
         if self._challenger is None:
@@ -300,12 +482,3 @@ class StoredScoring:
             if not records.wallet_exists(connection, wallet_id):
                 raise records.UnknownParty(f"wallet_id={wallet_id}")
             return records.add_sim_swap(connection, wallet_id, occurred_at)
-
-    @staticmethod
-    def _stored(connection: sa.Connection, transaction: Transaction) -> RiskAssessment | None:
-        stored = records.stored_assessment(connection, transaction.transaction_id)
-        if stored is not None:
-            recorded = records.stored_transaction(connection, transaction.transaction_id)
-            if recorded != transaction:
-                raise records.TransactionConflict(transaction.transaction_id)
-        return stored

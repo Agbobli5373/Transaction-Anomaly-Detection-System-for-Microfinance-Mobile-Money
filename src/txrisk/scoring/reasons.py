@@ -6,7 +6,7 @@ rule that fired measures joins that rule's Reason, so one fact is never given tw
 """
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 import pandas as pd
@@ -198,8 +198,8 @@ def stacked_reasons(
     hits: list[RuleHit],
     *,
     rules_contribution: float,
-    inputs: pd.Series,
-    contributions: pd.Series,
+    inputs: Mapping[str, float] | pd.Series,
+    contributions: Mapping[str, float] | pd.Series,
     config: RulesConfig,
 ) -> tuple[Reason, ...]:
     """The Reasons for one stacked Risk score: Critical rule hits first, then whatever pushed the

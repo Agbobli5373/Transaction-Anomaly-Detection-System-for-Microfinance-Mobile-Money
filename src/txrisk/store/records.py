@@ -1,12 +1,14 @@
 """Reading and writing Transactions, parties, Risk assessments and Alerts."""
 
+import json
 import math
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.dialects.postgresql import ARRAY, insert
 
 from txrisk.features import Transaction
 from txrisk.scoring import Reason, RiskAssessment, RiskBand, ShadowScore
@@ -43,6 +45,20 @@ class AlertRecord:
     subject_wallet_id: str
     raised_at: datetime
     assessment: RiskAssessment
+
+
+def any_of(column: sa.Column[Any], values: Iterable[str]) -> sa.ColumnElement[bool]:
+    """`column = ANY (:values)`: one array parameter however many values there are, which the
+    driver and the planner handle far more cheaply than an `IN` list of hundreds."""
+    return column == sa.any_(sa.bindparam(None, sorted(values), type_=ARRAY(column.type)))
+
+
+def _arrays(**columns: tuple[Any, Sequence[object]]) -> list[sa.BindParameter[Any]]:
+    """One array parameter for each column of a bulk insert, by its type and values."""
+    return [
+        sa.bindparam(name, list(values), type_=ARRAY(kind))
+        for name, (kind, values) in columns.items()
+    ]
 
 
 def add_wallet(
@@ -244,15 +260,279 @@ def _assessment_values(assessment: RiskAssessment) -> dict[str, Any]:
 
 
 def assessment_from_row(row: sa.Row[Any]) -> RiskAssessment:
-    return RiskAssessment(
-        transaction_id=row.transaction_id,
-        risk_score=row.risk_score,
-        risk_band=RiskBand(row.risk_band),
-        reasons=tuple(Reason(r["code"], r["message"], r["value"]) for r in row.reasons),
-        component_scores=dict(row.component_scores),
-        model_version=row.model_version,
-        degraded=row.degraded,
+    return _assessment(
+        row.transaction_id,
+        row.risk_score,
+        row.risk_band,
+        row.reasons,
+        row.component_scores,
+        row.model_version,
+        row.degraded,
     )
+
+
+def _assessment(
+    transaction_id: str,
+    risk_score: float,
+    risk_band: str,
+    reasons: list[dict[str, Any]],
+    component_scores: dict[str, float | None],
+    model_version: str,
+    degraded: bool,
+) -> RiskAssessment:
+    return RiskAssessment(
+        transaction_id=transaction_id,
+        risk_score=risk_score,
+        risk_band=RiskBand(risk_band),
+        reasons=tuple(Reason(r["code"], r["message"], r["value"]) for r in reasons),
+        component_scores=dict(component_scores),
+        model_version=model_version,
+        degraded=degraded,
+    )
+
+
+@dataclass(frozen=True)
+class Lookup:
+    """What storage already knows about a Transaction about to be scored."""
+
+    # The stored assessment, if the Transaction was scored.
+    assessment: RiskAssessment | None
+    # The stored Transaction under its ID, if there is one (an assessment implies it).
+    transaction: Transaction | None
+    # The parties it names that are not registered, as `column=value`.
+    missing_parties: list[str]
+
+
+def lookup(connection: sa.Connection, transaction: Transaction) -> Lookup:
+    """The stored assessment and Transaction under this Transaction's ID, and which of its
+    parties are unregistered, in one round trip."""
+    column = COUNTERPARTY_COLUMNS[transaction.transaction_type]
+    a = risk_assessments.c
+    asked = sa.select(sa.literal(transaction.transaction_id, sa.Text).label("id")).subquery("asked")
+    row = connection.execute(
+        sa.select(
+            a.risk_score,
+            a.risk_band,
+            a.reasons,
+            a.component_scores,
+            a.model_version,
+            a.degraded,
+            *select_transactions().selected_columns,
+            sa.exists().where(wallets.c.wallet_id == transaction.subject_wallet_id),
+            sa.exists().where(_PARTY_KEYS[column] == transaction.counterparty_id),
+        ).select_from(
+            asked.outerjoin(transactions, transactions.c.transaction_id == asked.c.id).outerjoin(
+                risk_assessments, risk_assessments.c.transaction_id == asked.c.id
+            )
+        )
+    ).one()
+    known = row[-2:]
+    missing = [
+        f"{name}={value}"
+        for name, value, found in (
+            ("subject_wallet_id", transaction.subject_wallet_id, known[0]),
+            (column, transaction.counterparty_id, known[1]),
+        )
+        if not found
+    ]
+    stored = row[6] is not None
+    return Lookup(
+        assessment=None
+        if row.risk_band is None
+        else _assessment(transaction.transaction_id, *row[:6]),
+        transaction=transaction_from_row(row[6:-2]) if stored else None,
+        missing_parties=missing,
+    )
+
+
+def stored_many(
+    connection: sa.Connection, transaction_ids: Sequence[str]
+) -> dict[str, tuple[Transaction, RiskAssessment | None]]:
+    """The stored Transaction of each of these IDs that has one, with its assessment if it was
+    scored, in one round trip."""
+    a = risk_assessments.c
+    found = {}
+    for row in connection.execute(
+        sa.select(
+            *select_transactions().selected_columns,
+            a.risk_score,
+            a.risk_band,
+            a.reasons,
+            a.component_scores,
+            a.model_version,
+            a.degraded,
+        )
+        .select_from(
+            transactions.outerjoin(
+                risk_assessments, risk_assessments.c.transaction_id == transactions.c.transaction_id
+            )
+        )
+        .where(any_of(transactions.c.transaction_id, transaction_ids))
+    ):
+        stored = transaction_from_row(row[:11])
+        found[stored.transaction_id] = (
+            stored,
+            None if row[12] is None else _assessment(stored.transaction_id, *row[11:]),
+        )
+    return found
+
+
+def unregistered(connection: sa.Connection, batch: Sequence[Transaction]) -> dict[str, list[str]]:
+    """For each Transaction of the batch that names a party that is not registered, what it
+    names that is not, as `column=value`; one query for each kind of party."""
+    wanted: dict[str, set[str]] = {"wallet_id": {t.subject_wallet_id for t in batch}}
+    for t in batch:
+        column = COUNTERPARTY_COLUMNS[t.transaction_type]
+        wanted.setdefault(_PARTY_KEYS[column].key, set()).add(t.counterparty_id)
+    columns = {column.key: column for column in _PARTY_KEYS.values()}
+    registered = {
+        (key, value)
+        for key, ids in wanted.items()
+        for value in connection.execute(
+            sa.select(columns[key]).where(any_of(columns[key], ids))
+        ).scalars()
+    }
+    missing: dict[str, list[str]] = {}
+    for t in batch:
+        column = COUNTERPARTY_COLUMNS[t.transaction_type]
+        named = [
+            ("subject_wallet_id", "wallet_id", t.subject_wallet_id),
+            (column, _PARTY_KEYS[column].key, t.counterparty_id),
+        ]
+        absent = [f"{name}={value}" for name, key, value in named if (key, value) not in registered]
+        if absent:
+            missing[t.transaction_id] = absent
+    return missing
+
+
+_TRANSACTION_INSERT = """
+INSERT INTO transactions (
+    transaction_id, occurred_at, transaction_type, amount, subject_wallet_id, direction,
+    subject_balance_before, channel, device_id, region,
+    counterparty_wallet_id, agent_id, merchant_id, biller_id
+)
+SELECT * FROM unnest(
+    :transaction_id, :occurred_at, :transaction_type, :amount, :subject_wallet_id, :direction,
+    :subject_balance_before, :channel, :device_id, :region,
+    :counterparty_wallet_id, :agent_id, :merchant_id, :biller_id
+)
+ON CONFLICT DO NOTHING
+RETURNING transaction_id
+"""
+
+
+def record_transactions(connection: sa.Connection, batch: Sequence[Transaction]) -> set[str]:
+    """Store the Transactions, in one statement; the IDs of those stored now, so not those that
+    already were (stored under the same ID by an earlier or concurrent call)."""
+    if not batch:
+        return set()
+    # Every row names every Counterparty column, the ones its type does not use empty.
+    rows = [{**dict.fromkeys(_PARTY_KEYS), **_transaction_values(t)} for t in batch]
+    column = transactions.c
+
+    def values(name: str) -> tuple[Any, list[object]]:
+        return column[name].type, [row[name] for row in rows]
+
+    statement = sa.text(_TRANSACTION_INSERT).bindparams(
+        *_arrays(**{c.name: values(c.name) for c in transactions.columns})
+    )
+    return set(connection.execute(statement).scalars())
+
+
+_ASSESSMENT_INSERT = """
+INSERT INTO risk_assessments (
+    transaction_id, risk_score, risk_band, reasons, component_scores, model_version, degraded,
+    assessed_at
+)
+SELECT transaction_id, risk_score, risk_band, CAST(reasons AS jsonb),
+       CAST(component_scores AS jsonb), model_version, degraded, assessed_at
+FROM unnest(
+    :transaction_id, :risk_score, :risk_band, :reasons, :component_scores, :model_version,
+    :degraded, :assessed_at
+) AS v(
+    transaction_id, risk_score, risk_band, reasons, component_scores, model_version, degraded,
+    assessed_at
+)
+ON CONFLICT DO NOTHING
+RETURNING *
+"""
+
+
+def save_assessments_returning(
+    connection: sa.Connection, saved: Sequence[tuple[RiskAssessment, datetime]]
+) -> dict[str, RiskAssessment]:
+    """Store the assessments, each with its `assessed_at`, in one statement, and return those
+    stored now as stored; an assessment that already has one stored is not in the result."""
+    if not saved:
+        return {}
+    values = [{**_assessment_values(a), "transaction_id": a.transaction_id} for a, _ in saved]
+    statement = sa.text(_ASSESSMENT_INSERT).bindparams(
+        *_arrays(
+            transaction_id=(sa.Text, [v["transaction_id"] for v in values]),
+            risk_score=(sa.Double, [v["risk_score"] for v in values]),
+            risk_band=(sa.Text, [v["risk_band"] for v in values]),
+            reasons=(sa.Text, [json.dumps(v["reasons"]) for v in values]),
+            component_scores=(sa.Text, [json.dumps(v["component_scores"]) for v in values]),
+            model_version=(sa.Text, [v["model_version"] for v in values]),
+            degraded=(sa.Boolean, [v["degraded"] for v in values]),
+            assessed_at=(sa.DateTime(timezone=True), [assessed_at for _, assessed_at in saved]),
+        )
+    )
+    return {row.transaction_id: assessment_from_row(row) for row in connection.execute(statement)}
+
+
+_MODEL_INPUTS_UPSERT = """
+INSERT INTO model_inputs (transaction_id, assessed_at, model_version, inputs)
+SELECT transaction_id, assessed_at, model_version, CAST(inputs AS jsonb)
+FROM unnest(:transaction_id, :assessed_at, :model_version, :inputs)
+    AS v(transaction_id, assessed_at, model_version, inputs)
+ON CONFLICT (transaction_id) DO UPDATE
+    SET model_version = EXCLUDED.model_version, inputs = EXCLUDED.inputs
+"""
+
+
+def save_model_inputs_many(
+    connection: sa.Connection, saved: Sequence[tuple[RiskAssessment, datetime]]
+) -> None:
+    """`save_model_inputs` of each assessment that has model inputs, in one statement."""
+    held = [(a, at) for a, at in saved if a.model_inputs is not None]
+    if not held:
+        return
+    connection.execute(
+        sa.text(_MODEL_INPUTS_UPSERT).bindparams(
+            *_arrays(
+                transaction_id=(sa.Text, [a.transaction_id for a, _ in held]),
+                assessed_at=(sa.DateTime(timezone=True), [at for _, at in held]),
+                model_version=(sa.Text, [a.model_version for a, _ in held]),
+                inputs=(
+                    sa.Text,
+                    [
+                        json.dumps({k: _json_number(v) for k, v in a.model_inputs.items()})
+                        for a, _ in held
+                        if a.model_inputs is not None
+                    ],
+                ),
+            )
+        )
+    )
+
+
+def save_assessment_returning(
+    connection: sa.Connection, assessment: RiskAssessment, *, assessed_at: datetime
+) -> RiskAssessment | None:
+    """Store the assessment and return it as stored (what a replay will read back); None,
+    storing nothing, if one is already stored for it."""
+    row = connection.execute(
+        insert(risk_assessments)
+        .values(
+            transaction_id=assessment.transaction_id,
+            **_assessment_values(assessment),
+            assessed_at=assessed_at,
+        )
+        .on_conflict_do_nothing()
+        .returning(*risk_assessments.c)
+    ).first()
+    return None if row is None else assessment_from_row(row)
 
 
 def stored_assessment(connection: sa.Connection, transaction_id: str) -> RiskAssessment | None:

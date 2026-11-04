@@ -11,7 +11,7 @@ Contents: [Limitations](#limitations-read-this-first) | [Data protection](#data-
 1. **The data is synthetic, and the rules were designed with the generator.** The dataset comes from our own generator (ADR 0002). The generator's Fraud scenarios and the Rule hits were designed together, so the rules' recall on the generator's scenarios flatters them. Real-world performance is unknown. The one check on data we did not design, the PaySim benchmark (#33), **has not been run**: it needs the PaySim CSV (Kaggle `ealaxi/paysim1`) from the repo owner, and `uv run txrisk paysim --csv <file>` produces it. [docs/evaluation/paysim.md](docs/evaluation/paysim.md) still holds placeholders.
 2. **The Risk score is not the probability of fraud.** The stacker's probability is the chance of Fraud that gets *discovered*, not ground truth (ADR 0007). Fraud labels arrive 1-30 days late, only about two frauds in three are ever discovered, and an undiscovered fraud is learned as legitimate. Ground truth never reaches training or serving; offline evaluation reports recall against Ground truth and against discovered labels, and the gap between them is deliberate. Label-based metrics for recent days understate recall until the Label maturity window (30 days) has passed.
 3. **An accepted miss from #45: Wallets 180 days and over.** Fixing the false Alerts on new Wallets lowered the High threshold, and because the Alert budget is fixed, the freed slots went to older Wallets. Their false positive rate at High rose 22% relative (0.43% to 0.52%) against the 20% limit set in #45. It stays inside the 0.40-0.70% range of every other segment and bought 3 more frauds at High. Details: [docs/evaluation/stacked.md](docs/evaluation/stacked.md).
-4. **No throughput is claimed.** The load tests (#31) did not meet their targets. On a shared 4-CPU machine: sync `/v1/score` served 3.7 req/s at p95 17 s (target 200 req/s at p95 under 200 ms); the stream committed about 29 Tx/s (target 1,000); Degraded mode served 29.7 req/s. The scoring path needs a batch path, fewer Postgres round trips per scoring and cheaper explanations, then a rerun on a dedicated machine. #31 is still open. See [Load tests](#load-tests).
+4. **No throughput is claimed.** The load tests (#31) did not meet their targets. On a shared 4-CPU machine: sync `/v1/score` served 3.7 req/s at p95 17 s (target 200 req/s at p95 under 200 ms); the stream committed about 29 Tx/s (target 1,000); Degraded mode served 29.7 req/s. The scoring path has since been made about 3× cheaper with the model and 8× for the stream workers' rules-only batches (per-scoring profiles, one thread), but the end-to-end load tests have not been rerun on a dedicated machine, so no target is claimed as met. #31 is still open. See [Load tests](#load-tests).
 5. **CI decisions that relax a check, on purpose.** The Trivy image scans pass `--ignore-unfixed` (vulnerabilities with no published fix are skipped; the gate fails as soon as a fix exists). The Helm chart ignores `KSV-0014` (read-only root filesystems) for the chart only, in `.trivyignore.yaml`, with its reason. See [CI/CD](#cicd).
 6. **Repository settings only the owner can make** are not in place until the owner makes them: [branch protection on `main`](#branch-protection-repo-owner) with the required checks.
 7. **Out of our control (ADR 0003).** Real operator data, regulatory approval, an institution's model risk sign-off, external penetration testing and contractual SLAs. The ledger is an event schema we define, with replay standing in for it, and a Suspicious transaction report is an export file the system never files.
@@ -383,6 +383,27 @@ A sync run is read at its steady state (`--reset-stats` drops the ramp-up). It p
 | Stream, rules only, 3 workers | 1,515 Tx/s | about 29 Tx/s committed (peak lag 33,347) | | lag did not recover in 90 s; target missed |
 
 Profiling the API under load found the time in two places: the model path (building the input frame, the Isolation Forest score and the SHAP contributions, a few hundred milliseconds of CPU for each Transaction) and the number of Postgres round trips each scoring makes one after another (parties, stored assessment, history, insert, simulation clock). Neither is a tuning knob: reaching the targets needs the scoring path made cheaper (a batch path for the workers, fewer round trips, cheaper explanations) and a dedicated machine, and the tables above should be replaced by a run on one when that is done.
+
+**The scoring path after #31's first round of work.** Model inputs are now built as one numpy row instead of a pandas frame, the models and their explanations run on that row directly, a scoring makes 13 Postgres statements instead of 18, and stream workers score each consumed batch together. `tests/test_fast_scoring.py` pins the new path to the old one's assessments.
+
+Measured with [`loadtests/profile_scoring.py`](loadtests/profile_scoring.py), which scores Transactions through `StoredScoring` one after another, as the sync API does, and times each stage. Same 4-CPU machine, this time quiet (load average about 1), Postgres 17 in Docker and Redis on the host, a fresh copy of the seeded database for every run, and the same Champion bundle. "Before" is `main` at #75; "after" is the #31 branch. Per Transaction, in milliseconds:
+
+| One thread | Before: median | Before: p95 | After: median | After: p95 | Throughput before → after |
+|---|---|---|---|---|---|
+| Champion model, one at a time (200 Transactions) | 125.3 | 160.2 | 42.4 | 69.1 | 7.7 → 22.5 Tx/s |
+| Rules only, one at a time (300; Degraded mode) | 34.0 | 49.6 | 25.6 | 38.0 | 28.8 → 37.3 Tx/s |
+| Rules only, stream batch of 100 (1,000) | | | 3.7 | 6.1 | 28.8 → 236.6 Tx/s |
+
+With the model, the stages that shrank are model inputs (28.6 → 0.1 ms median), the models (24.9 → 0.8 ms) and the explanations (27.1 → 5.9 ms). What is left is mostly the history read and Postgres: 12–13 statements at about 1–4 ms each.
+
+These are profiles of one scoring thread, not the Locust runs above, and they leave the targets unmet on their own: 200 requests/s at p95 under 200 ms needs roughly 9 such threads with the model, and 1,000 Tx/s needs more than the 3 workers' roughly 700 Tx/s these numbers suggest before Redpanda and the commit overhead. The Locust runs above have not been repeated; they need a dedicated machine, and the tables above stand until they are.
+
+```bash
+# Reproduce against a seeded Postgres and Redis, with TXRISK_DATABASE_URL, TXRISK_REDIS_URL and TXRISK_MODEL_BUNDLE set:
+uv run python loadtests/profile_scoring.py --count 200                          # Champion model, one at a time
+uv run python loadtests/profile_scoring.py --count 300 --no-model               # rules only (Degraded mode)
+uv run python loadtests/profile_scoring.py --count 1000 --no-model --batch 100  # a stream worker's batches
+```
 
 ## Kubernetes
 

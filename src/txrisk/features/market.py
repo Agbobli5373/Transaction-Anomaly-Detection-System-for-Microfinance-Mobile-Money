@@ -29,6 +29,16 @@ def hour_start(moment: datetime) -> datetime:
     return moment.replace(minute=0, second=0, microsecond=0)
 
 
+def spend_window(now: datetime, *, config: FeatureConfig) -> tuple[datetime, datetime]:
+    """The hours `market_spend_index` reads at `now`: from `start` up to, not including, `end`
+    (the start of `now`'s own hour)."""
+    end = hour_start(now)
+    start = end - _HOUR * (
+        _DAY_HOURS * config.market_baseline_days + max(config.market_windows_hours)
+    )
+    return start, end
+
+
 def market_spend_index(
     history: HistoryProvider, now: datetime, *, config: FeatureConfig
 ) -> float | None:
@@ -38,8 +48,7 @@ def market_spend_index(
     A baseline day with no spend in the window (before the data begins) is left out of the mean.
     """
     days = config.market_baseline_days
-    end = hour_start(now)
-    start = end - _HOUR * (_DAY_HOURS * days + max(config.market_windows_hours))
+    start, end = spend_window(now, config=config)
     spend = history.market_hourly_spend(since=start, before=end)
     last = len(spend)
     ratios = []

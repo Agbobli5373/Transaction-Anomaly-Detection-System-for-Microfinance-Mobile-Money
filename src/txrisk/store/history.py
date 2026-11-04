@@ -51,6 +51,7 @@ class PostgresHistory:
         self._connection = connection
         self._wallets: dict[str, Wallet] = {}
         self._subject: dict[tuple[str, datetime], SubjectHistory] = {}
+        self._sim_swap: dict[tuple[str, datetime], datetime | None] = {}
 
     @traced("history.postgres.wallet")
     def wallet(self, wallet_id: str) -> Wallet:
@@ -69,14 +70,44 @@ class PostgresHistory:
     def subject_history(self, wallet_id: str, before: datetime) -> SubjectHistory:
         key = (wallet_id, before)
         if key not in self._subject:
-            rows = self._connection.execute(
-                select_transactions()
-                .where(_t.subject_wallet_id == wallet_id, _t.occurred_at < before)
-                .order_by(*_ORDER)
+            # The features go on to ask for this Wallet's registration and latest SIM swap, so
+            # they are read in passing: one round trip for all three.
+            last_sim_swap = (
+                sa.select(sa.func.max(sim_swaps.c.occurred_at))
+                .where(
+                    sim_swaps.c.wallet_id == wallets.c.wallet_id, sim_swaps.c.occurred_at < before
+                )
+                .scalar_subquery()
             )
+            rows = self._connection.execute(
+                sa.select(
+                    wallets.c.registered_at,
+                    wallets.c.kyc_tier,
+                    last_sim_swap,
+                    *_TRANSACTION_COLUMNS,
+                )
+                .select_from(
+                    wallets.outerjoin(
+                        transactions,
+                        sa.and_(
+                            _t.subject_wallet_id == wallets.c.wallet_id, _t.occurred_at < before
+                        ),
+                    )
+                )
+                .where(wallets.c.wallet_id == wallet_id)
+                .order_by(*_ORDER)
+            ).all()
+            if not rows:
+                raise KeyError(wallet_id)
+            registered_at, kyc_tier, latest = rows[0][:3]
+            self._wallets.setdefault(
+                wallet_id, Wallet(registered_at=registered_at, kyc_tier=kyc_tier)
+            )
+            self._sim_swap[key] = latest
             self._subject[key] = SubjectHistory(
-                registered_at=self.wallet(wallet_id).registered_at,
-                transactions=[transaction_from_row(row) for row in rows],
+                registered_at=registered_at,
+                # A Wallet with no Transactions yet is one row with empty Transaction columns.
+                transactions=[transaction_from_row(row[3:]) for row in rows if row[3] is not None],
             )
         return self._subject[key]
 
@@ -118,12 +149,14 @@ class PostgresHistory:
 
     @traced("history.postgres.last_sim_swap")
     def last_sim_swap(self, wallet_id: str, before: datetime) -> datetime | None:
-        latest: datetime | None = self._connection.execute(
-            sa.select(sa.func.max(sim_swaps.c.occurred_at)).where(
-                sim_swaps.c.wallet_id == wallet_id, sim_swaps.c.occurred_at < before
-            )
-        ).scalar_one()
-        return latest
+        key = (wallet_id, before)
+        if key not in self._sim_swap:
+            self._sim_swap[key] = self._connection.execute(
+                sa.select(sa.func.max(sim_swaps.c.occurred_at)).where(
+                    sim_swaps.c.wallet_id == wallet_id, sim_swaps.c.occurred_at < before
+                )
+            ).scalar_one()
+        return self._sim_swap[key]
 
     @traced("history.postgres.market_hourly_spend")
     def market_hourly_spend(self, since: datetime, before: datetime) -> list[float]:

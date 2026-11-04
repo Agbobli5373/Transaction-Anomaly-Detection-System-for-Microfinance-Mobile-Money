@@ -84,6 +84,15 @@ class _Timeline:
         self._times.insert(i, transaction.occurred_at)
         self._transactions.insert(i, transaction)
 
+    def extend(self, transactions: Sequence[Transaction]) -> None:
+        """Add Transactions that are already in time order."""
+        if not self._times:
+            self._times = [t.occurred_at for t in transactions]
+            self._transactions = list(transactions)
+        else:
+            for transaction in transactions:
+                self.add(transaction)
+
     def between(self, since: datetime | None, before: datetime) -> Sequence[Transaction]:
         start = 0 if since is None else bisect.bisect_left(self._times, since)
         return self._transactions[start : bisect.bisect_left(self._times, before)]
@@ -112,16 +121,43 @@ class ReplayHistory:
         # of an hour, and they cannot change until an earlier Transaction is recorded.
         self._market_answer: tuple[datetime, datetime, list[float]] | None = None
 
-    def record(self, transaction: Transaction) -> None:
-        hour = _hour_of(transaction.occurred_at)
-        self._market_spend[hour] = self._market_spend.get(hour, 0.0) + transaction.amount
-        if self._market_answer is not None and hour < self._market_answer[1]:
-            self._market_answer = None
-        self._by_subject.setdefault(transaction.subject_wallet_id, _Timeline()).add(transaction)
+    def record(self, transaction: Transaction, *, market: bool = True) -> None:
+        """Add a Transaction to the history. With `market` False its amount is not added to the
+        market's spend: for Transactions whose hours were loaded with `set_market_spend`."""
+        if market:
+            hour = _hour_of(transaction.occurred_at)
+            self._market_spend[hour] = self._market_spend.get(hour, 0.0) + transaction.amount
+            if self._market_answer is not None and hour < self._market_answer[1]:
+                self._market_answer = None
+        self.add_subject(transaction)
         if transaction.transaction_type == "transfer":
-            self._by_receiver.setdefault(transaction.counterparty_id, _Timeline()).add(transaction)
+            self.add_received(transaction)
         elif transaction.transaction_type in _AGENT_TYPES:
-            self._by_agent.setdefault(transaction.counterparty_id, _Timeline()).add(transaction)
+            self.add_at_agent(transaction)
+
+    # Each timeline on its own, for a history that loads them from storage in separate queries:
+    # `record` is these three, and the market's spend.
+    def add_subject(self, transaction: Transaction) -> None:
+        """Add to the Subject wallet's Transactions."""
+        self._by_subject.setdefault(transaction.subject_wallet_id, _Timeline()).add(transaction)
+
+    def load_subject(self, wallet_id: str, transactions: Sequence[Transaction]) -> None:
+        """Add a Subject wallet's Transactions, given in time order: `add_subject` for each, in
+        one go."""
+        self._by_subject.setdefault(wallet_id, _Timeline()).extend(transactions)
+
+    def add_received(self, transaction: Transaction) -> None:
+        """Add a Transfer to its receiving Wallet's incoming Transfers."""
+        self._by_receiver.setdefault(transaction.counterparty_id, _Timeline()).add(transaction)
+
+    def add_at_agent(self, transaction: Transaction) -> None:
+        """Add a Cash-in or Cash-out to its Agent's Transactions."""
+        self._by_agent.setdefault(transaction.counterparty_id, _Timeline()).add(transaction)
+
+    def set_market_spend(self, hour: datetime, amount: float) -> None:
+        """The GHS the market moved in the clock hour starting at `hour`, as already counted."""
+        self._market_spend[hour] = amount
+        self._market_answer = None
 
     def record_sim_swap(self, wallet_id: str, occurred_at: datetime) -> None:
         bisect.insort(self._sim_swaps.setdefault(wallet_id, []), occurred_at)
